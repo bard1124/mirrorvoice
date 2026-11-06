@@ -57,9 +57,19 @@ class Listener:
 
     gate() -> False mutes the input (push-to-talk released / muted): zeros are fed so
     the current sentence closes cleanly, and nothing new is emitted.
+
+    Long sentences are cut early so translation can start before the speaker is done: after
+    LONG_S of continuous speech a dip of DIP_S (energy well below the running speech level,
+    shorter than the VAD's end-of-sentence silence) ends the segment; after HARD_S a shorter
+    dip suffices; at MAX_S it is cut regardless. The VAD's own max_speech_duration stays as the
+    backstop. The engine passes the previous part as context so the translation stays coherent.
     """
 
     WINDOW = 512
+    LONG_S, DIP_S = 5.0, 0.30     # after 5 s of speech, a 0.3 s dip cuts
+    HARD_S, HARD_DIP_S = 8.0, 0.15
+    MAX_S = 10.0
+    DIP_RATIO = 0.25              # "dip" = rms below a quarter of the running speech rms
 
     def __init__(self, name: str, source: str, language: str, pause: float,
                  on_utt: Callable[[Utterance], None],
@@ -124,6 +134,8 @@ class Listener:
         hist_start = fed = 0
         pre, post = int(0.3 * ASR_SR), int(0.15 * ASR_SR)
         lvl_t, lvl_sq, lvl_n = time.time(), 0.0, 0
+        speech_from = -1          # sample index where the current speech run started (-1 = none)
+        speech_rms, dip_from = 0.0, -1
         while not self.stop_evt.is_set():
             try:
                 block = self.q.get(timeout=0.2)
@@ -143,6 +155,25 @@ class Listener:
                 vad.accept_waveform(chunk)
                 hist = np.concatenate([hist, chunk])
                 fed += w
+                # --- early cut of long speech (see class docstring)
+                if vad.is_speech_detected():
+                    rms = float(np.sqrt((chunk * chunk).mean()))
+                    if speech_from < 0:
+                        speech_from, speech_rms, dip_from = fed, rms, -1
+                    dur = (fed - speech_from) / ASR_SR
+                    if rms < self.DIP_RATIO * speech_rms:
+                        dip_from = fed if dip_from < 0 else dip_from
+                    else:
+                        dip_from = -1
+                        speech_rms = 0.9 * speech_rms + 0.1 * rms
+                    dip = (fed - dip_from) / ASR_SR if dip_from >= 0 else 0.0
+                    if (dur >= self.LONG_S and dip >= self.DIP_S) or (dur >= self.HARD_S and dip >= self.HARD_DIP_S) \
+                            or dur >= self.MAX_S:
+                        self.log(f"[{self.name}] 长句提前断句：已说 {dur:.1f}s，停顿 {dip:.2f}s")
+                        vad.flush()
+                        speech_from, dip_from = -1, -1
+                else:
+                    speech_from, dip_from = -1, -1
                 if len(hist) > 30 * ASR_SR:
                     drop = len(hist) - 30 * ASR_SR
                     hist, hist_start = hist[drop:], hist_start + drop

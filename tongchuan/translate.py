@@ -58,10 +58,13 @@ def system_prompt(src: str, tgt: str, subtitle: bool) -> str:
     return p + f"Output ONLY the {t} translation, no notes, no quotes."
 
 
-def user_prompt(text: str, glossary: list[tuple[str, str]]) -> str:
+def user_prompt(text: str, glossary: list[tuple[str, str]], continuation: bool = False) -> str:
     g = ""
     if glossary:
         g = "Use these fixed translations: " + "; ".join(f"{a} -> {b}" for a, b in glossary) + "\n\n"
+    if continuation:
+        return (f"{g}The speaker continues the same sentence. Translate ONLY this new part so that it reads "
+                f"naturally right after your previous output; do not repeat what you already said: {text}")
     return f"{g}Translate ONLY this sentence: {text}"
 
 
@@ -111,9 +114,16 @@ class Translator:
     def reload_glossary(self) -> None:
         self.glossary = load_glossary()
 
-    def translate(self, text: str, src: str, tgt: str, subtitle: bool = False) -> str:
-        msgs = [{"role": "system", "content": system_prompt(src, tgt, subtitle)},
-                {"role": "user", "content": user_prompt(text, glossary_hits(text, self.glossary))}]
+    def translate(self, text: str, src: str, tgt: str, subtitle: bool = False,
+                  context: tuple[str, str] | None = None) -> str:
+        """context = (previous part's source, its translation) when `text` continues that part
+        (a long sentence cut early): shown to the model as the preceding exchange."""
+        msgs = [{"role": "system", "content": system_prompt(src, tgt, subtitle)}]
+        if context:
+            msgs += [{"role": "user", "content": user_prompt(context[0], glossary_hits(context[0], self.glossary))},
+                     {"role": "assistant", "content": context[1]}]
+        msgs.append({"role": "user", "content": user_prompt(text, glossary_hits(text, self.glossary),
+                                                            continuation=context is not None)})
         return last_line(self.backend.chat(msgs))
 
     def close(self) -> None:

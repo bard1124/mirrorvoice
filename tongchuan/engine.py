@@ -47,6 +47,7 @@ class Engine:
         self.running = True
         self.muted = False
         self._player = self._voice = self._transcript = self._me = None
+        self._prev = {"me": None, "them": None}  # (source, translation, t_end) of the last part
         self._log = open(LOG_FILE, "w", encoding="utf-8", buffering=1)
         threading.Thread(target=self._boot, daemon=True, name="engine-boot").start()
 
@@ -169,12 +170,22 @@ class Engine:
             else:
                 self._do_them(tr, utt)
 
+    CONTINUATION_GAP_S = 1.5  # a part starting this soon after the previous one continues it
+
+    def _context(self, who: str, utt: Utterance) -> tuple[str, str] | None:
+        prev = self._prev.get(who)
+        if not prev:
+            return None
+        start = utt.t_end - len(utt.audio) / 16000
+        return (prev[0], prev[1]) if start - prev[2] < self.CONTINUATION_GAP_S else None
+
     def _do_me(self, tr: Translator, utt: Utterance) -> None:
         s = self.s
         t0 = time.time()
-        out = tr.translate(utt.text, s.my_lang, s.their_lang)
+        out = tr.translate(utt.text, s.my_lang, s.their_lang, context=self._context("me", utt))
         if not out:
             return
+        self._prev["me"] = (utt.text, out, utt.t_end)
         latency = None
         if self._voice and not self.muted:  # muted: drop speech that was already queued
             text = spoken_en(out) if s.their_lang == "en" else out
@@ -191,7 +202,8 @@ class Engine:
     def _do_them(self, tr: Translator, utt: Utterance) -> None:
         s = self.s
         src = utt.lang if utt.lang in LANGS else s.their_lang
-        out = tr.translate(utt.text, src, s.my_lang, subtitle=True)
+        out = tr.translate(utt.text, src, s.my_lang, subtitle=True, context=self._context("them", utt))
+        self._prev["them"] = (utt.text, out, utt.t_end)
         self.emit("them", src=utt.text, tgt=out, latency=time.time() - utt.t_end)
         self._transcript.add("them", utt.text, out)
 

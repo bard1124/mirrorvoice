@@ -61,7 +61,9 @@ class ConversationWindow(QWidget):
         foot.addWidget(grip)
         lay.addLayout(foot)
 
-        self.resize(max(320, settings.convo_w), max(160, settings.convo_h))
+        self.setMinimumSize(480, 160)
+        w = 840 if settings.convo_w == 420 else settings.convo_w  # 420 was the old default
+        self.resize(max(480, w), max(160, settings.convo_h))
         scr = QApplication.primaryScreen().availableGeometry()
         if settings.convo_x >= 0 and QApplication.screenAt(QPoint(settings.convo_x + 20, settings.convo_y + 20)):
             self.move(settings.convo_x, settings.convo_y)
