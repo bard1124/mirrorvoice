@@ -69,7 +69,9 @@ class Listener:
     LONG_S, DIP_S = 5.0, 0.30     # after 5 s of speech, a 0.3 s dip cuts
     HARD_S, HARD_DIP_S = 8.0, 0.15
     MAX_S = 10.0
-    DIP_RATIO = 0.25              # "dip" = rms below a quarter of the running speech rms
+    DIP_RATIO = 0.25              # "dip" = rms below a quarter of the running speech rms …
+    NOISE_MULT = 2.0              # … or within 2x of the noise floor (quiet microphones: the floor
+                                  #   can sit above a quarter of the speech level)
 
     def __init__(self, name: str, source: str, language: str, pause: float,
                  on_utt: Callable[[Utterance], None],
@@ -136,6 +138,7 @@ class Listener:
         lvl_t, lvl_sq, lvl_n = time.time(), 0.0, 0
         speech_from = -1          # sample index where the current speech run started (-1 = none)
         speech_rms, dip_from = 0.0, -1
+        noise_rms = 0.0           # running floor measured outside speech
         while not self.stop_evt.is_set():
             try:
                 block = self.q.get(timeout=0.2)
@@ -156,12 +159,12 @@ class Listener:
                 hist = np.concatenate([hist, chunk])
                 fed += w
                 # --- early cut of long speech (see class docstring)
+                rms = float(np.sqrt((chunk * chunk).mean()))
                 if vad.is_speech_detected():
-                    rms = float(np.sqrt((chunk * chunk).mean()))
                     if speech_from < 0:
                         speech_from, speech_rms, dip_from = fed, rms, -1
                     dur = (fed - speech_from) / ASR_SR
-                    if rms < self.DIP_RATIO * speech_rms:
+                    if rms < max(self.DIP_RATIO * speech_rms, self.NOISE_MULT * noise_rms):
                         dip_from = fed if dip_from < 0 else dip_from
                     else:
                         dip_from = -1
@@ -174,6 +177,7 @@ class Listener:
                         speech_from, dip_from = -1, -1
                 else:
                     speech_from, dip_from = -1, -1
+                    noise_rms = rms if noise_rms == 0.0 else 0.95 * noise_rms + 0.05 * rms
                 if len(hist) > 30 * ASR_SR:
                     drop = len(hist) - 30 * ASR_SR
                     hist, hist_start = hist[drop:], hist_start + drop

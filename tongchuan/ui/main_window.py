@@ -369,8 +369,7 @@ class MainWindow(QMainWindow):
         elif kind == "ready":
             self.status.setText(f"● 运行中 · {d['voice']}")
             self.status.setStyleSheet("font-size: 15px; color: #1a9e4b;")
-            if self.s.subtitles and d["them"]:
-                self.overlay.show()
+            # the subtitle bar is opened by hand (托盘 / 字幕样式) and remembered; never popped up on 开始
             self.tray.refresh()
         elif kind == "me":
             tag = "我·原声" if d["passthrough"] else "我"

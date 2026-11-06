@@ -76,6 +76,11 @@ class Engine:
         if self._log:
             self._log.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
 
+    def _them_gate(self) -> bool:
+        """Ignore the other side's source while our own translation plays on the monitor output:
+        with speakers as monitor the loopback hears our English and translates it back."""
+        return not (self.s.monitor and self._player is not None and self._player.busy())
+
     def _gate(self) -> bool:
         if self.muted:
             return False
@@ -138,7 +143,7 @@ class Engine:
         if s.subtitles and s.their_source:
             try:
                 them = Listener("them", s.their_source, "auto", s.pause, self._on_them,
-                                self._on_level, None, self.log)
+                                self._on_level, self._them_gate, self.log)
                 them.start()
                 self._closers.append(them.close)
             except Exception as e:  # noqa: BLE001 — subtitles are optional
