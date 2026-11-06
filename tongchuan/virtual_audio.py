@@ -18,7 +18,7 @@ from typing import Callable
 
 import sounddevice as sd
 
-from .config import HOME, IS_MAC, IS_WIN, resource_dir
+from .config import GPU_PACK, GPU_PACK_DONE, IS_MAC, resource_dir
 from .net import urlopen
 
 MULTI_OUTPUT_NAME = "Teams 扬声器 (耳机+字幕)"
@@ -84,7 +84,6 @@ def win_install_vbcable(log: Callable[[str], None]) -> None:
     ctypes.windll.shell32.ShellExecuteW(None, "runas", str(exe), None, str(tmp), 1)
 
 
-GPU_PACK = HOME / "gpu-voice"
 TORCH_INDEX = "https://download.pytorch.org/whl/cu124"
 
 
@@ -94,6 +93,7 @@ def win_install_gpu_pack(log: Callable[[str], None]) -> bool:
     if not uv.exists():
         log("缺少 uv.exe（安装包不完整）")
         return False
+    GPU_PACK_DONE.unlink(missing_ok=True)  # a half-finished venv must not count as installed
     py = GPU_PACK / "Scripts" / "python.exe"
     steps = [
         [str(uv), "venv", str(GPU_PACK), "--python", "3.12", "--seed"],
@@ -112,9 +112,6 @@ def win_install_gpu_pack(log: Callable[[str], None]) -> bool:
         if p.wait() != 0:
             log("失败，请检查网络后重试")
             return False
+    GPU_PACK_DONE.touch()
     log("GPU 音色包安装完成")
     return True
-
-
-def gpu_pack_installed() -> bool:
-    return (GPU_PACK / ("Scripts/python.exe" if IS_WIN else "bin/python")).exists()

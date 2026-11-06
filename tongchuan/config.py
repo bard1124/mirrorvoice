@@ -46,6 +46,9 @@ SETTINGS_FILE = HOME / "settings.json"
 PID_FILE = HOME / "cli.pid"
 GLOSSARY_FILE = HOME / "glossary.csv"
 LOG_FILE = HOME / "debug.log"
+GPU_PACK = HOME / "gpu-voice"            # Windows: venv with CUDA torch + qwen-tts
+GPU_PACK_DONE = GPU_PACK / ".complete"   # written only after every install step succeeded
+TTS_SERVER_LOG = HOME / "tts_server.log"  # stderr of tts_server.py (the GUI has no console)
 for _p in (MODELS, VOICE, TRANSCRIPTS):
     _p.mkdir(parents=True, exist_ok=True)
 
@@ -67,6 +70,15 @@ def has_nvidia_gpu() -> bool:
         return "GPU" in out.stdout
     except Exception:  # noqa: BLE001
         return False
+
+
+def gpu_pack_python() -> Path:
+    return GPU_PACK / ("Scripts/python.exe" if IS_WIN else "bin/python")
+
+
+def gpu_pack_installed() -> bool:
+    """The venv exists after install step 1 of 4; only the marker proves torch + qwen-tts landed."""
+    return gpu_pack_python().exists() and GPU_PACK_DONE.exists()
 
 
 DEFAULT_CALL_OUT = "BlackHole 2ch" if IS_MAC else "CABLE Input"

@@ -11,18 +11,16 @@ from __future__ import annotations
 import json
 import struct
 import subprocess
-import sys
 from pathlib import Path
 from typing import Iterator
 
 import numpy as np
 import soundfile as sf
 
-from .config import HOME, IS_WIN, VOICE
+from .config import GPU_PACK_DONE, TTS_SERVER_LOG, VOICE, gpu_pack_python
 from .languages import LANGS
 
 REF_WAV, REF_TXT, REF_LANG = VOICE / "ref.wav", VOICE / "ref.txt", VOICE / "ref.lang"
-GPU_PACK = HOME / "gpu-voice"  # venv with torch + qwen-tts (Windows)
 
 
 def has_voice_sample() -> bool:
@@ -135,10 +133,6 @@ class PocketCloneVoice:
         pass
 
 
-def gpu_pack_python() -> Path:
-    return GPU_PACK / ("Scripts/python.exe" if IS_WIN else "bin/python")
-
-
 class CudaCloneVoice:
     """Talks to tts_server.py over stdin/stdout (JSON request -> header + raw float32 PCM)."""
 
@@ -148,15 +142,30 @@ class CudaCloneVoice:
         py = gpu_pack_python()
         if not py.exists():
             raise RuntimeError("未安装 GPU 音色包，请在设置向导里安装（需要 NVIDIA 显卡）")
+        if not GPU_PACK_DONE.exists():
+            raise RuntimeError("GPU 音色包尚未安装完成（仍在安装中，或上次安装中断），"
+                               "请在设置向导里等待安装结束或重新安装")
         _, _, _ = _ref()
         server = Path(__file__).with_name("tts_server.py")
+        # stderr goes to a file, not the parent's: the windowed app has no console, so a crash in
+        # tts_server.py used to surface as an empty b'' with nothing to debug from.
+        self._err = open(TTS_SERVER_LOG, "wb")
         self.proc = subprocess.Popen(
             [str(py), str(server), str(model_path), str(REF_WAV), str(REF_TXT)],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=sys.stderr,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self._err,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         hello = self.proc.stdout.readline()
         if not hello.startswith(b"READY"):
-            raise RuntimeError(f"GPU 音色服务启动失败：{hello[:300]!r}")
+            self.close()
+            raise RuntimeError(f"GPU 音色服务启动失败：{hello[:300]!r}\n{self._stderr_tail()}\n"
+                               f"完整输出见 {TTS_SERVER_LOG}")
+
+    def _stderr_tail(self, n: int = 1500) -> str:
+        try:
+            data = TTS_SERVER_LOG.read_bytes()
+        except OSError:
+            return ""
+        return data[-n:].decode("utf-8", errors="replace").strip()
 
     def stream(self, text: str, lang: str, interval: float = 0.8) -> Iterator[tuple[np.ndarray, int]]:
         req = json.dumps({"text": text, "lang": LANGS[lang].tts or "auto"}, ensure_ascii=False)
@@ -170,6 +179,12 @@ class CudaCloneVoice:
     def close(self) -> None:
         if self.proc.poll() is None:
             self.proc.terminate()
+            try:
+                self.proc.wait(5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+        if not self._err.closed:
+            self._err.close()
 
 
 def make_voice(backend: str, model_path: Path):

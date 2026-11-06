@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (QComboBox, QDialog, QFormLayout, QHBoxLayout, QLa
                                QProgressBar, QPushButton, QStackedWidget, QVBoxLayout, QWidget)
 
 from .. import models, virtual_audio
-from ..config import IS_MAC, Settings
+from ..config import IS_MAC, Settings, gpu_pack_installed
 from ..languages import LANGS
 from ..tts import has_voice_sample
 from .dialogs import VoiceDialog
@@ -234,7 +234,7 @@ class Wizard(QDialog):
     def _refresh_audio(self) -> None:
         st = virtual_audio.status()
         if not IS_MAC and models.voice_backend() == "cuda":
-            st["GPU 音色包"] = virtual_audio.gpu_pack_installed()
+            st["GPU 音色包"] = gpu_pack_installed()
         self.audio_status.setText("\n".join(f"{'✅' if ok else '❌'}  {k}" for k, ok in st.items()))
 
     # ---------------------------------------------------------------- 4 voice
