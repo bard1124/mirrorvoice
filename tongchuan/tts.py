@@ -18,7 +18,7 @@ from typing import Iterator
 import numpy as np
 import soundfile as sf
 
-from .config import GPU_PACK_DONE, TTS_SERVER_LOG, VOICE, gpu_pack_python
+from .config import GPU_PACK_DONE, TTS_SERVER_LOG, VOICE, gpu_pack_python, kill_with_parent
 from .languages import LANGS
 
 REF_WAV, REF_TXT, REF_LANG = VOICE / "ref.wav", VOICE / "ref.txt", VOICE / "ref.lang"
@@ -159,6 +159,7 @@ class CudaCloneVoice:
             [str(py), str(server), str(model_path), str(REF_WAV), str(REF_TXT)],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self._err,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        kill_with_parent(self.proc)
         hello = self.proc.stdout.readline()
         if not hello.startswith(b"READY"):
             self.close()

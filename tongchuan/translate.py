@@ -11,7 +11,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from .config import GLOSSARY_FILE, IS_MAC, IS_WIN, resource_dir
+from .config import GLOSSARY_FILE, IS_MAC, IS_WIN, resource_dir, kill_with_parent
 from .languages import LANGS
 
 # ------------------------------------------------------------------ glossary
@@ -164,6 +164,7 @@ class _LlamaServer:
                  "-ngl", "99", "-c", "4096", "--jinja", "--no-webui"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            kill_with_parent(self.proc)
             if self._wait_ready(90):
                 return
             err = self.proc.stderr.read(4000).decode(errors="ignore") if self.proc.poll() is not None else "timeout"

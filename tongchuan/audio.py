@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from typing import Callable
 
 import numpy as np
@@ -154,6 +155,7 @@ class Capture:
     def __init__(self, name: str, on_audio: OnAudio, block: int = 512) -> None:
         self.on_audio, self.block = on_audio, block
         self.stop_evt = threading.Event()
+        self.last_cb, self.overflows, self.error = 0.0, 0, None
         self.loopback = name.startswith("loopback:")
         if self.loopback:
             self.label = name
@@ -170,9 +172,27 @@ class Capture:
             return
         self.stream, self.sr = open_input(self.dev, ASR_SR, self.channels, self._cb, self.block)
         self.stream.start()
+        self.last_cb = time.time()
 
     def _cb(self, indata, frames, t, status) -> None:
-        self.on_audio(resample(indata.mean(axis=1).astype(np.float32), self.sr, ASR_SR))
+        self.last_cb = time.time()
+        if status:
+            self.overflows += 1
+        try:
+            self.on_audio(resample(indata.mean(axis=1).astype(np.float32), self.sr, ASR_SR))
+        except Exception as e:  # noqa: BLE001 — an exception here would abort the PortAudio stream for good
+            self.error = e
+
+    def stalled(self, seconds: float = 3.0) -> bool:
+        """No callback for `seconds` although the stream should be running (loopback has its own loop)."""
+        return (not self.loopback and self.last_cb > 0 and time.time() - self.last_cb > seconds)
+
+    def health(self) -> str:
+        if self.loopback:
+            return "loopback"
+        st = getattr(self, "stream", None)
+        return (f"active={st.active if st else None} stopped={st.stopped if st else None} "
+                f"overflows={self.overflows} last_cb={time.time() - self.last_cb:.1f}s ago err={self.error!r}")
 
     def _loopback_loop(self) -> None:  # Windows only
         import soundcard as sc

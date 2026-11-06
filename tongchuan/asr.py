@@ -73,10 +73,12 @@ class Listener:
         self.asr = Recognizer(language)
         self.vad = make_vad(pause)
         self.q: queue.Queue[np.ndarray] = queue.Queue()
+        self.source = source
         self.capture = Capture(source, self.q.put, self.WINDOW)
         self.label = self.capture.label
         self.stop_evt = threading.Event()
         self._flush = threading.Event()
+        self._restart_at = 0.0
 
     def start(self) -> None:
         self.capture.start()
@@ -90,6 +92,20 @@ class Listener:
         self.stop_evt.set()
         self.capture.close()
 
+    def _check_capture(self) -> None:
+        """Reopen the input stream when PortAudio silently stopped calling back (seen after a few
+        sentences on Windows: the listener sat idle with no audio and no error anywhere)."""
+        if not self.capture.stalled() or time.time() < self._restart_at:
+            return
+        self._restart_at = time.time() + 5
+        self.log(f"[{self.name}] 输入流 3 s 无数据（{self.capture.health()}），重新打开")
+        try:
+            self.capture.close()
+            self.capture = Capture(self.source, self.q.put, self.WINDOW)
+            self.capture.start()
+        except Exception as e:  # noqa: BLE001 — keep trying every 5 s
+            self.log(f"[{self.name}] 重新打开输入流失败：{e}")
+
     def _loop(self) -> None:
         vad, w = self.vad, self.WINDOW
         buf = np.zeros(0, dtype=np.float32)
@@ -101,6 +117,7 @@ class Listener:
             try:
                 buf = np.concatenate([buf, self.q.get(timeout=0.2)])
             except queue.Empty:
+                self._check_capture()
                 continue
             open_gate = self.gate()
             while len(buf) >= w:
