@@ -62,13 +62,13 @@ class Tray(QObject):
             self.win.show_main()
 
     def refresh(self) -> None:
-        eng, s = self.win.engine, self.win.s
+        eng = self.win.engine
         running = eng.running
         self.act_start.setText("停止" if running else "开始")
         self.act_mute.setEnabled(running)
         self.act_mute.setText("继续（取消静音）" if eng.muted else "暂停（静音）")
         self.act_convo.setChecked(self.win.convo.isVisible())
-        self.act_bar.setChecked(s.overlay_pinned)
+        self.act_bar.setChecked(self.win.overlay.isVisible())
         state = "muted" if running and eng.muted else ("running" if running else "stopped")
         if self.icon:
             self.icon.setIcon(tray_icon(state))

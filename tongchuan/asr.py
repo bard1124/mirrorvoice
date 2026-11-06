@@ -79,6 +79,17 @@ class Listener:
         self.stop_evt = threading.Event()
         self._flush = threading.Event()
         self._restart_at = 0.0
+        self._hb = [time.time(), 0, 0.0, 0]  # window start, blocks, peak, segments
+
+    def _heartbeat(self) -> None:
+        """Every 10 s: is audio arriving, how loud, how many sentences — the first thing to read when
+        'nothing happens' (the GUI has no console and the level bar is only a momentary hint)."""
+        now = time.time()
+        if now - self._hb[0] < 10:
+            return
+        t0, blocks, peak, segs = self._hb
+        self.log(f"[{self.name}] 10s: 音频块={blocks} 峰值={peak:.3f} 片段={segs} 门开={self.gate()} {self.capture.health()}")
+        self._hb = [now, 0, 0.0, 0]
 
     def start(self) -> None:
         self.capture.start()
@@ -115,10 +126,16 @@ class Listener:
         lvl_t, lvl_sq, lvl_n = time.time(), 0.0, 0
         while not self.stop_evt.is_set():
             try:
-                buf = np.concatenate([buf, self.q.get(timeout=0.2)])
+                block = self.q.get(timeout=0.2)
             except queue.Empty:
                 self._check_capture()
+                self._heartbeat()
                 continue
+            buf = np.concatenate([buf, block])
+            self._hb[1] += 1
+            if len(block):
+                self._hb[2] = max(self._hb[2], float(np.abs(block).max()))
+            self._heartbeat()
             open_gate = self.gate()
             while len(buf) >= w:
                 chunk = buf[:w] if open_gate else np.zeros(w, np.float32)
@@ -145,6 +162,7 @@ class Listener:
                 seg = hist[a:b] if b > a else np.zeros(0, np.float32)
                 t_end = time.time()
                 text, lang = self.asr(seg)
+                self._hb[3] += 1
                 self.log(f"[{self.name}] segment {len(seg)/ASR_SR:.2f}s lang={lang} text={text!r}")
                 if re.sub(r"[\W_]+", "", text):
                     self.on_utt(Utterance(text, lang, seg, t_end, time.time() - t_end))

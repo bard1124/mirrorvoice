@@ -5,7 +5,7 @@ import time
 
 from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter
-from PySide6.QtWidgets import QApplication, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from ..config import IS_MAC, Settings
 
@@ -28,6 +28,14 @@ class Overlay(QWidget):
         lay.setSpacing(4)
         lay.addWidget(self.zh, 1)
         lay.addWidget(self.en)
+        self.close_btn = QPushButton("✕", self)
+        self.close_btn.setFixedSize(22, 22)
+        self.close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.close_btn.setToolTip("隐藏字幕条（托盘菜单或“字幕样式”里可再打开）")
+        self.close_btn.setStyleSheet("QPushButton{color: rgba(255,255,255,0.55); background: transparent; border: none;"
+                                     " font-size: 14px;} QPushButton:hover{color: white;}")
+        self.close_btn.clicked.connect(self.hide)
+        self.on_hidden = None  # control panel keeps its toggles in sync
         self.apply_style()
         scr = QApplication.primaryScreen().availableGeometry()
         w = max(520, int(scr.width() * 0.62))
@@ -115,6 +123,15 @@ class Overlay(QWidget):
         self.s.overlay_show_original = not self.s.overlay_show_original
         self.s.save()
         self.apply_style()
+
+    def resizeEvent(self, e) -> None:
+        super().resizeEvent(e)
+        self.close_btn.move(self.width() - self.close_btn.width() - 8, 6)
+
+    def hideEvent(self, e) -> None:
+        super().hideEvent(e)
+        if self.on_hidden:
+            self.on_hidden()
 
     def showEvent(self, e) -> None:
         super().showEvent(e)

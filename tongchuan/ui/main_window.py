@@ -36,6 +36,7 @@ class MainWindow(QMainWindow):
         self.engine = Engine(self.bridge.emit_event)
         self.setWindowIcon(app_icon())
         self.overlay = Overlay(s)
+        self.overlay.on_hidden = self._overlay_hidden
         self.convo = ConversationWindow(s)
         self.convo.on_closed = self._convo_closed
         from .downloads import DownloadManager
@@ -330,13 +331,22 @@ class MainWindow(QMainWindow):
             self.tray.refresh()
 
     def toggle_overlay_pin(self) -> None:
-        self.s.overlay_pinned = not self.s.overlay_pinned
-        self.s.save()
-        if self.s.overlay_pinned:
+        """Tray / 字幕样式: show or hide the subtitle bar right now. Shown by hand = pinned (stays
+        after stop); hidden by hand stays hidden until the next start or the next toggle."""
+        if self.overlay.isVisible():
+            self.overlay.hide()  # on_hidden clears the pin
+        else:
+            self.s.overlay_pinned = True
+            self.s.save()
             self.overlay.show()
-        elif not self.engine.running:
-            self.overlay.hide()
         self.tray.refresh()
+
+    def _overlay_hidden(self) -> None:
+        if self.s.overlay_pinned:
+            self.s.overlay_pinned = False
+            self.s.save()
+        if hasattr(self, "tray"):
+            self.tray.refresh()
 
     def show_main(self) -> None:
         self.showNormal()
@@ -401,7 +411,8 @@ class MainWindow(QMainWindow):
     def _style(self) -> None:
         self.overlay.show()
         StyleDialog(self.s, lambda: (self.overlay.apply_style(), self.convo.apply_style()), self,
-                    toggle_bar=self.toggle_overlay_pin, toggle_convo=self.toggle_convo).exec()
+                    toggle_bar=self.toggle_overlay_pin, toggle_convo=self.toggle_convo,
+                    bar_visible=self.overlay.isVisible).exec()
         if not self.engine.running and not self.s.overlay_pinned:
             self.overlay.hide()
 

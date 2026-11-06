@@ -64,11 +64,13 @@ class GlossaryDialog(QDialog):
 class StyleDialog(QDialog):
     """Subtitle bar + conversation window style, and the pop-out toggles for both."""
 
-    def __init__(self, s: Settings, on_change, parent=None, toggle_bar=None, toggle_convo=None) -> None:
+    def __init__(self, s: Settings, on_change, parent=None, toggle_bar=None, toggle_convo=None,
+                 bar_visible=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("字幕样式")
         self.s, self.on_change = s, on_change
         self.toggle_bar, self.toggle_convo = toggle_bar, toggle_convo
+        self.bar_visible = bar_visible or (lambda: s.overlay_pinned)
         form = QFormLayout(self)
         form.addRow(QLabel("<b>对方字幕条</b>（屏幕底部，运行时自动出现）"))
         self.font = QSlider(Qt.Orientation.Horizontal, minimum=14, maximum=48, value=s.overlay_font)
@@ -95,7 +97,7 @@ class StyleDialog(QDialog):
         self._labels()
 
     def _labels(self) -> None:
-        self.bar_btn.setText("隐藏字幕条（仅运行时显示）" if self.s.overlay_pinned else "弹出字幕条（常驻屏幕）")
+        self.bar_btn.setText("隐藏字幕条" if self.bar_visible() else "显示字幕条（常驻屏幕）")
         self.convo_btn.setText("收起对话悬浮窗" if self.s.convo_open else "弹出对话悬浮窗")
         self.bar_btn.setVisible(self.toggle_bar is not None)
         self.convo_btn.setVisible(self.toggle_convo is not None)
