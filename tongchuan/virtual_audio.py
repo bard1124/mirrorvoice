@@ -7,6 +7,7 @@ Windows: VB-CABLE      = virtual mic; the other side is captured with WASAPI loo
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import tempfile
@@ -104,6 +105,7 @@ def win_install_gpu_pack(log: Callable[[str], None]) -> bool:
     for cmd in steps:
         log("$ " + " ".join(Path(c).name if i == 0 else c for i, c in enumerate(cmd)))
         p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                             env={**os.environ, "UV_NATIVE_TLS": "1"},  # trust company root certs in the Windows store
                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         for line in p.stdout:
             log(line.rstrip())

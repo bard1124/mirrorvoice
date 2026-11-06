@@ -53,6 +53,10 @@ The setup wizard starts on first launch. Models are about 4.5 GB (about 8 GB in 
 
 With everything on (translation + cloned voice + subtitles) it uses about **5 GB** of RAM (measured on an M1 Pro); the Windows CPU path is similar. **16 GB machines run it smoothly** (use the "fast" models; "quality" needs about 3 GB more). Older CPUs translate a little slower (1–3 s per sentence).
 
+### Company networks / certificate errors
+
+Model downloads and update checks use the app's bundled CA store first and fall back to the system store (macOS Keychain / Windows certificate store) when verification fails. On networks that inspect HTTPS, downloads work as long as the company root certificate is installed in the system (if your browser opens GitHub and ModelScope, it is). To troubleshoot, set `TONGCHUAN_TLS=certifi|system|default` to force a single store.
+
 ## Meeting app setup
 
 | | Microphone | Speaker |

@@ -12,3 +12,4 @@ pynput==1.8.2
 pyobjc-framework-Cocoa
 platformdirs
 certifi
+truststore==0.10.5

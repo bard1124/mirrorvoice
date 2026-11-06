@@ -66,7 +66,10 @@ def _cmd_download(_args) -> None:
 def _cmd_update(_args) -> None:
     from . import __version__, updater
 
-    rel = updater.check()
+    try:
+        rel = updater.check()
+    except Exception as e:  # noqa: BLE001 — network/certificate problems: one readable line
+        sys.exit(f"检查更新失败：{getattr(e, 'reason', e)}")
     if rel is None:
         print(f"已是最新版本 v{__version__}")
         return
