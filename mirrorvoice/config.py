@@ -30,25 +30,20 @@ def data_dir() -> Path:
     else:
         from platformdirs import user_data_dir
 
-        p = _migrate_legacy_home(Path(user_data_dir(LEGACY_APP_ID, appauthor=False)),
-                                 Path(user_data_dir(APP_ID, appauthor=False)))
+        p = _pick_home(Path(user_data_dir(LEGACY_APP_ID, appauthor=False)),
+                       Path(user_data_dir(APP_ID, appauthor=False)))
     p.mkdir(parents=True, exist_ok=True)
     return p
 
 
-def _migrate_legacy_home(old: Path, new: Path) -> Path:
-    """One-time move of the pre-rename data folder (models, voice, settings, GPU pack) so nothing
-    has to be downloaded or recorded again. Same volume, so it is a rename, not a copy. If the
-    move is impossible right now (old version still running, files open), keep using the old
-    folder rather than starting empty; the move is retried on the next start."""
+def _pick_home(old: Path, new: Path) -> Path:
+    """Keep using the pre-rename data folder when it exists (models, voice sample, settings and the
+    GPU voice pack stay where they are — nothing to download or record again). Renaming a 10 GB
+    tree in place is refused whenever an indexer or antivirus is inside it, so it is not attempted;
+    fresh installs get the new name."""
     if new.exists() or not old.is_dir():
         return new
-    try:
-        new.parent.mkdir(parents=True, exist_ok=True)
-        old.rename(new)
-        return new
-    except OSError:
-        return old
+    return old
 
 
 def resource_dir() -> Path:
