@@ -247,6 +247,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
         self.resize(940, 960)
         self.setMinimumSize(760, 560)
+        self._center_on_screen()
 
         # load settings into widgets, save on any change
         s = self.s
@@ -264,6 +265,16 @@ class MainWindow(QMainWindow):
         for w in (self.speak, self.subs, self.passthru, self.cont, self.ptt):
             w.toggled.connect(self._save)
         self.display.currentIndexChanged.connect(self._display_changed)
+
+    def _center_on_screen(self) -> None:
+        """Open centred on the screen under the cursor (fit the window to it first)."""
+        from PySide6.QtGui import QCursor
+
+        scr = (QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()).availableGeometry()
+        self.resize(min(self.width(), scr.width() - 40), min(self.height(), scr.height() - 40))
+        geo = self.frameGeometry()
+        geo.moveCenter(scr.center())
+        self.move(max(scr.left(), geo.left()), max(scr.top(), geo.top()))
 
     def _sidebar(self) -> QFrame:
         side = QFrame(objectName="sidebar")
