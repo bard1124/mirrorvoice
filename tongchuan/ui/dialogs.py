@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, 
 
 from ..config import Settings
 from ..translate import load_glossary, save_glossary
-from ..tts import REF_TXT, REF_WAV
+from ..tts import REF_LANG, REF_TXT, REF_WAV
 
 
 class GlossaryDialog(QDialog):
@@ -99,6 +99,7 @@ class VoiceDialog(QDialog):
 
     level = Signal(float)
     done = Signal(object)
+    transcribed = Signal(str)
 
     def __init__(self, s: Settings, parent=None) -> None:
         super().__init__(parent)
@@ -113,6 +114,12 @@ class VoiceDialog(QDialog):
         self.lang.addItem("用中文朗读", "zh")
         self.lang.addItem("用英文朗读（推荐）", "en")
         self.lang.currentIndexChanged.connect(lambda: self.prompt.setText(SAMPLE[self.lang.currentData()]))
+        from ..models import voice_backend
+
+        if voice_backend(s) == "pocket":  # CPU clone needs an English reading
+            self.lang.setCurrentIndex(self.lang.findData("en"))
+            self.lang.setEnabled(False)
+            self.lang.setToolTip("没有 NVIDIA 显卡时，克隆音色需要用英文朗读的样本")
         row.addWidget(self.lang)
         row.addStretch()
         lay.addLayout(row)
@@ -134,8 +141,14 @@ class VoiceDialog(QDialog):
         bb.rejected.connect(self.reject)
         lay.addWidget(bb)
         self.audio: np.ndarray | None = None
+        self._needs_asr = False  # recorded while the recognition model was still downloading
         self.level.connect(lambda v: self.meter.setValue(min(100, int(v * 400))))
         self.done.connect(self._recorded)
+        self.transcribed.connect(self._on_transcribed)
+        from .downloads import DownloadManager
+
+        self.dm = DownloadManager.get()
+        self.dm.finished.connect(self._on_models_done)
 
     def _record(self) -> None:
         self.btn.setEnabled(False)
@@ -146,17 +159,25 @@ class VoiceDialog(QDialog):
         t.start()
         self._timer = t
 
+        lang = self.lang.currentData()
+
         def work():
-            from ..asr import Recognizer
             from ..audio import record_seconds, resample
+            from ..models import ASR
 
             try:
                 a = record_seconds(self.s.mic, 12, 24000, self.level.emit)
                 peak = float(np.abs(a).max()) if len(a) else 0.0
                 clipped = float((np.abs(a) > 0.99).mean()) if len(a) else 0.0
                 a = a / peak * 0.9 if peak > 0.02 else a
-                text, _ = Recognizer(self.lang.currentData())(resample(a, 24000, 16000))
-                self.done.emit((a, text, peak, clipped))
+                if ASR.ready():
+                    from ..asr import Recognizer
+
+                    text, _ = Recognizer(lang)(resample(a, 24000, 16000))
+                    auto = True
+                else:  # recognition model still downloading: use the sample text that was read
+                    text, auto = SAMPLE[lang], False
+                self.done.emit((a, text, peak, clipped, auto))
             except Exception as e:  # noqa: BLE001
                 self.done.emit(e)
 
@@ -169,7 +190,7 @@ class VoiceDialog(QDialog):
         if isinstance(res, Exception):
             QMessageBox.warning(self, "录音失败", str(res))
             return
-        a, text, peak, clipped = res
+        a, text, peak, clipped, auto = res
         if peak < 0.02:
             QMessageBox.warning(self, "没录到声音", "几乎没录到声音，请检查麦克风权限和输入设备。")
             return
@@ -177,10 +198,51 @@ class VoiceDialog(QDialog):
             QMessageBox.information(self, "声音偏大", "有削波（声音太大或离麦太近），建议调低输入音量后重录。")
         self.audio = a
         self.text.setPlainText(text)
+        self._needs_asr = not auto
+        self._lang = self.lang.currentData()
+        if not auto:
+            QMessageBox.information(self, "已录好", "录音已保留在本窗口。模型还在下载，下载完成后会自动识别你读的文字，"
+                                    "请等下载完成、核对文字后再点“保存”。")
+
+    def _on_models_done(self, err: str) -> None:
+        """Models finished downloading while this dialog is open: transcribe the pending recording."""
+        from ..models import ASR
+
+        if err or not self._needs_asr or self.audio is None or not ASR.ready():
+            return
+        audio, lang = self.audio, self._lang
+
+        def work():
+            from ..asr import Recognizer
+            from ..audio import resample
+
+            try:
+                text, _ = Recognizer(lang)(resample(audio, 24000, 16000))
+            except Exception:  # noqa: BLE001 — keep the sample text the user can edit
+                text = ""
+            self.transcribed.emit(text)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_transcribed(self, text: str) -> None:
+        self._needs_asr = False
+        if text:
+            self.text.setPlainText(text)
+        QMessageBox.information(self, "模型已就绪", "模型下载完成，已自动识别你读的文字。核对无误后点“保存”。")
 
     def _save(self) -> None:
         if self.audio is None and not REF_WAV.exists():
             QMessageBox.warning(self, "还没录音", "请先录一段。")
+            return
+        missing = self.dm.missing(self.s.quality)
+        if missing or self._needs_asr:
+            if not self.dm.running:
+                self.dm.start(self.s.quality)
+            names = "、".join(m.title for m in missing) or "语音识别"
+            QMessageBox.information(
+                self, "请等模型下载完成",
+                f"模型还没下载完成（{names}），请等下载完成后再保存录音。\n\n"
+                "录音已保留在本窗口，不用重录；下载进度见主窗口顶部或设置向导的“下载模型”页。"
+                "下载完成后会自动识别文字，再点“保存”即可。")
             return
         if self.audio is not None:
             for p in (REF_WAV, REF_TXT):  # keep one previous sample
@@ -188,4 +250,6 @@ class VoiceDialog(QDialog):
                     p.replace(p.with_name(p.name.replace("ref.", "ref.prev.")))
             sf.write(REF_WAV, self.audio, 24000)
         REF_TXT.write_text(self.text.toPlainText().strip() + "\n", encoding="utf-8")
+        if self.audio is not None:
+            REF_LANG.write_text(self._lang, encoding="utf-8")
         self.accept()

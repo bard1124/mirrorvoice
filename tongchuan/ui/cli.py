@@ -153,7 +153,34 @@ def run_cli(app: QApplication) -> int:
     keep_alive.timeout.connect(lambda: None)
     keep_alive.start()
 
-    engine.start(s)
+    from .downloads import DownloadManager, fmt_bytes, fmt_eta
+
+    dm = DownloadManager.get()
+    missing = dm.missing(s.quality)
+    if missing:
+        out("init", "缺少模型：" + "、".join(m.title for m in missing) + "，开始下载（可断点续传）…", C["yellow"])
+        last = {"t": 0.0, "pct": -1}
+
+        def dl_progress(done: int, total: int, speed: float) -> None:
+            pct = 100 * done // max(total, 1)
+            if pct != last["pct"] and (time.time() - last["t"] > 5 or pct == 100):
+                last.update(t=time.time(), pct=pct)
+                eta = fmt_eta((total - done) / speed) if speed > 0 else ""
+                out("下载", f"{pct}%  {fmt_bytes(done)} / {fmt_bytes(total)}  {speed / (1 << 20):.1f} MB/s  {eta}",
+                    C["dim"])
+
+        def dl_done(err: str) -> None:
+            if err:
+                out("下载", f"中断：{err[:160]}（已下载部分会保留，重新打开即可继续）", C["red"])
+                return
+            out("下载", "模型全部就绪", C["green"])
+            engine.start(s)
+
+        dm.overall.connect(dl_progress)
+        dm.finished.connect(dl_done)
+        dm.start(s.quality)
+    else:
+        engine.start(s)
     if s.auto_check_update:
         updater.check_async(lambda r, e: bridge.update.emit(r, e))
     rc = app.exec()

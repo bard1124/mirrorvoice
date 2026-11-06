@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QPlainTextEdit,
                                QProgressBar, QPushButton, QStackedWidget, QVBoxLayout, QWidget)
@@ -11,6 +12,7 @@ from ..config import IS_MAC, Settings
 from ..languages import LANGS
 from ..tts import has_voice_sample
 from .dialogs import VoiceDialog
+from .downloads import DownloadManager, fmt_bytes, fmt_eta
 
 
 def _title(text: str) -> QLabel:
@@ -20,9 +22,7 @@ def _title(text: str) -> QLabel:
 
 
 class Wizard(QDialog):
-    progress = Signal(str, int, int)
     logline = Signal(str)
-    finished_dl = Signal(str)
 
     def __init__(self, s: Settings, parent=None) -> None:
         super().__init__(parent)
@@ -42,9 +42,7 @@ class Wizard(QDialog):
         lay = QVBoxLayout(self)
         lay.addWidget(self.pages, 1)
         lay.addLayout(nav)
-        self.progress.connect(self._on_progress)
         self.logline.connect(lambda t: self.audio_log.appendPlainText(t))
-        self.finished_dl.connect(self._on_dl_done)
         self._go(0)
 
     def _go(self, step: int) -> None:
@@ -102,20 +100,37 @@ class Wizard(QDialog):
     # ---------------------------------------------------------------- 2 models
     def _p_models(self) -> QWidget:
         w = QWidget()
-        self.m_lay = QVBoxLayout(w)
-        self.m_lay.addWidget(_title("下载模型"))
-        backend = models.voice_backend()
+        lay = QVBoxLayout(w)
+        lay.addWidget(_title("下载模型"))
+        backend = models.voice_backend(self.s)
         note = {"mlx": "Apple Silicon：翻译与克隆音色用 MLX 加速。",
                 "cuda": "检测到 NVIDIA 显卡：将用你的克隆音色（需在下一步安装 GPU 音色包）。",
-                "kokoro": "未检测到 NVIDIA 显卡：使用标准英文音色（不是你的声音）。"}[backend]
-        self.m_lay.addWidget(QLabel(note + " 来源：ModelScope / GitHub，可断点续传。"))
-        self.m_rows: dict[str, tuple[QLabel, QProgressBar]] = {}
+                "pocket": "未检测到 NVIDIA 显卡：用 CPU 版克隆音色 Pocket TTS（只能说英文，录音色时需用英文朗读；"
+                          "该模型仅限非商业用途）。",
+                "kokoro": "未检测到 NVIDIA 显卡：使用标准音色（不是你的声音）。"}[backend]
+        lay.addWidget(QLabel(note + "\n进入本页会自动开始下载（来源 ModelScope / GitHub，支持断点续传）。"
+                             "可以先去做下一步，关掉向导也会在后台继续下载。", wordWrap=True))
+        self.dl_total = QProgressBar(maximum=1000)
+        self.dl_total.setMinimumHeight(26)
+        self.dl_status = QLabel("准备下载…")
+        self.dl_status.setStyleSheet("font-size: 14px;")
+        lay.addWidget(self.dl_total)
+        lay.addWidget(self.dl_status)
         self.m_box = QVBoxLayout()
-        self.m_lay.addLayout(self.m_box)
-        self.dl_btn = QPushButton("开始下载")
-        self.dl_btn.clicked.connect(self._download)
-        self.m_lay.addWidget(self.dl_btn)
-        self.m_lay.addStretch()
+        lay.addLayout(self.m_box)
+        row = QHBoxLayout()
+        self.dl_btn = QPushButton("重试")
+        self.dl_btn.clicked.connect(lambda: self.dm.start(self.s.quality))
+        self.dl_btn.hide()
+        row.addWidget(self.dl_btn)
+        row.addStretch()
+        lay.addLayout(row)
+        lay.addStretch()
+        self.m_rows: dict[str, QProgressBar] = {}
+        self.dm = DownloadManager.get()
+        self.dm.model_progress.connect(self._on_model_progress)
+        self.dm.overall.connect(self._on_overall)
+        self.dm.finished.connect(self._on_dl_done)
         return w
 
     def _refresh_models(self) -> None:
@@ -123,43 +138,54 @@ class Wizard(QDialog):
             it = self.m_box.takeAt(0)
             it.widget() and it.widget().deleteLater()
         self.m_rows.clear()
-        self.need = models.required(self.s.quality)
-        for m in self.need:
+        for m in models.required(self.s.quality):
             lb = QLabel(f"{m.title}（约 {m.approx_mb} MB）")
+            lb.setMinimumWidth(260)
             pb = QProgressBar(maximum=1000)
             pb.setValue(1000 if m.ready() else 0)
-            pb.setFormat("已就绪" if m.ready() else "%p%")
-            self.m_box.addWidget(lb)
-            self.m_box.addWidget(pb)
-            self.m_rows[m.title] = (lb, pb)
-        done = all(m.ready() for m in self.need)
-        self.dl_btn.setEnabled(not done)
-        self.dl_btn.setText("全部就绪" if done else "开始下载")
+            pb.setFormat("✅ 已就绪" if m.ready() else "等待中")
+            box = QWidget()
+            hl = QHBoxLayout(box)
+            hl.setContentsMargins(0, 0, 0, 0)
+            hl.addWidget(lb)
+            hl.addWidget(pb, 1)
+            self.m_box.addWidget(box)
+            self.m_rows[m.title] = pb
+        if DownloadManager.missing(self.s.quality):
+            self.dl_btn.hide()
+            self.dm.start(self.s.quality)  # auto-start; no-op if already running
+            self.dl_status.setText("下载中…")
+        else:
+            self._on_dl_done("")
 
-    def _download(self) -> None:
-        self.dl_btn.setEnabled(False)
-        self.dl_btn.setText("下载中…（可以先去做下一步）")
-
-        def work():
-            try:
-                for m in self.need:
-                    models.download(m, lambda t, d, tot, m=m: self.progress.emit(m.title, d, tot))
-                self.finished_dl.emit("")
-            except Exception as e:  # noqa: BLE001
-                self.finished_dl.emit(str(e))
-        threading.Thread(target=work, daemon=True).start()
-
-    def _on_progress(self, title: str, done: int, total: int) -> None:
-        for key, (_lb, pb) in self.m_rows.items():
+    def _on_model_progress(self, title: str, done: int, total: int) -> None:
+        for key, pb in self.m_rows.items():
             if title.startswith(key):
                 pb.setValue(int(1000 * done / max(total, 1)))
-                pb.setFormat(f"%p%  {done >> 20}/{total >> 20} MB" + ("  解压中" if "解压" in title else ""))
+                pb.setFormat("✅ 已就绪" if done >= total else
+                             ("解压中…" if "解压" in title else f"%p%  {fmt_bytes(done)} / {fmt_bytes(total)}"))
+
+    def _on_overall(self, done: int, total: int, speed: float) -> None:
+        self.dl_total.setValue(int(1000 * done / max(total, 1)))
+        self.dl_total.setFormat(f"总进度 %p%  {fmt_bytes(done)} / {fmt_bytes(total)}")
+        eta = fmt_eta((total - done) / speed) if speed > 0 else ""
+        self.dl_status.setText(f"下载中  {speed / (1 << 20):.1f} MB/s  {('剩余 ' + eta) if eta else ''}")
 
     def _on_dl_done(self, err: str) -> None:
-        self.dl_btn.setText(f"下载出错：{err[:60]}，点此重试" if err else "全部就绪")
-        self.dl_btn.setEnabled(bool(err))
-        if not err:
-            self._refresh_models()
+        if err:
+            self.dl_status.setText(f"❌ 下载中断：{err[:160]}\n已下载的部分会保留，检查网络后点“重试”继续。")
+            self.dl_status.setStyleSheet("font-size: 14px; color: #c62828;")
+            self.dl_btn.show()
+            return
+        if not DownloadManager.missing(self.s.quality):
+            self.dl_total.setValue(1000)
+            self.dl_total.setFormat("全部就绪")
+            self.dl_status.setText("✅ 模型全部下载完成")
+            self.dl_status.setStyleSheet("font-size: 14px; color: #1a9e4b;")
+            self.dl_btn.hide()
+            for pb in self.m_rows.values():
+                pb.setValue(1000)
+                pb.setFormat("✅ 已就绪")
 
     # ---------------------------------------------------------------- 3 virtual audio
     def _p_audio(self) -> QWidget:
@@ -225,10 +251,18 @@ class Wizard(QDialog):
         return w
 
     def _refresh_voice(self) -> None:
-        if models.voice_backend() == "kokoro":
-            self.voice_status.setText("当前电脑用标准音色，不需要录音（可跳过）。")
+        from ..tts import sample_language
+
+        backend = models.voice_backend(self.s)
+        if backend == "kokoro":
+            self.voice_status.setText("当前设置使用标准音色，不需要录音（可跳过）。")
+        elif not has_voice_sample():
+            self.voice_status.setText("❌ 还没有音色样本，点下面按钮录 12 秒" +
+                                      ("（请用英文朗读）" if backend == "pocket" else ""))
+        elif backend == "pocket" and sample_language() != "en":
+            self.voice_status.setText("⚠️ 现有样本不是用英文朗读的。没有 NVIDIA 显卡时克隆音色需要英文朗读的样本，请重录。")
         else:
-            self.voice_status.setText("✅ 已有音色样本" if has_voice_sample() else "❌ 还没有音色样本，点下面按钮录 12 秒")
+            self.voice_status.setText("✅ 已有音色样本")
 
     # ---------------------------------------------------------------- 5 meeting app
     def _p_meeting(self) -> QWidget:

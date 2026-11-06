@@ -32,7 +32,13 @@ class MainWindow(QMainWindow):
         self.bridge.event.connect(self._on_event)
         self.engine = Engine(self.bridge.emit_event)
         self.overlay = Overlay(s)
+        from .downloads import DownloadManager
+
+        self.dm = DownloadManager.get()
         self._build()
+        self.dm.overall.connect(self._dl_overall)
+        self.dm.finished.connect(self._dl_finished)
+        self._refresh_banner()
         self._load_devices()
         from PySide6.QtCore import QTimer
 
@@ -61,6 +67,22 @@ class MainWindow(QMainWindow):
         top.addWidget(self.mute_btn)
         top.addWidget(self.start_btn)
         lay.addLayout(top)
+
+        # model status banner: always tells whether models are ready / downloading / failed
+        self.banner = QWidget()
+        self.banner.setStyleSheet("background: #fff4e5; border-radius: 6px;")
+        bl = QHBoxLayout(self.banner)
+        bl.setContentsMargins(10, 6, 10, 6)
+        self.banner_text = QLabel()
+        self.banner_text.setStyleSheet("color: #8a5300;")
+        self.banner_bar = QProgressBar(maximum=1000)
+        self.banner_bar.setMaximumHeight(14)
+        self.banner_btn = QPushButton("下载模型")
+        self.banner_btn.clicked.connect(lambda: self.dm.start(self.s.quality))
+        bl.addWidget(self.banner_text, 1)
+        bl.addWidget(self.banner_bar, 1)
+        bl.addWidget(self.banner_btn)
+        lay.addWidget(self.banner)
 
         g = QGroupBox("语言")
         h = QHBoxLayout(g)
@@ -122,6 +144,17 @@ class MainWindow(QMainWindow):
         oh.addWidget(self.quality)
         oh.addWidget(QLabel("显示方式"))
         oh.addWidget(self.display)
+        from ..config import has_nvidia_gpu
+
+        self.cpu_voice = QComboBox()
+        self.cpu_voice.addItem("我的克隆音色（CPU，英文样本）", "clone")
+        self.cpu_voice.addItem("标准音色", "standard")
+        self.cpu_voice.setCurrentIndex(max(0, self.cpu_voice.findData(self.s.cpu_voice)))
+        self.cpu_voice.currentIndexChanged.connect(
+            lambda: (setattr(self.s, "cpu_voice", self.cpu_voice.currentData()), self.s.save(), self._refresh_banner()))
+        if not IS_MAC and not has_nvidia_gpu():  # only meaningful on Windows without NVIDIA
+            oh.addWidget(QLabel("音色"))
+            oh.addWidget(self.cpu_voice)
         oh.addStretch()
         v.addLayout(oh)
         hk = self.s.mute_hotkey.replace("<ctrl>", "⌃" if IS_MAC else "Ctrl+").replace("<alt>", "⌥" if IS_MAC else "Alt+").replace("+", "").upper() if IS_MAC else self.s.mute_hotkey.replace("<", "").replace(">", "").title()
@@ -203,6 +236,8 @@ class MainWindow(QMainWindow):
         s.mode = "ptt" if self.ptt.isChecked() else "continuous"
         s.ptt_key, s.quality, s.display = self.ptt_key.currentData(), self.quality.currentData(), self.display.currentData()
         s.save()
+        if hasattr(self, "banner"):
+            self._refresh_banner()
 
     def _swap(self) -> None:
         my, their = self.my.currentData(), self.their.currentData()
@@ -226,9 +261,10 @@ class MainWindow(QMainWindow):
             self.engine.stop()
             return
         self._save()
-        if not all(m.ready() for m in models.required(self.s.quality)):
-            QMessageBox.information(self, "需要下载模型", "模型还没下载完整，先打开设置向导。")
-            self._wizard()
+        if self.dm.missing(self.s.quality):
+            self.dm.start(self.s.quality)
+            self._refresh_banner()
+            QMessageBox.information(self, "模型下载中", "模型还没下载完整，已在后台继续下载，进度见窗口顶部。下载完成后再点“开始”。")
             return
         self.start_btn.setText("停止")
         self.status.setText("● 启动中…")
@@ -296,6 +332,42 @@ class MainWindow(QMainWindow):
     def _wizard(self) -> None:
         Wizard(self.s, self).exec()
         self._load_devices()
+        self._refresh_banner()
+
+    def _refresh_banner(self) -> None:
+        missing = self.dm.missing(self.s.quality)
+        if not missing:
+            self.banner.hide()
+            return
+        self.banner.show()
+        if self.dm.running:
+            self.banner_btn.hide()
+            self.banner_bar.show()
+            if not self.banner_text.text().startswith("模型下载中"):
+                self.banner_text.setText("模型下载中…")
+        else:
+            mb = sum(m.approx_mb for m in missing)
+            err = f"（上次中断：{self.dm.error[:60]}）" if self.dm.error else ""
+            self.banner_text.setText(f"⚠️ 还有 {len(missing)} 个模型未下载（约 {mb / 1024:.1f} GB）{err}")
+            self.banner_bar.hide()
+            self.banner_btn.setText("继续下载" if self.dm.error else "下载模型")
+            self.banner_btn.show()
+
+    def _dl_overall(self, done: int, total: int, speed: float) -> None:
+        from .downloads import fmt_bytes, fmt_eta
+
+        self.banner.show()
+        self.banner_btn.hide()
+        self.banner_bar.show()
+        self.banner_bar.setValue(int(1000 * done / max(total, 1)))
+        eta = fmt_eta((total - done) / speed) if speed > 0 else ""
+        self.banner_text.setText(f"模型下载中 {100 * done // max(total, 1)}%  {fmt_bytes(done)} / {fmt_bytes(total)}"
+                                 f"  {speed / (1 << 20):.1f} MB/s  {eta}")
+
+    def _dl_finished(self, err: str) -> None:
+        self._refresh_banner()
+        if not err and not self.dm.missing(self.s.quality):
+            self.status.setText("● 模型已就绪，可以开始")
 
     def _before_update(self) -> None:
         self.engine.stop()

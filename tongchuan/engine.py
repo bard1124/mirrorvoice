@@ -91,7 +91,7 @@ class Engine:
 
     def _worker(self) -> None:
         s = self.s
-        backend = models.voice_backend()
+        backend = models.voice_backend(s)
         need = [m for m in models.required(s.quality) if not m.ready()]
         if need:
             raise RuntimeError("模型未下载完整：" + "、".join(m.title for m in need) + "（请运行设置向导）")
@@ -104,7 +104,7 @@ class Engine:
         their_tts = LANGS[s.their_lang].tts
         if s.speak and their_tts:
             self.emit("status", text="加载语音合成…")
-            tts_model = models.KOKORO if backend == "kokoro" else models.TTS_CLONE[s.quality]
+            tts_model = {"kokoro": models.KOKORO, "pocket": models.POCKET}.get(backend, models.TTS_CLONE[s.quality])
             voice = make_voice(backend, tts_model.path)
             self._closers.append(voice.close)
         if s.speak or s.passthrough:

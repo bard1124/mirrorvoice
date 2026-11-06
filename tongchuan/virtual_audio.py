@@ -18,6 +18,7 @@ from typing import Callable
 import sounddevice as sd
 
 from .config import HOME, IS_MAC, IS_WIN, resource_dir
+from .net import urlopen
 
 MULTI_OUTPUT_NAME = "Teams 扬声器 (耳机+字幕)"
 VBCABLE_URL = "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip"
@@ -70,7 +71,9 @@ def win_install_vbcable(log: Callable[[str], None]) -> None:
     tmp = Path(tempfile.mkdtemp(prefix="vbcable_"))
     z = tmp / "vbcable.zip"
     log("下载 VB-CABLE …")
-    urllib.request.urlretrieve(VBCABLE_URL, z)
+    with urlopen(VBCABLE_URL, timeout=120) as r, open(z, "wb") as f:
+        while chunk := r.read(1 << 20):
+            f.write(chunk)
     with zipfile.ZipFile(z) as f:
         f.extractall(tmp)
     exe = tmp / ("VBCABLE_Setup_x64.exe" if sys.maxsize > 2**32 else "VBCABLE_Setup.exe")

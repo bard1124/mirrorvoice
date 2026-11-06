@@ -21,7 +21,7 @@ import soundfile as sf
 from .config import HOME, IS_WIN, VOICE
 from .languages import LANGS
 
-REF_WAV, REF_TXT = VOICE / "ref.wav", VOICE / "ref.txt"
+REF_WAV, REF_TXT, REF_LANG = VOICE / "ref.wav", VOICE / "ref.txt", VOICE / "ref.lang"
 GPU_PACK = HOME / "gpu-voice"  # venv with torch + qwen-tts (Windows)
 
 
@@ -84,6 +84,57 @@ class KokoroVoice:
         pass
 
 
+def sample_language() -> str:
+    """Language the voice sample was read in ('' = unknown, recorded before this was tracked)."""
+    return REF_LANG.read_text(encoding="utf-8").strip() if REF_LANG.exists() else ""
+
+
+class PocketCloneVoice:
+    """Pocket TTS voice clone on CPU (sherpa-onnx). English output only.
+
+    With a Chinese reference recording the model often never stops (30-40 s of noise), so the
+    sample must be read in English; output is also capped by text length as a safety net.
+    """
+
+    clone = True
+
+    def __init__(self, model_path: Path) -> None:
+        import sherpa_onnx as so
+
+        if sample_language() != "en":
+            raise RuntimeError("没有 NVIDIA 显卡时克隆音色需要“用英文朗读”的样本，请在“音色”里用英文重录一次"
+                               "（或在设置里改用标准音色）")
+        d = model_path
+        cfg = so.OfflineTtsConfig(model=so.OfflineTtsModelConfig(
+            pocket=so.OfflineTtsPocketModelConfig(
+                lm_flow=str(d / "lm_flow.int8.onnx"), lm_main=str(d / "lm_main.int8.onnx"),
+                encoder=str(d / "encoder.onnx"), decoder=str(d / "decoder.int8.onnx"),
+                text_conditioner=str(d / "text_conditioner.onnx"), vocab_json=str(d / "vocab.json"),
+                token_scores_json=str(d / "token_scores.json")),
+            num_threads=4))
+        self.tts = so.OfflineTts(cfg)
+        audio, sr, _ = _ref()
+        self.g = so.GenerationConfig()
+        self.g.reference_audio = audio[: sr * 10]
+        self.g.reference_sample_rate = sr
+        self.g.num_steps = 5
+
+    def stream(self, text: str, lang: str, interval: float = 0.8) -> Iterator[tuple[np.ndarray, int]]:
+        cap_s = 2.0 + 0.1 * len(text)  # runaway guard
+        got = [0]
+
+        def cb(samples, _progress) -> int:
+            got[0] += len(samples)
+            return 0 if got[0] > cap_s * 24000 else 1
+
+        a = self.tts.generate(text, self.g, cb)
+        w = np.asarray(a.samples, dtype=np.float32)[: int(cap_s * a.sample_rate)]
+        yield w, a.sample_rate
+
+    def close(self) -> None:
+        pass
+
+
 def gpu_pack_python() -> Path:
     return GPU_PACK / ("Scripts/python.exe" if IS_WIN else "bin/python")
 
@@ -126,4 +177,6 @@ def make_voice(backend: str, model_path: Path):
         return MLXCloneVoice(model_path)
     if backend == "cuda":
         return CudaCloneVoice(model_path)
+    if backend == "pocket":
+        return PocketCloneVoice(model_path)
     return KokoroVoice(model_path)

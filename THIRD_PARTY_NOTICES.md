@@ -24,6 +24,7 @@ its own license.
 | [Qwen3-4B / 8B](https://modelscope.cn/models/Qwen) (MLX / GGUF) | Apache-2.0 |
 | [Qwen3-TTS 12Hz Base](https://github.com/QwenLM/Qwen3-TTS) (MLX ports by mlx-community, or original) | Apache-2.0 |
 | [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (sherpa-onnx export) | Apache-2.0 |
+| [Pocket TTS](https://github.com/kyutai-labs/pocket-tts) ([ONNX export](https://huggingface.co/KevinAHM/pocket-tts-onnx), sherpa-onnx int8) — Windows CPU voice clone | **Non-commercial** license of the ONNX export; see its LICENSE |
 
 ## Downloaded on demand by the user
 

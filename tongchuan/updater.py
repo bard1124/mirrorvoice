@@ -26,6 +26,7 @@ from typing import Callable
 
 from . import __version__
 from .config import FROZEN, HOME, IS_MAC, IS_WIN
+from .net import urlopen
 
 REPO = "bard1124/tongchuan"
 FEED = os.environ.get("TONGCHUAN_UPDATE_FEED", f"https://api.github.com/repos/{REPO}/releases/latest")
@@ -59,7 +60,7 @@ def _asset_pattern() -> re.Pattern:
 def _get(url: str, timeout: float = 15) -> bytes:
     if url.startswith("file://"):
         return Path(url[7:]).read_bytes()
-    with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=timeout) as r:
+    with urlopen(urllib.request.Request(url, headers=UA), timeout=timeout) as r:
         return r.read()
 
 
@@ -112,7 +113,7 @@ def download(rel: Release, progress: Callable[[int, int], None], cancel: threadi
                 progress(done, total)
     else:
         req = urllib.request.Request(rel.asset_url, headers={"User-Agent": UA["User-Agent"]})
-        with urllib.request.urlopen(req, timeout=60) as r, open(part, "wb") as fo:
+        with urlopen(req, timeout=60) as r, open(part, "wb") as fo:
             total = int(r.headers.get("Content-Length") or rel.size or 0)
             done = 0
             while True:

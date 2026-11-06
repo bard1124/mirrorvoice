@@ -27,7 +27,7 @@ def take(pkg):
     hiddenimports.extend(h)
 
 
-for pkg in ("sherpa_onnx", "sounddevice", "_sounddevice_data", "num2words", "platformdirs"):
+for pkg in ("sherpa_onnx", "sounddevice", "_sounddevice_data", "num2words", "platformdirs", "certifi"):
     take(pkg)
 hiddenimports += collect_submodules("pynput")
 

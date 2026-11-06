@@ -45,9 +45,13 @@ The setup wizard starts on first launch. Models are about 4.5 GB (about 8 GB in 
 |---|---|---|---|
 | Recognition / subtitles | ✅ | ✅ | ✅ |
 | Translation | MLX (Qwen3) | llama.cpp Vulkan/CUDA | llama.cpp CPU/Vulkan |
-| Spoken translation | ✅ your cloned voice | ✅ your cloned voice (install the ~3 GB GPU voice pack from the wizard) | ✅ standard English voice (Kokoro, not your voice) |
+| Spoken translation | ✅ your cloned voice | ✅ your cloned voice (install the ~3 GB GPU voice pack from the wizard) | ✅ your cloned voice (Pocket TTS, real-time on CPU, English output only, record the sample in English); or the standard Kokoro voice |
 | Virtual microphone | BlackHole 2ch (bundled) | VB-CABLE (downloaded by the wizard) | VB-CABLE |
 | Other side's audio | BlackHole 16ch + Multi-Output device (created by the wizard) | speaker loopback (no setup) | speaker loopback |
+
+### Memory
+
+With everything on (translation + cloned voice + subtitles) it uses about **5 GB** of RAM (measured on an M1 Pro); the Windows CPU path is similar. **16 GB machines run it smoothly** (use the "fast" models; "quality" needs about 3 GB more). Older CPUs translate a little slower (1–3 s per sentence).
 
 ## Meeting app setup
 

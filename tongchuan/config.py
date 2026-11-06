@@ -1,6 +1,7 @@
 """Paths, platform facts and persisted user settings."""
 from __future__ import annotations
 
+import functools
 import json
 import os
 import platform
@@ -53,6 +54,7 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 
+@functools.lru_cache(maxsize=1)
 def has_nvidia_gpu() -> bool:
     if not IS_WIN:
         return False
@@ -87,6 +89,7 @@ class Settings:
     mute_hotkey: str = "<ctrl>+<alt>+m"
     pause: float = 0.5              # silence that ends a sentence
     quality: str = "fast"           # "fast" | "quality" (bigger models)
+    cpu_voice: str = "clone"        # Windows without NVIDIA: "clone" (Pocket TTS, English) | "standard" (Kokoro)
     gain: float = 1.0
     overlay_font: int = 26
     overlay_opacity: float = 0.86

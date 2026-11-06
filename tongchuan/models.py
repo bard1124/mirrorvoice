@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Callable
 
 from .config import IS_MAC, MODELS, has_nvidia_gpu
+from .net import urlopen
 
 SHERPA = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
 MS_API = "https://modelscope.cn/api/v1/models/{repo}/repo/files?Revision=master&Recursive=true"
@@ -76,20 +77,30 @@ else:
                          modelscope="Qwen/Qwen3-TTS-12Hz-1.7B-Base", approx_mb=4300),
     }
 
+# CPU voice clone (English output only; reference must be read in English): Pocket TTS via sherpa-onnx.
+# Note: this ONNX export is licensed for non-commercial use.
+POCKET = Model("tts", "克隆音色 Pocket TTS (CPU，英文)", "sherpa-onnx-pocket-tts-int8-2026-01-26",
+               url=f"{SHERPA}/tts-models/sherpa-onnx-pocket-tts-int8-2026-01-26.tar.bz2", approx_mb=93)
+
 # CPU-only fallback voice (not your voice): Kokoro via sherpa-onnx
 KOKORO = Model("tts", "标准音色 Kokoro (CPU)", "kokoro-int8-multi-lang-v1_1",
                url=f"{SHERPA}/tts-models/kokoro-int8-multi-lang-v1_1.tar.bz2", approx_mb=140)
 
 
-def voice_backend() -> str:
-    """'mlx' (Apple Silicon), 'cuda' (Windows + NVIDIA) or 'kokoro' (CPU fallback)."""
+def voice_backend(s=None) -> str:
+    """'mlx' (Apple Silicon) | 'cuda' (Windows + NVIDIA) | 'pocket' (CPU clone, English) | 'kokoro'."""
     if IS_MAC:
         return "mlx"
-    return "cuda" if has_nvidia_gpu() else "kokoro"
+    if has_nvidia_gpu():
+        return "cuda"
+    from .config import Settings
+
+    s = s or Settings.load()
+    return "pocket" if (s.cpu_voice == "clone" and s.their_lang == "en") else "kokoro"
 
 
 def required(quality: str) -> list[Model]:
-    tts = KOKORO if voice_backend() == "kokoro" else TTS_CLONE[quality]
+    tts = {"pocket": POCKET, "kokoro": KOKORO}.get(voice_backend(), TTS_CLONE[quality])
     return [VAD, ASR, LLM[quality], tts]
 
 
@@ -102,7 +113,7 @@ class Cancelled(Exception):
 
 
 def _get_json(url: str):
-    with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=30) as r:
+    with urlopen(urllib.request.Request(url, headers=UA), timeout=30) as r:
         return json.load(r)
 
 
@@ -118,7 +129,7 @@ def _fetch(url: str, dest: Path, on_bytes: Callable[[int], None], cancel: thread
     headers = dict(UA)
     if have:
         headers["Range"] = f"bytes={have}-"
-    with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=60) as r:
+    with urlopen(urllib.request.Request(url, headers=headers), timeout=60) as r:
         if have and r.status != 206:  # server ignored Range: start over
             on_bytes(-have)
             have = 0
@@ -176,7 +187,7 @@ def download(model: Model, progress: Progress, cancel: threading.Event | None = 
 def adopt_existing(src_dir: Path) -> list[str]:
     """Move models from an older install (e.g. the zh2en-voice prototype) into MODELS."""
     moved = []
-    for m in [VAD, ASR, *LLM.values(), *TTS_CLONE.values(), KOKORO]:
+    for m in [VAD, ASR, *LLM.values(), *TTS_CLONE.values(), KOKORO, POCKET]:
         src = src_dir / m.dest
         if src.exists() and not m.path.exists():
             src.rename(m.path)

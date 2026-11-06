@@ -9,3 +9,4 @@ num2words==0.5.14
 PySide6-Essentials==6.12.0
 pynput==1.8.2
 platformdirs
+certifi
