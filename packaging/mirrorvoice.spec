@@ -17,6 +17,7 @@ VENDOR = ROOT / "packaging" / "vendor"
 datas = [(str(ROOT / "mirrorvoice" / "tts_server.py"), "mirrorvoice"),
          (str(ROOT / "packaging" / "assets" / "icon.png"), "assets"),  # window / tray icon at runtime
          (str(ROOT / "packaging" / "assets" / "chevron-down.svg"), "assets"),  # combo box arrow (stylesheet)
+         (str(ROOT / "packaging" / "assets" / "menubar-template.png"), "assets"),  # macOS menu-bar icon
          (str(ROOT / "LICENSE"), "."), (str(ROOT / "THIRD_PARTY_NOTICES.md"), ".")]
 binaries = []
 hiddenimports = []

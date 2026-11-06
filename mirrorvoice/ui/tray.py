@@ -27,7 +27,7 @@ class Tray(QObject):
         self.menu = self._build_menu()
         self.icon: QSystemTrayIcon | None = None
         if QSystemTrayIcon.isSystemTrayAvailable():
-            self.icon = QSystemTrayIcon(tray_icon("stopped"), self)
+            self.icon = QSystemTrayIcon(self._icon_for("stopped"), self)
             self.icon.setToolTip("镜声")
             self.icon.setContextMenu(self.menu)
             self.icon.activated.connect(self._activated)
@@ -55,6 +55,21 @@ class Tray(QObject):
         m.addAction(self.act_quit)
         return m
 
+    def _icon_for(self, state: str):
+        """macOS menu bar wants a monochrome template (it tints it for light/dark menu bars); the
+        Windows tray shows the coloured app icon with a status dot."""
+        if IS_MAC:
+            from PySide6.QtGui import QIcon
+
+            from .icons import assets_dir
+
+            p = assets_dir() / "menubar-template.png"
+            if p.exists():
+                ic = QIcon(str(p))
+                ic.setIsMask(True)
+                return ic
+        return tray_icon(state)
+
     def _activated(self, reason) -> None:
         # Windows: left click opens the control panel (the menu is on right click; macOS shows the
         # menu for any click on a menu-bar icon that has one)
@@ -71,5 +86,5 @@ class Tray(QObject):
         self.act_bar.setChecked(self.win.overlay.isVisible())
         state = "muted" if running and eng.muted else ("running" if running else "stopped")
         if self.icon:
-            self.icon.setIcon(tray_icon(state))
+            self.icon.setIcon(self._icon_for(state))
             self.icon.setToolTip("镜声 · " + {"running": "运行中", "muted": "已静音", "stopped": "已停止"}[state])
