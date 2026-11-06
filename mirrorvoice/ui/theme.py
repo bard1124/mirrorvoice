@@ -29,6 +29,7 @@ def _asset(name: str) -> str:
 
 
 CHEVRON = _asset("chevron-down.svg")
+CHECK = _asset("check-white.svg")
 
 QSS = f"""
 * {{ font-family: "PingFang SC", "Microsoft YaHei UI", "Segoe UI", "Helvetica Neue", sans-serif; font-size: 13px;
@@ -60,6 +61,20 @@ QPushButton#primary:hover {{ background: {ACCENT_DARK}; }}
 QPushButton#primary[running="true"] {{ background: #3B414B; }}
 QPushButton#primary[running="true"]:hover {{ background: #2A2F38; }}
 QPushButton#link {{ border: none; background: transparent; color: {ACCENT}; padding: 2px 4px; }}
+QPushButton#iconBtn {{ border: none; background: transparent; padding: 0; min-height: 0; min-width: 0;
+                       color: rgba(255,255,255,0.65); font-size: 14px; }}
+QPushButton#iconBtn:hover {{ color: white; background: rgba(255,255,255,0.12); border-radius: 11px; }}
+
+QMenu {{ background: {BG}; border: 1px solid {LINE}; border-radius: 10px; padding: 8px 6px; }}
+QMenu::item {{ padding: 8px 28px 8px 14px; border-radius: 6px; min-width: 150px; color: {TEXT}; }}
+QMenu::item:selected {{ background: #F2F3F5; }}
+QMenu::item:disabled {{ color: #A0A4AB; }}
+QMenu::separator {{ height: 1px; background: {LINE}; margin: 6px 8px; }}
+QMenu::indicator {{ width: 16px; height: 16px; border-radius: 8px; border: 1px solid #C9CDD4; background: {BG};
+                    margin-left: 4px; }}
+QMenu::indicator:checked {{ background: {ACCENT}; border-color: {ACCENT}; image: url("{CHECK}"); }}
+QMenu::indicator:unchecked {{ image: none; }}
+QMenu::item:checked, QMenu::item:unchecked {{ padding-left: 14px; }}
 
 QFrame#card {{ background: {BG}; border: 1px solid {LINE}; border-radius: 12px; }}
 QLabel#cardTitle {{ font-size: 14px; font-weight: 600; }}

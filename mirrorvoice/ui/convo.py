@@ -36,11 +36,9 @@ class ConversationWindow(QWidget):
         head = QHBoxLayout()
         self.title = QLabel("对话")
         self.title.setStyleSheet("color: rgba(255,255,255,0.75); background: transparent; font-weight: 600;")
-        close = QPushButton("✕")
+        close = QPushButton("✕", objectName="iconBtn")
         close.setFixedSize(22, 22)
         close.setCursor(Qt.CursorShape.PointingHandCursor)
-        close.setStyleSheet("QPushButton{color: rgba(255,255,255,0.7); background: transparent; border: none;"
-                            " font-size: 14px;} QPushButton:hover{color: white;}")
         close.clicked.connect(self.hide)
         head.addWidget(self.title)
         head.addStretch()

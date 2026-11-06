@@ -28,12 +28,10 @@ class Overlay(QWidget):
         lay.setSpacing(4)
         lay.addWidget(self.zh, 1)
         lay.addWidget(self.en)
-        self.close_btn = QPushButton("✕", self)
+        self.close_btn = QPushButton("✕", self, objectName="iconBtn")
         self.close_btn.setFixedSize(22, 22)
         self.close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.close_btn.setToolTip("隐藏字幕条（托盘菜单或“字幕样式”里可再打开）")
-        self.close_btn.setStyleSheet("QPushButton{color: rgba(255,255,255,0.55); background: transparent; border: none;"
-                                     " font-size: 14px;} QPushButton:hover{color: white;}")
         self.close_btn.clicked.connect(self.hide)
         self.on_hidden = None  # control panel keeps its toggles in sync
         self.apply_style()

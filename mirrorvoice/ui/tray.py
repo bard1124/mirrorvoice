@@ -5,7 +5,7 @@ the tray menu and the Dock menu, so their labels and check marks stay in sync fr
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QObject
+from PySide6.QtCore import QObject, Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
@@ -43,6 +43,9 @@ class Tray(QObject):
 
     def _build_menu(self, dock: bool = False) -> QMenu:
         m = QMenu()
+        if not dock:  # rounded corners need a translucent frameless popup; the Dock menu is native
+            m.setWindowFlags(m.windowFlags() | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
+            m.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         m.addAction(self.act_start)
         m.addAction(self.act_mute)
         m.addSeparator()
