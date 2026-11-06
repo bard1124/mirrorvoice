@@ -1,4 +1,4 @@
-; Inno Setup script -> dist\TongChuan-<ver>-windows-x64-setup.exe
+﻿; Inno Setup script -> dist\TongChuan-<ver>-windows-x64-setup.exe
 ; Built by GitHub Actions (windows-latest) after PyInstaller produced dist\TongChuan\.
 #define AppName "同传助手"
 #ifndef AppVersion
@@ -26,7 +26,12 @@ WizardStyle=modern
 LicenseFile=..\..\LICENSE
 
 [Languages]
-Name: "chs"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"; Flags: skipifmissing
+; Chinese is official in newer Inno Setup 6 releases and "Unofficial" in older ones
+#if FileExists(CompilerPath + "Languages\ChineseSimplified.isl")
+Name: "chs"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+#elif FileExists(CompilerPath + "Languages\Unofficial\ChineseSimplified.isl")
+Name: "chs"; MessagesFile: "compiler:Languages\Unofficial\ChineseSimplified.isl"
+#endif
 Name: "en"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
