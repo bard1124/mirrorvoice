@@ -133,6 +133,8 @@ def transcribe(audio_24k: np.ndarray, lang: str) -> tuple[str, str]:
     return text, spoken
 
 
+MAX_RECORD_S, MIN_RECORD_S = 25, 5  # the old fixed 12 s made people rush, and the clone inherited that pace
+
 CPU_CLONE_HINT = ("CPU 版克隆音色（Pocket TTS）只能输出英文，而且用非英文样本时经常合成失控："
                   "句尾会多出杂音、每句要多等 1～3 秒。没有 RTX 30 系以上显卡或 Mac 时，请用英文朗读。")
 
@@ -150,14 +152,16 @@ class VoiceDialog(QDialog):
     done = Signal(object)
     transcribed = Signal(object)  # (text, detected language code)
 
-    def __init__(self, s: Settings, parent=None) -> None:
+    def __init__(self, s: Settings, parent=None, on_speed=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("录音色样本")
-        self.resize(560, 420)
+        self.resize(560, 460)
         self.s = s
+        self.on_speed = on_speed  # live speaking-rate update while the engine runs
         lay = QVBoxLayout(self)
-        lay.addWidget(QLabel("安静环境，嘴离麦克风一拳，用平时说话的语气朗读下面这段（约 12 秒）。"
-                             "用英文朗读，合成的英文口音通常更自然。"))
+        lay.addWidget(QLabel("安静环境，嘴离麦克风一拳，用<b>平时说话的语速</b>朗读下面这段，读完点“停止录音”"
+                             f"（最长 {MAX_RECORD_S} 秒，至少 {MIN_RECORD_S} 秒）。克隆出来的声音会跟着样本的语速走，不用赶。",
+                             wordWrap=True))
         row = QHBoxLayout()
         self.lang = QComboBox()
         self.lang.addItem("用中文朗读", "zh")
@@ -181,9 +185,20 @@ class VoiceDialog(QDialog):
         lay.addWidget(self.prompt)
         self.meter = QProgressBar(maximum=100, textVisible=False)
         lay.addWidget(self.meter)
-        self.btn = QPushButton("开始录音（12 秒）")
+        self.btn = QPushButton("开始录音")
         self.btn.clicked.connect(self._record)
         lay.addWidget(self.btn)
+        self._rec_stop: threading.Event | None = None
+        srow = QHBoxLayout()
+        srow.addWidget(QLabel("合成语速"))
+        self.speed = QSlider(Qt.Orientation.Horizontal, minimum=70, maximum=130, value=int(round(s.voice_speed * 100)))
+        self.speed.setToolTip("对所有音色生效：标准音色由模型原生变速，克隆音色用变速不变调处理。运行中拖动立即生效")
+        self.speed_lbl = QLabel()
+        self.speed.valueChanged.connect(self._speed_changed)
+        srow.addWidget(self.speed, 1)
+        srow.addWidget(self.speed_lbl)
+        lay.addLayout(srow)
+        self._speed_changed()
         lay.addWidget(QLabel("识别出的文字（必须和你读的一字不差，有错请改）："))
         self.text = QPlainTextEdit()
         if REF_TXT.exists():
@@ -204,12 +219,23 @@ class VoiceDialog(QDialog):
         self.dm = DownloadManager.get()
         self.dm.finished.connect(self._on_models_done)
 
+    def _speed_changed(self) -> None:
+        self.s.voice_speed = self.speed.value() / 100
+        self.speed_lbl.setText(f"{self.s.voice_speed:.2f}×")
+        self.s.save()
+        if self.on_speed:
+            self.on_speed(self.s.voice_speed)
+
     def _record(self) -> None:
-        self.btn.setEnabled(False)
-        self.btn.setText("录音中…")
-        secs = [12]
+        if self._rec_stop is not None:  # second click = stop early
+            self._rec_stop.set()
+            self.btn.setEnabled(False)
+            return
+        self._rec_stop = threading.Event()
+        secs = [MAX_RECORD_S]
+        self.btn.setText(f"停止录音（还可录 {secs[0]} 秒）")
         t = QTimer(self, interval=1000)
-        t.timeout.connect(lambda: (secs.__setitem__(0, secs[0] - 1), self.btn.setText(f"录音中… {secs[0]}")))
+        t.timeout.connect(lambda: (secs.__setitem__(0, secs[0] - 1), self.btn.setText(f"停止录音（还可录 {secs[0]} 秒）")))
         t.start()
         self._timer = t
 
@@ -220,7 +246,7 @@ class VoiceDialog(QDialog):
             from ..models import ASR
 
             try:
-                a = record_seconds(self.s.mic, 12, 24000, self.level.emit)
+                a = record_seconds(self.s.mic, MAX_RECORD_S, 24000, self.level.emit, stop=self._rec_stop)
                 peak = float(np.abs(a).max()) if len(a) else 0.0
                 clipped = float((np.abs(a) > 0.99).mean()) if len(a) else 0.0
                 a = a / peak * 0.9 if peak > 0.02 else a
@@ -237,6 +263,7 @@ class VoiceDialog(QDialog):
 
     def _recorded(self, res) -> None:
         self._timer.stop()
+        self._rec_stop = None
         self.btn.setEnabled(True)
         self.btn.setText("重新录音")
         if isinstance(res, Exception):
@@ -245,6 +272,9 @@ class VoiceDialog(QDialog):
         a, text, peak, clipped, auto, spoken = res
         if peak < 0.02:
             QMessageBox.warning(self, "没录到声音", "几乎没录到声音，请检查麦克风权限和输入设备。")
+            return
+        if len(a) < MIN_RECORD_S * 24000:
+            QMessageBox.warning(self, "录音太短", f"只录到 {len(a) / 24000:.1f} 秒，至少需要 {MIN_RECORD_S} 秒，请重录。")
             return
         if clipped > 0.001:
             QMessageBox.information(self, "声音偏大", "有削波（声音太大或离麦太近），建议调低输入音量后重录。")

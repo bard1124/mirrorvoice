@@ -15,7 +15,7 @@ from typing import Callable
 
 from . import models
 from .asr import Listener, Utterance
-from .audio import Player, find_device
+from .audio import Player, find_device, time_stretch
 from .config import LOG_FILE, Settings
 from .hotkeys import Hotkeys
 from .languages import LANGS
@@ -106,6 +106,7 @@ class Engine:
             self.emit("status", text="加载语音合成…")
             tts_model = {"kokoro": models.KOKORO, "pocket": models.POCKET}.get(backend, models.TTS_CLONE[s.quality])
             voice = make_voice(backend, tts_model.path)
+            voice.speed = s.voice_speed
             self._closers.append(voice.close)
         if s.speak or s.passthrough:
             self.emit("status", text="打开音频设备…")
@@ -160,6 +161,9 @@ class Engine:
             if kind == "glossary":
                 tr.reload_glossary()
                 continue
+            if kind == "voice":
+                self._swap_voice()
+                continue
             if kind == "me":
                 self._do_me(tr, utt)
             else:
@@ -177,6 +181,8 @@ class Engine:
             for chunk, sr in self._voice.stream(text, s.their_lang):
                 if latency is None:
                     latency = time.time() - utt.t_end
+                if not getattr(self._voice, "native_speed", False):
+                    chunk = time_stretch(chunk, sr, self._voice.speed)
                 self._player.put(chunk, sr)
         self.emit("me", src=utt.text, tgt=out, latency=latency or (time.time() - utt.t_end),
                   translate_s=time.time() - t0, passthrough=False)
@@ -190,6 +196,48 @@ class Engine:
         self._transcript.add("them", utt.text, out)
 
     # ------------------------------------------------------------ listener callbacks
+    def reload_voice(self) -> None:
+        """New sample / 克隆↔标准 / GPU switch while running: rebuild the voice without a restart."""
+        if self.running:
+            self._jobs.put((0, next(self._seq), "voice", None))
+
+    def _swap_voice(self) -> None:
+        """Runs on the model thread (which owns every TTS object). Speech is skipped while swapping."""
+        s = self.s
+        old, self._voice = self._voice, None
+        if old is not None:
+            if old.close in self._closers:
+                self._closers.remove(old.close)
+            try:
+                old.close()
+            except Exception:  # noqa: BLE001
+                pass
+        if not (s.speak and LANGS[s.their_lang].tts):
+            self.emit("voice", voice="不出声")
+            return
+        try:
+            self.emit("status", text="切换音色…")
+            backend = models.voice_backend(s)
+            tts_model = {"kokoro": models.KOKORO, "pocket": models.POCKET}.get(backend, models.TTS_CLONE[s.quality])
+            if not tts_model.ready():
+                raise RuntimeError(f"模型未下载：{tts_model.title}（请运行设置向导）")
+            voice = make_voice(backend, tts_model.path)
+            voice.speed = s.voice_speed
+            for _ in voice.stream("Hello.", s.their_lang):  # warm-up, as at start
+                pass
+            self._voice = voice
+            self._closers.append(voice.close)
+            self.emit("voice", voice="你的克隆音色" if voice.clone else "标准音色")
+        except Exception as e:  # noqa: BLE001 — keep translating, just without speech
+            self.log(traceback.format_exc())
+            self.emit("error", message=f"切换音色失败：{e}")
+            self.emit("voice", voice="不出声")
+
+    def set_voice_speed(self, speed: float) -> None:
+        """Live speaking-rate change (CPU voices read it per sentence; GPU/MLX clones ignore it)."""
+        if self._voice is not None:
+            self._voice.speed = speed
+
     def set_monitor(self, name: str) -> None:
         """Switch the headphone monitor while running; other device changes still need a restart."""
         if not self._player:

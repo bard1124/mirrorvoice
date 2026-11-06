@@ -62,6 +62,8 @@ class MLXCloneVoice:
 
 class KokoroVoice:
     clone = False
+    speed = 1.0  # set from Settings.voice_speed by the engine
+    native_speed = True  # the model takes the rate itself; the engine must not stretch again
 
     def __init__(self, model_path: Path, sid: int = 0) -> None:
         import sherpa_onnx as so
@@ -76,7 +78,7 @@ class KokoroVoice:
         self.tts, self.sid = so.OfflineTts(cfg), sid
 
     def stream(self, text: str, lang: str, interval: float = 0.8) -> Iterator[tuple[np.ndarray, int]]:
-        a = self.tts.generate(text, sid=self.sid, speed=1.0)
+        a = self.tts.generate(text, sid=self.sid, speed=self.speed)
         yield np.asarray(a.samples, dtype=np.float32), a.sample_rate
 
     def close(self) -> None:
@@ -96,6 +98,7 @@ class PocketCloneVoice:
     """
 
     clone = True
+    speed = 1.0  # set from Settings.voice_speed by the engine
 
     def __init__(self, model_path: Path) -> None:
         import sherpa_onnx as so

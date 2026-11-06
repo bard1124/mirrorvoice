@@ -189,6 +189,7 @@ class Settings:
     cpu_voice: str = "clone"        # Windows without CUDA voice: "clone" (Pocket TTS, English) | "standard" (Kokoro)
     gpu_voice: str = "auto"         # NVIDIA clone voice: "auto" (compute capability >= 8.0 only) | "cuda" | "cpu"
     gain: float = 1.0
+    voice_speed: float = 1.0        # CPU voices (Pocket / Kokoro): 0.7 slower … 1.3 faster
     overlay_font: int = 26
     overlay_opacity: float = 0.86
     overlay_show_original: bool = True

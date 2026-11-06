@@ -20,6 +20,44 @@ def resample(x: np.ndarray, sr_in: int, sr_out: int) -> np.ndarray:
     return np.interp(np.linspace(0, len(x), n, endpoint=False), np.arange(len(x)), x).astype(np.float32)
 
 
+def time_stretch(x: np.ndarray, sr: int, speed: float) -> np.ndarray:
+    """Change duration by 1/speed without changing pitch (WSOLA). speed 0.8 -> 25 % longer.
+
+    Used for voices whose models have no speaking-rate control (Pocket TTS, Qwen3-TTS): the clone
+    otherwise inherits whatever pace the reference sample was read at.
+    """
+    if abs(speed - 1.0) < 0.02 or len(x) < sr // 10:
+        return x
+    win = int(0.025 * sr)
+    hop_out = win // 2
+    hop_in = int(round(hop_out * speed))
+    tol = max(1, int(0.005 * sr))
+    step = max(1, tol // 8)
+    w = np.hanning(win).astype(np.float32)
+    n_out = int(len(x) / speed) + 2 * win
+    out = np.zeros(n_out, np.float32)
+    norm = np.zeros(n_out, np.float32)
+    nominal = pos_out = 0  # nominal input position advances at hop_in regardless of the match found
+    target = None          # the frame that would naturally follow the last copied frame
+    while nominal + win <= len(x) and pos_out + win <= n_out:
+        pos = nominal
+        if target is not None:  # align within ±tol of the nominal position (never move it)
+            lo, hi = max(0, nominal - tol), min(len(x) - win, nominal + tol)
+            best_c = -np.inf
+            for cand in range(lo, hi + 1, step):
+                c = float(np.dot(x[cand:cand + win], target))
+                if c > best_c:
+                    best_c, pos = c, cand
+        out[pos_out:pos_out + win] += x[pos:pos + win] * w
+        norm[pos_out:pos_out + win] += w
+        nxt = pos + hop_out
+        target = x[nxt:nxt + win] if nxt + win <= len(x) else None
+        pos_out += hop_out
+        nominal += hop_in
+    end = min(pos_out + win, n_out)
+    return (out[:end] / np.maximum(norm[:end], 1e-3)).astype(np.float32)
+
+
 def list_devices(kind: str) -> list[str]:
     key = "max_input_channels" if kind == "input" else "max_output_channels"
     names: list[str] = []
@@ -226,8 +264,9 @@ def list_loopback_speakers() -> list[str]:
 
 
 def record_seconds(device: str, seconds: float, sr: int = 24000,
-                   on_level: Callable[[float], None] | None = None) -> np.ndarray:
-    """Blocking mono recording for voice enrollment."""
+                   on_level: Callable[[float], None] | None = None,
+                   stop: threading.Event | None = None) -> np.ndarray:
+    """Blocking mono recording for voice enrollment: up to `seconds`, or until `stop` is set."""
     idx = find_device(device, "input") if device else None
     chunks: list[np.ndarray] = []
 
@@ -239,5 +278,7 @@ def record_seconds(device: str, seconds: float, sr: int = 24000,
 
     stream, got_sr = open_input(idx, sr, 1, cb)
     with stream:
-        sd.sleep(int(seconds * 1000))
+        end = time.time() + seconds
+        while time.time() < end and not (stop is not None and stop.is_set()):
+            sd.sleep(50)
     return resample(np.concatenate(chunks), got_sr, sr) if chunks else np.zeros(0, np.float32)

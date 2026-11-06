@@ -166,7 +166,8 @@ class MainWindow(QMainWindow):
         self.gpu_voice.addItem("不使用", "cpu")
         self.gpu_voice.setCurrentIndex(max(0, self.gpu_voice.findData(self.s.gpu_voice)))
         self.gpu_voice.currentIndexChanged.connect(
-            lambda: (setattr(self.s, "gpu_voice", self.gpu_voice.currentData()), self.s.save(), self._refresh_banner()))
+            lambda: (setattr(self.s, "gpu_voice", self.gpu_voice.currentData()), self.s.save(), self._refresh_banner(),
+                     self.engine.reload_voice()))
         if not IS_MAC and has_nvidia_gpu():
             oh.addWidget(QLabel("GPU 音色"))
             oh.addWidget(self.gpu_voice)
@@ -175,7 +176,8 @@ class MainWindow(QMainWindow):
         self.cpu_voice.addItem("标准音色", "standard")
         self.cpu_voice.setCurrentIndex(max(0, self.cpu_voice.findData(self.s.cpu_voice)))
         self.cpu_voice.currentIndexChanged.connect(
-            lambda: (setattr(self.s, "cpu_voice", self.cpu_voice.currentData()), self.s.save(), self._refresh_banner()))
+            lambda: (setattr(self.s, "cpu_voice", self.cpu_voice.currentData()), self.s.save(), self._refresh_banner(),
+                     self.engine.reload_voice()))
         if not IS_MAC and not cuda_voice_ok(self.s.gpu_voice):  # Windows without a usable CUDA voice
             oh.addWidget(QLabel("音色"))
             oh.addWidget(self.cpu_voice)
@@ -384,6 +386,9 @@ class MainWindow(QMainWindow):
             self.mute_btn.blockSignals(False)
             self.mute_btn.setText("已静音" if d["muted"] else "静音")
             self.tray.refresh()
+        elif kind == "voice":
+            self.status.setText(f"● 运行中 · {d['voice']}")
+            self.status.setStyleSheet("font-size: 15px; color: #1a9e4b;")
         elif kind == "ptt":
             self.status.setText("● 说话中…" if d["down"] else "● 运行中")
         elif kind == "error":
@@ -417,7 +422,8 @@ class MainWindow(QMainWindow):
             self.overlay.hide()
 
     def _voice(self) -> None:
-        VoiceDialog(self.s, self).exec()
+        if VoiceDialog(self.s, self, on_speed=self.engine.set_voice_speed).exec():
+            self.engine.reload_voice()  # new sample takes effect without 停止/开始
 
     def _open_transcripts(self) -> None:
         if IS_MAC:
