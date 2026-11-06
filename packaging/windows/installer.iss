@@ -11,6 +11,10 @@ AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher=MirrorVoice contributors
 DefaultDirName={autopf}\MirrorVoice
+; always offer the destination page (the default "auto" hides it on upgrades); silent one-click
+; updates still reuse the existing folder
+DisableDirPage=no
+UsePreviousAppDir=yes
 DefaultGroupName={#AppName}
 OutputDir=..\..\dist
 OutputBaseFilename=MirrorVoice-{#AppVersion}-windows-x64-setup
