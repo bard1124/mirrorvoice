@@ -4,6 +4,8 @@
 
 <h1 align="center">TongChuan 同传助手</h1>
 
+<p align="center"><a href="https://github.com/bard1124/tongchuan/releases/latest"><img alt="Download latest release" src="https://img.shields.io/github/v/release/bard1124/tongchuan?label=Download%20latest%20release"></a> <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue"> <img alt="macOS | Windows" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey"></p>
+
 <p align="center">
 <b>Local real-time interpretation: you speak Chinese, the other side of the call hears English in <i>your own voice</i>; they speak English, you read Chinese subtitles.</b><br>
 Runs entirely on your machine · works offline · no API keys · macOS (Apple Silicon) / Windows

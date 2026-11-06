@@ -4,6 +4,8 @@
 
 <h1 align="center">同传助手 TongChuan</h1>
 
+<p align="center"><a href="https://github.com/bard1124/tongchuan/releases/latest"><img alt="下载最新版" src="https://img.shields.io/github/v/release/bard1124/tongchuan?label=下载最新版"></a> <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue"> <img alt="macOS | Windows" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey"></p>
+
 <p align="center">
 <b>本地实时同声传译：你说中文，会议对方听到用你自己声音说的英文；对方说英文，你看到中文字幕。</b><br>
 全部在本机运行 · 不联网 · 不需要 API Key · macOS (Apple Silicon) / Windows
