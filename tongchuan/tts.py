@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import struct
 import subprocess
 from pathlib import Path
@@ -22,6 +23,31 @@ from .config import GPU_PACK_DONE, TTS_SERVER_LOG, VOICE, gpu_pack_python, kill_
 from .languages import LANGS
 
 REF_WAV, REF_TXT, REF_LANG = VOICE / "ref.wav", VOICE / "ref.txt", VOICE / "ref.lang"
+
+
+_CLAUSE_SPLIT = re.compile(r"(?<=[,;:.!?，。！？；：、])\s*")
+
+
+def _units(s: str) -> int:
+    return len(s.split()) if re.search(r"[A-Za-z]", s) else len(s)
+
+
+def clauses(text: str, min_units: int = 4) -> list[str]:
+    """Cut a sentence at punctuation so the first clause can be voiced while the rest is still
+    being synthesised — the non-streaming voices (Pocket / Kokoro / Qwen3-TTS CUDA) otherwise
+    stay silent until the whole sentence is done. Tiny fragments are merged into their
+    neighbour so the model never gets a one-word prompt."""
+    parts = [p.strip() for p in _CLAUSE_SPLIT.split(text) if p and p.strip()]
+    out: list[str] = []
+    for p in parts:
+        if out and (_units(out[-1]) < min_units or _units(p) < 2):
+            out[-1] = f"{out[-1]} {p}".strip()
+        else:
+            out.append(p)
+    if len(out) > 1 and _units(out[-1]) < 2:
+        out[-2], out[-1] = f"{out[-2]} {out[-1]}".strip(), ""
+        out.pop()
+    return out or [text]
 
 
 def has_voice_sample() -> bool:
@@ -78,8 +104,9 @@ class KokoroVoice:
         self.tts, self.sid = so.OfflineTts(cfg), sid
 
     def stream(self, text: str, lang: str, interval: float = 0.8) -> Iterator[tuple[np.ndarray, int]]:
-        a = self.tts.generate(text, sid=self.sid, speed=self.speed)
-        yield np.asarray(a.samples, dtype=np.float32), a.sample_rate
+        for part in clauses(text):
+            a = self.tts.generate(part, sid=self.sid, speed=self.speed)
+            yield np.asarray(a.samples, dtype=np.float32), a.sample_rate
 
     def close(self) -> None:
         pass
@@ -122,6 +149,10 @@ class PocketCloneVoice:
         self.g.num_steps = 5
 
     def stream(self, text: str, lang: str, interval: float = 0.8) -> Iterator[tuple[np.ndarray, int]]:
+        for part in clauses(text):
+            yield self._one(part)
+
+    def _one(self, text: str) -> tuple[np.ndarray, int]:
         cap_s = 2.0 + 0.1 * len(text)  # runaway guard
         # Stop the language model at the cap instead of only trimming afterwards: with a reference
         # that is not English it often never emits EOS and spent ~15 s producing 40 s of noise
@@ -135,7 +166,7 @@ class PocketCloneVoice:
 
         a = self.tts.generate(text, self.g, cb)
         w = np.asarray(a.samples, dtype=np.float32)[: int(cap_s * a.sample_rate)]
-        yield w, a.sample_rate
+        return w, a.sample_rate
 
     def close(self) -> None:
         pass
@@ -177,13 +208,14 @@ class CudaCloneVoice:
         return data[-n:].decode("utf-8", errors="replace").strip()
 
     def stream(self, text: str, lang: str, interval: float = 0.8) -> Iterator[tuple[np.ndarray, int]]:
-        req = json.dumps({"text": text, "lang": LANGS[lang].tts or "auto"}, ensure_ascii=False)
-        self.proc.stdin.write(req.encode("utf-8") + b"\n")
-        self.proc.stdin.flush()
-        header = self.proc.stdout.read(8)
-        sr, n = struct.unpack("<II", header)
-        data = self.proc.stdout.read(n * 4)
-        yield np.frombuffer(data, dtype=np.float32), sr
+        for part in clauses(text):
+            req = json.dumps({"text": part, "lang": LANGS[lang].tts or "auto"}, ensure_ascii=False)
+            self.proc.stdin.write(req.encode("utf-8") + b"\n")
+            self.proc.stdin.flush()
+            header = self.proc.stdout.read(8)
+            sr, n = struct.unpack("<II", header)
+            data = self.proc.stdout.read(n * 4)
+            yield np.frombuffer(data, dtype=np.float32), sr
 
     def close(self) -> None:
         if self.proc.poll() is None:
