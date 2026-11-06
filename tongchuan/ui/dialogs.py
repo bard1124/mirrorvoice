@@ -62,28 +62,57 @@ class GlossaryDialog(QDialog):
 
 
 class StyleDialog(QDialog):
-    def __init__(self, s: Settings, on_change, parent=None) -> None:
+    """Subtitle bar + conversation window style, and the pop-out toggles for both."""
+
+    def __init__(self, s: Settings, on_change, parent=None, toggle_bar=None, toggle_convo=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("字幕样式")
         self.s, self.on_change = s, on_change
+        self.toggle_bar, self.toggle_convo = toggle_bar, toggle_convo
         form = QFormLayout(self)
+        form.addRow(QLabel("<b>对方字幕条</b>（屏幕底部，运行时自动出现）"))
         self.font = QSlider(Qt.Orientation.Horizontal, minimum=14, maximum=48, value=s.overlay_font)
         self.op = QSlider(Qt.Orientation.Horizontal, minimum=30, maximum=100, value=int(s.overlay_opacity * 100))
         self.orig = QCheckBox("显示原文", checked=s.overlay_show_original)
         form.addRow("字号", self.font)
-        form.addRow("背景不透明度", self.op)
+        form.addRow("背景不透明度（两个窗口共用）", self.op)
         form.addRow("", self.orig)
-        for w in (self.font, self.op):
+        self.bar_btn = QPushButton()
+        self.bar_btn.clicked.connect(self._bar)
+        form.addRow("", self.bar_btn)
+        form.addRow(QLabel("<b>对话悬浮窗</b>（我和对方的原文 + 译文，可拖动、可缩放）"))
+        self.cfont = QSlider(Qt.Orientation.Horizontal, minimum=10, maximum=30, value=s.convo_font)
+        form.addRow("字号", self.cfont)
+        self.convo_btn = QPushButton()
+        self.convo_btn.clicked.connect(self._convo)
+        form.addRow("", self.convo_btn)
+        for w in (self.font, self.op, self.cfont):
             w.valueChanged.connect(self._apply)
         self.orig.toggled.connect(self._apply)
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         bb.rejected.connect(self.accept)
         form.addRow(bb)
+        self._labels()
+
+    def _labels(self) -> None:
+        self.bar_btn.setText("隐藏字幕条（仅运行时显示）" if self.s.overlay_pinned else "弹出字幕条（常驻屏幕）")
+        self.convo_btn.setText("收起对话悬浮窗" if self.s.convo_open else "弹出对话悬浮窗")
+        self.bar_btn.setVisible(self.toggle_bar is not None)
+        self.convo_btn.setVisible(self.toggle_convo is not None)
+
+    def _bar(self) -> None:
+        self.toggle_bar()
+        self._labels()
+
+    def _convo(self) -> None:
+        self.toggle_convo()
+        self._labels()
 
     def _apply(self) -> None:
         self.s.overlay_font = self.font.value()
         self.s.overlay_opacity = self.op.value() / 100
         self.s.overlay_show_original = self.orig.isChecked()
+        self.s.convo_font = self.cfont.value()
         self.s.save()
         self.on_change()
 

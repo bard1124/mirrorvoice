@@ -194,6 +194,13 @@ class Settings:
     overlay_show_original: bool = True
     overlay_x: int = -1
     overlay_y: int = -1
+    overlay_pinned: bool = False    # keep the other side's subtitle bar on screen even when stopped
+    convo_open: bool = False        # floating two-way conversation window shown
+    convo_font: int = 15
+    convo_x: int = -1
+    convo_y: int = -1
+    convo_w: int = 420
+    convo_h: int = 300
     display: str = "ui"            # "ui" control panel | "cli" terminal style
     auto_check_update: bool = True  # look for a newer release on startup (silent when offline)
     skip_version: str = ""         # "跳过此版本"

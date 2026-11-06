@@ -15,6 +15,7 @@ IS_WIN = sys.platform == "win32"
 VENDOR = ROOT / "packaging" / "vendor"
 
 datas = [(str(ROOT / "tongchuan" / "tts_server.py"), "tongchuan"),
+         (str(ROOT / "packaging" / "assets" / "icon.png"), "assets"),  # window / tray icon at runtime
          (str(ROOT / "LICENSE"), "."), (str(ROOT / "THIRD_PARTY_NOTICES.md"), ".")]
 binaries = []
 hiddenimports = []

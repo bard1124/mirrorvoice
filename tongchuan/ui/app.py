@@ -8,15 +8,30 @@ from PySide6.QtWidgets import QApplication
 from ..config import Settings
 
 
+def _taskbar_identity() -> None:
+    """Windows groups windows by AppUserModelID; without our own, a source run shows up as
+    "python" with the Python icon in the taskbar."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("io.github.tongchuan")
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def run_gui(argv: list[str] | None = None) -> int:
     argv = argv if argv is not None else sys.argv
     mode = argv[1] if len(argv) > 1 else ""
     s = Settings.load()
+    _taskbar_identity()
+    from .icons import app_icon
 
     if mode == "cli":  # we ARE the terminal front end
         from .cli import run_cli
 
         app = QApplication(argv)
+        app.setWindowIcon(app_icon())
         app.setQuitOnLastWindowClosed(False)
         return run_cli(app)
 
@@ -33,6 +48,7 @@ def run_gui(argv: list[str] | None = None) -> int:
 
     app = QApplication(argv)
     app.setApplicationName("同传助手")
+    app.setWindowIcon(app_icon())
     from .main_window import MainWindow
     from .wizard import Wizard
 
