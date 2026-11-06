@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, 
                                QSlider, QTableWidget, QTableWidgetItem, QVBoxLayout)
 
 from ..config import Settings
+from ..languages import label
 from ..translate import load_glossary, save_glossary
 from ..tts import REF_LANG, REF_TXT, REF_WAV
 
@@ -87,6 +88,20 @@ class StyleDialog(QDialog):
         self.on_change()
 
 
+def transcribe(audio_24k: np.ndarray, lang: str) -> tuple[str, str]:
+    """Transcript in the chosen language + the language SenseVoice actually heard.
+
+    With a fixed language SenseVoice just echoes it back, so detection needs a second pass in
+    "auto" mode (cheap: the int8 model loads in well under a second)."""
+    from ..asr import Recognizer
+    from ..audio import resample
+
+    a16 = resample(audio_24k, 24000, 16000)
+    text, _ = Recognizer(lang)(a16)
+    _, spoken = Recognizer("auto")(a16)
+    return text, spoken
+
+
 SAMPLE = {
     "zh": "大家好，今天我想和大家分享一下我们项目的最新进展，包括已经完成的部分、遇到的问题，以及下一步的计划。",
     "en": "Hi everyone, today I'd like to share the latest progress on our project, including what we've "
@@ -99,7 +114,7 @@ class VoiceDialog(QDialog):
 
     level = Signal(float)
     done = Signal(object)
-    transcribed = Signal(str)
+    transcribed = Signal(object)  # (text, detected language code)
 
     def __init__(self, s: Settings, parent=None) -> None:
         super().__init__(parent)
@@ -113,17 +128,18 @@ class VoiceDialog(QDialog):
         self.lang = QComboBox()
         self.lang.addItem("用中文朗读", "zh")
         self.lang.addItem("用英文朗读（推荐）", "en")
-        self.lang.currentIndexChanged.connect(lambda: self.prompt.setText(SAMPLE[self.lang.currentData()]))
         from ..models import voice_backend
 
-        if voice_backend(s) == "pocket":  # CPU clone needs an English reading
+        self.english_only = voice_backend(s) == "pocket"  # CPU clone needs an English reading
+        if self.english_only:
             self.lang.setCurrentIndex(self.lang.findData("en"))
             self.lang.setEnabled(False)
             self.lang.setToolTip("CPU 版克隆音色需要用英文朗读的样本")
         row.addWidget(self.lang)
         row.addStretch()
         lay.addLayout(row)
-        self.prompt = QLabel(SAMPLE["zh"], wordWrap=True)
+        self.prompt = QLabel(SAMPLE[self.lang.currentData()], wordWrap=True)
+        self.lang.currentIndexChanged.connect(lambda: self.prompt.setText(SAMPLE[self.lang.currentData()]))
         self.prompt.setStyleSheet("font-size: 16px; padding: 8px; background: palette(base); border-radius: 6px;")
         lay.addWidget(self.prompt)
         self.meter = QProgressBar(maximum=100, textVisible=False)
@@ -142,6 +158,7 @@ class VoiceDialog(QDialog):
         lay.addWidget(bb)
         self.audio: np.ndarray | None = None
         self._needs_asr = False  # recorded while the recognition model was still downloading
+        self._spoken = ""        # language SenseVoice heard in the recording ("" = unknown)
         self.level.connect(lambda v: self.meter.setValue(min(100, int(v * 400))))
         self.done.connect(self._recorded)
         self.transcribed.connect(self._on_transcribed)
@@ -162,7 +179,7 @@ class VoiceDialog(QDialog):
         lang = self.lang.currentData()
 
         def work():
-            from ..audio import record_seconds, resample
+            from ..audio import record_seconds
             from ..models import ASR
 
             try:
@@ -171,13 +188,11 @@ class VoiceDialog(QDialog):
                 clipped = float((np.abs(a) > 0.99).mean()) if len(a) else 0.0
                 a = a / peak * 0.9 if peak > 0.02 else a
                 if ASR.ready():
-                    from ..asr import Recognizer
-
-                    text, _ = Recognizer(lang)(resample(a, 24000, 16000))
+                    text, spoken = transcribe(a, lang)
                     auto = True
                 else:  # recognition model still downloading: use the sample text that was read
-                    text, auto = SAMPLE[lang], False
-                self.done.emit((a, text, peak, clipped, auto))
+                    text, spoken, auto = SAMPLE[lang], "", False
+                self.done.emit((a, text, peak, clipped, auto, spoken))
             except Exception as e:  # noqa: BLE001
                 self.done.emit(e)
 
@@ -190,7 +205,7 @@ class VoiceDialog(QDialog):
         if isinstance(res, Exception):
             QMessageBox.warning(self, "录音失败", str(res))
             return
-        a, text, peak, clipped, auto = res
+        a, text, peak, clipped, auto, spoken = res
         if peak < 0.02:
             QMessageBox.warning(self, "没录到声音", "几乎没录到声音，请检查麦克风权限和输入设备。")
             return
@@ -200,6 +215,8 @@ class VoiceDialog(QDialog):
         self.text.setPlainText(text)
         self._needs_asr = not auto
         self._lang = self.lang.currentData()
+        self._spoken = spoken
+        self._check_spoken()
         if not auto:
             QMessageBox.information(self, "已录好", "录音已保留在本窗口。模型还在下载，下载完成后会自动识别你读的文字，"
                                     "请等下载完成、核对文字后再点“保存”。")
@@ -213,21 +230,34 @@ class VoiceDialog(QDialog):
         audio, lang = self.audio, self._lang
 
         def work():
-            from ..asr import Recognizer
-            from ..audio import resample
-
             try:
-                text, _ = Recognizer(lang)(resample(audio, 24000, 16000))
+                text, spoken = transcribe(audio, lang)
             except Exception:  # noqa: BLE001 — keep the sample text the user can edit
-                text = ""
-            self.transcribed.emit(text)
+                text, spoken = "", ""
+            self.transcribed.emit((text, spoken))
         threading.Thread(target=work, daemon=True).start()
 
-    def _on_transcribed(self, text: str) -> None:
+    def _on_transcribed(self, res) -> None:
+        text, self._spoken = res
         self._needs_asr = False
         if text:
             self.text.setPlainText(text)
         QMessageBox.information(self, "模型已就绪", "模型下载完成，已自动识别你读的文字。核对无误后点“保存”。")
+        self._check_spoken()
+
+    def _mismatch(self) -> bool:
+        return bool(self._spoken) and self._spoken != self._lang
+
+    def _check_spoken(self) -> None:
+        if not self._mismatch():
+            return
+        heard, want = label(self._spoken), label(self._lang)
+        if self.english_only:
+            QMessageBox.warning(self, "请用英文朗读", f"听起来你读的是{heard}，但 CPU 版克隆音色只能用英文样本"
+                                "（中文样本会让它合成时停不下来、每句慢十几秒）。\n请点“重新录音”，朗读上面的英文段落。")
+        else:
+            QMessageBox.information(self, "朗读语言不一致", f"听起来你读的是{heard}，而选择的是{want}。"
+                                    "可以保存，但合成的口音可能不自然；建议按所选语言重录。")
 
     def _save(self) -> None:
         if self.audio is None and not REF_WAV.exists():
@@ -243,6 +273,10 @@ class VoiceDialog(QDialog):
                 f"模型还没下载完成（{names}），请等下载完成后再保存录音。\n\n"
                 "录音已保留在本窗口，不用重录；下载进度见主窗口顶部或设置向导的“下载模型”页。"
                 "下载完成后会自动识别文字，再点“保存”即可。")
+            return
+        if self.english_only and self._mismatch():
+            QMessageBox.warning(self, "请用英文朗读", f"这段录音听起来是{label(self._spoken)}，CPU 版克隆音色需要英文样本，"
+                                "请重新录音。")
             return
         if self.audio is not None:
             for p in (REF_WAV, REF_TXT):  # keep one previous sample

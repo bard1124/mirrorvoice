@@ -9,6 +9,7 @@ All yield (float32 mono chunk, sample_rate).
 from __future__ import annotations
 
 import json
+import math
 import struct
 import subprocess
 from pathlib import Path
@@ -119,6 +120,10 @@ class PocketCloneVoice:
 
     def stream(self, text: str, lang: str, interval: float = 0.8) -> Iterator[tuple[np.ndarray, int]]:
         cap_s = 2.0 + 0.1 * len(text)  # runaway guard
+        # Stop the language model at the cap instead of only trimming afterwards: with a reference
+        # that is not English it often never emits EOS and spent ~15 s producing 40 s of noise
+        # (the LM runs to the end before the first audio callback). Mimi codec: 12.5 frames/s.
+        self.g.extra = {"max_frames": str(math.ceil(cap_s * 12.5))}
         got = [0]
 
         def cb(samples, _progress) -> int:

@@ -224,6 +224,9 @@ class MainWindow(QMainWindow):
             for text, data in items:
                 combo.addItem(text, data)
             i = combo.findData(cur)
+            if i < 0 and cur:  # same partial match as audio.find_device
+                i = next((k for k in range(combo.count())
+                          if cur.lower() in str(combo.itemData(k)).lower()), -1)
             if i < 0 and cur:
                 combo.addItem(f"{cur}（未连接）", cur)
                 i = combo.count() - 1
