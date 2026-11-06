@@ -135,8 +135,10 @@ class MainWindow(QMainWindow):
         v.addLayout(mh)
         oh = QHBoxLayout()
         self.quality = QComboBox()
-        self.quality.addItem("快速", "fast")
-        self.quality.addItem("高质量", "quality")
+        self.quality.addItem(f"快速（{models.llm_name('fast')}）", "fast")
+        self.quality.addItem(f"高质量（{models.llm_name('quality')}）", "quality")
+        for i, q in enumerate(("fast", "quality")):
+            self.quality.setItemData(i, models.summary(q), Qt.ItemDataRole.ToolTipRole)
         self.display = QComboBox()
         self.display.addItem("图形界面", "ui")
         self.display.addItem("命令行风格", "cli")

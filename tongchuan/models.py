@@ -6,6 +6,7 @@ from ModelScope's CDN and the small speech models from GitHub releases.
 from __future__ import annotations
 
 import json
+import re
 import tarfile
 import threading
 import urllib.request
@@ -102,6 +103,19 @@ def voice_backend(s=None) -> str:
 def required(quality: str) -> list[Model]:
     tts = {"pocket": POCKET, "kokoro": KOKORO}.get(voice_backend(), TTS_CLONE[quality])
     return [VAD, ASR, LLM[quality], tts]
+
+
+def llm_name(quality: str) -> str:
+    """'Qwen3-4B' / 'Qwen3-8B' — what the 快速 / 高质量 choice actually selects."""
+    m = re.search(r"Qwen3-\d+B", LLM[quality].title)
+    return m.group() if m else LLM[quality].title
+
+
+def summary(quality: str) -> str:
+    """'翻译 Qwen3-4B · 语音识别 SenseVoice · 克隆音色 Pocket TTS · 约 2.7 GB' for this machine's backend."""
+    ms = required(quality)
+    parts = [re.sub(r"\s*\(.*?\)\s*$", "", m.title) for m in ms if m.key != "vad"]
+    return " · ".join(parts) + f" · 约 {sum(m.approx_mb for m in ms) / 1024:.1f} GB"
 
 
 # ------------------------------------------------------------------ downloader

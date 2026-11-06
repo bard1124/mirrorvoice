@@ -123,6 +123,25 @@ class Player:
 OnAudio = Callable[[np.ndarray], None]  # mono float32 @ 16 kHz
 
 
+def open_input(device: int | None, want_sr: int, channels: int, callback, blocksize: int = 0
+               ) -> tuple[sd.InputStream, int]:
+    """InputStream at want_sr, else at the device's native rate (caller resamples).
+
+    find_device prefers WASAPI, whose shared mode only accepts the device's own rate (48 kHz here):
+    16 / 24 kHz fail with "Invalid sample rate [PaErrorCode -9997]". The MME default device
+    resampled for us, which is why "系统默认" worked and a named microphone did not.
+    """
+    try:
+        return sd.InputStream(samplerate=want_sr, channels=channels, dtype="float32", blocksize=blocksize,
+                              device=device, callback=callback), want_sr
+    except sd.PortAudioError:
+        native = int(sd.query_devices(device, "input")["default_samplerate"])
+        if native == want_sr:
+            raise
+        return sd.InputStream(samplerate=native, channels=channels, dtype="float32", blocksize=blocksize,
+                              device=device, callback=callback), native
+
+
 class Capture:
     """Mono 16 kHz capture from a device name; 'loopback:<speaker>' = Windows WASAPI loopback."""
 
@@ -143,12 +162,11 @@ class Capture:
         if self.loopback:
             threading.Thread(target=self._loopback_loop, daemon=True, name="loopback").start()
             return
-        self.stream = sd.InputStream(samplerate=ASR_SR, channels=self.channels, dtype="float32",
-                                     blocksize=self.block, device=self.dev, callback=self._cb)
+        self.stream, self.sr = open_input(self.dev, ASR_SR, self.channels, self._cb, self.block)
         self.stream.start()
 
     def _cb(self, indata, frames, t, status) -> None:
-        self.on_audio(indata.mean(axis=1).astype(np.float32))
+        self.on_audio(resample(indata.mean(axis=1).astype(np.float32), self.sr, ASR_SR))
 
     def _loopback_loop(self) -> None:  # Windows only
         import soundcard as sc
@@ -193,6 +211,7 @@ def record_seconds(device: str, seconds: float, sr: int = 24000,
         if on_level:
             on_level(float(np.sqrt((x * x).mean())))
 
-    with sd.InputStream(samplerate=sr, channels=1, dtype="float32", device=idx, callback=cb):
+    stream, got_sr = open_input(idx, sr, 1, cb)
+    with stream:
         sd.sleep(int(seconds * 1000))
-    return np.concatenate(chunks) if chunks else np.zeros(0, np.float32)
+    return resample(np.concatenate(chunks), got_sr, sr) if chunks else np.zeros(0, np.float32)
