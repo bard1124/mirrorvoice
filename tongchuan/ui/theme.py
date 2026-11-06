@@ -20,6 +20,16 @@ BG = "#FFFFFF"
 BG_SIDE = "#F5F6F8"
 BG_SOFT = "#F7F8FA"
 
+
+def _asset(name: str) -> str:
+    """Stylesheet url(): forward slashes, works from a source checkout and the frozen app."""
+    from .icons import assets_dir
+
+    return str(assets_dir() / name).replace("\\", "/")
+
+
+CHEVRON = _asset("chevron-down.svg")
+
 QSS = f"""
 * {{ font-family: "PingFang SC", "Microsoft YaHei UI", "Segoe UI", "Helvetica Neue", sans-serif; font-size: 13px;
      color: {TEXT}; }}
@@ -69,7 +79,9 @@ QLabel#msgBadge[kind="critical"] {{ background: #FDECEC; color: #C62828; }}
 QComboBox {{ background: {BG}; border: 1px solid #DFE2E7; border-radius: 8px; padding: 5px 10px; min-height: 20px; }}
 QComboBox:hover {{ border-color: #C9CDD4; }}
 QComboBox:focus {{ border-color: {ACCENT}; }}
-QComboBox::drop-down {{ border: none; width: 26px; }}
+QComboBox::drop-down {{ border: none; width: 26px; subcontrol-origin: padding; subcontrol-position: center right; }}
+QComboBox::down-arrow {{ image: url("{CHEVRON}"); width: 12px; height: 12px; }}
+QComboBox::down-arrow:on {{ top: 1px; }}
 QComboBox QAbstractItemView {{ background: {BG}; border: 1px solid {LINE}; border-radius: 8px; padding: 4px;
                                selection-background-color: {ACCENT_SOFT}; selection-color: {ACCENT}; outline: 0; }}
 QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox {{ background: {BG}; border: 1px solid #DFE2E7; border-radius: 8px;
