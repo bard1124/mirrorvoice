@@ -71,6 +71,18 @@ class ConversationWindow(QWidget):
             self.move(scr.x() + scr.width() - self.width() - 24, scr.y() + 80)
         self._drag: QPoint | None = None
         self.apply_style()
+        self._clamp()
+
+    def _clamp(self) -> None:
+        """Keep the whole window inside the screen it is on (saved position from a narrower
+        window, resize past the edge, monitor change)."""
+        scr = (QApplication.screenAt(self.frameGeometry().center()) or QApplication.primaryScreen()).availableGeometry()
+        if self.width() > scr.width() or self.height() > scr.height():
+            self.resize(min(self.width(), scr.width()), min(self.height(), scr.height()))
+        x = min(max(self.x(), scr.left()), max(scr.left(), scr.right() - self.width() + 1))
+        y = min(max(self.y(), scr.top()), max(scr.top(), scr.bottom() - self.height() + 1))
+        if (x, y) != (self.x(), self.y()):
+            self.move(x, y)
 
     # ---------------------------------------------------------------- content
     def add(self, who: str, src: str, tgt: str, passthrough: bool = False) -> None:
@@ -126,11 +138,13 @@ class ConversationWindow(QWidget):
     def mouseReleaseEvent(self, _e) -> None:
         if self._drag is not None:
             self._drag = None
+            self._clamp()
             self._remember()
 
     def resizeEvent(self, e) -> None:
         super().resizeEvent(e)
         if self.isVisible():
+            self._clamp()
             self._remember()
 
     def _remember(self) -> None:
