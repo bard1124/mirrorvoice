@@ -28,10 +28,10 @@ from . import __version__
 from .config import FROZEN, HOME, IS_MAC, IS_WIN
 from .net import urlopen
 
-REPO = "bard1124/tongchuan"
-FEED = os.environ.get("TONGCHUAN_UPDATE_FEED", f"https://api.github.com/repos/{REPO}/releases/latest")
+REPO = "bard1124/mirrorvoice"
+FEED = os.environ.get("MIRRORVOICE_UPDATE_FEED", f"https://api.github.com/repos/{REPO}/releases/latest")
 UPDATES = HOME / "updates"
-UA = {"User-Agent": f"TongChuan/{__version__} (updater)", "Accept": "application/vnd.github+json"}
+UA = {"User-Agent": f"MirrorVoice/{__version__} (updater)", "Accept": "application/vnd.github+json"}
 
 
 @dataclass
@@ -138,7 +138,7 @@ def can_self_install() -> bool:
 
 
 def current_app_bundle() -> Path | None:
-    """…/同传助手.app when running from the macOS bundle."""
+    """…/镜声.app when running from the macOS bundle."""
     p = Path(sys.executable).resolve()
     for parent in p.parents:
         if parent.suffix == ".app":
@@ -147,7 +147,7 @@ def current_app_bundle() -> Path | None:
 
 
 MAC_SCRIPT = r"""#!/bin/bash
-# TongChuan updater: wait for the app to quit, swap the bundle from the DMG, relaunch.
+# MirrorVoice updater: wait for the app to quit, swap the bundle from the DMG, relaunch.
 PID="$1"; DMG="$2"; TARGET="$3"; LOG="$4"
 exec >>"$LOG" 2>&1
 echo "$(date) update start pid=$PID target=$TARGET"
@@ -178,7 +178,7 @@ def install(installer: Path) -> None:
         script = Path(tempfile.mkdtemp(prefix="tc-update-")) / "update.sh"
         script.write_text(MAC_SCRIPT)
         script.chmod(0o755)
-        relaunch = "norelaunch" if os.environ.get("TONGCHUAN_UPDATE_NO_RELAUNCH") else "relaunch"
+        relaunch = "norelaunch" if os.environ.get("MIRRORVOICE_UPDATE_NO_RELAUNCH") else "relaunch"
         subprocess.Popen(["/bin/bash", str(script), str(os.getpid()), str(installer), str(target), str(log),
                           relaunch],
                          start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,

@@ -4,7 +4,7 @@ The taskbar button's jump list shows the *process executable's* name and icon ("
 the window carries System.AppUserModel.RelaunchDisplayNameResource / RelaunchIconResource /
 RelaunchCommand. Those are set through the window's property store (IPropertyStore), done here
 with ctypes so no extra dependency is needed. No-op on other platforms and in the packaged app
-(TongChuan.exe already carries name and icon).
+(MirrorVoice.exe already carries name and icon).
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import ctypes
 import sys
 from ctypes import wintypes
 
-APP_ID = "io.github.tongchuan"
+APP_ID = "io.github.mirrorvoice"
 
 
 class _GUID(ctypes.Structure):

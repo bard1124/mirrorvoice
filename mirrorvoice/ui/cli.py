@@ -38,7 +38,7 @@ def run_cli(app: QApplication) -> int:
     overlay = Overlay(s) if s.subtitles else None
     state = {"switch_ui": False}
 
-    print(f"{C['bold']}同传助手 · 命令行模式{C['off']}  我说 {label(s.my_lang)} → 对方听 {label(s.their_lang)}"
+    print(f"{C['bold']}镜声 · 命令行模式{C['off']}  我说 {label(s.my_lang)} → 对方听 {label(s.their_lang)}"
           f"   （输入 m 静音 / u 更新 / q 退出 / ui 切换图形界面）", flush=True)
 
     def on_event(kind: str, d: dict) -> None:

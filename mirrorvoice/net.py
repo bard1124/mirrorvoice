@@ -58,7 +58,7 @@ def urlopen(req, timeout: float = 30):
     if isinstance(req, str):
         req = urllib.request.Request(req)
     names = [n for n, _ in STORES]
-    forced = os.environ.get("TONGCHUAN_TLS", "")  # diagnostics: use only this store (certifi/system/default)
+    forced = os.environ.get("MIRRORVOICE_TLS", "")  # diagnostics: use only this store (certifi/system/default)
     if forced in names:
         names = [forced]
     elif _preferred:

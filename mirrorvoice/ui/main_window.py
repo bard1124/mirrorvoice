@@ -30,7 +30,7 @@ class MainWindow(QMainWindow):
     def __init__(self, s: Settings) -> None:
         super().__init__()
         self.s = s
-        self.setWindowTitle(f"同传助手 {__version__}")
+        self.setWindowTitle(f"镜声 {__version__}")
         self.resize(560, 820)
         self.bridge = Bridge()
         self.bridge.event.connect(self._on_event)
@@ -288,8 +288,8 @@ class MainWindow(QMainWindow):
         brand.addWidget(logo)
         bt = QVBoxLayout()
         bt.setSpacing(0)
-        bt.addWidget(QLabel("同传助手", objectName="brand"))
-        bt.addWidget(QLabel(f"v{__version__}", objectName="brandSub"))
+        bt.addWidget(QLabel("镜声", objectName="brand"))
+        bt.addWidget(QLabel(f"MirrorVoice · v{__version__}", objectName="brandSub"))
         brand.addLayout(bt)
         brand.addStretch()
         v.addLayout(brand)

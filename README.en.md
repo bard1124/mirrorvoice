@@ -1,10 +1,10 @@
 <p align="center"><a href="README.md">简体中文</a> | <b>English</b></p>
 
-<p align="center"><img src="packaging/assets/icon.png" width="120" alt="TongChuan"></p>
+<p align="center"><img src="packaging/assets/icon.png" width="120" alt="MirrorVoice"></p>
 
-<h1 align="center">TongChuan 同传助手</h1>
+<h1 align="center">MirrorVoice 镜声</h1>
 
-<p align="center"><a href="https://github.com/bard1124/tongchuan/releases/latest"><img alt="Download latest release" src="https://img.shields.io/github/v/release/bard1124/tongchuan?label=Download%20latest%20release"></a> <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue"> <img alt="macOS | Windows" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey"></p>
+<p align="center"><a href="https://github.com/bard1124/mirrorvoice/releases/latest"><img alt="Download latest release" src="https://img.shields.io/github/v/release/bard1124/mirrorvoice?label=Download%20latest%20release"></a> <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue"> <img alt="macOS | Windows" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey"></p>
 
 <p align="center">
 <b>Local real-time interpretation: you speak Chinese, the other side of the call hears English in <i>your own voice</i>; they speak English, you read Chinese subtitles.</b><br>
@@ -35,8 +35,8 @@ Runs entirely on your machine · works offline · no API keys · macOS (Apple Si
 
 Download from [Releases](../../releases):
 
-- **macOS (Apple Silicon, macOS 14+)**: `TongChuan-x.y.z-macos-arm64.dmg`, drag to Applications. The app is not notarized: the first time, right-click → Open.
-- **Windows 10/11 x64**: `TongChuan-x.y.z-windows-x64-setup.exe`. Not code-signed: on the SmartScreen prompt choose "More info → Run anyway".
+- **macOS (Apple Silicon, macOS 14+)**: `MirrorVoice-x.y.z-macos-arm64.dmg`, drag to Applications. The app is not notarized: the first time, right-click → Open.
+- **Windows 10/11 x64**: `MirrorVoice-x.y.z-windows-x64-setup.exe`. Not code-signed: on the SmartScreen prompt choose "More info → Run anyway".
 
 The setup wizard starts on first launch. Models are about 4.5 GB (about 8 GB in high-quality mode).
 
@@ -58,7 +58,7 @@ With everything on (translation + cloned voice + subtitles) it uses about **5 GB
 
 ### Company networks / certificate errors
 
-Model downloads and update checks use the app's bundled CA store first and fall back to the system store (macOS Keychain / Windows certificate store) when verification fails. On networks that inspect HTTPS, downloads work as long as the company root certificate is installed in the system (if your browser opens GitHub and ModelScope, it is). To troubleshoot, set `TONGCHUAN_TLS=certifi|system|default` to force a single store.
+Model downloads and update checks use the app's bundled CA store first and fall back to the system store (macOS Keychain / Windows certificate store) when verification fails. On networks that inspect HTTPS, downloads work as long as the company root certificate is installed in the system (if your browser opens GitHub and ModelScope, it is). To troubleshoot, set `MIRRORVOICE_TLS=certifi|system|default` to force a single store.
 
 ## Meeting app setup
 
@@ -83,14 +83,14 @@ A single model thread owns every MLX/LLM/TTS object; your speech (priority 0) al
 ```bash
 # macOS (Apple Silicon)
 python3.12 -m venv .venv && .venv/bin/pip install -r requirements-mac.txt
-.venv/bin/python -m tongchuan            # control panel
-.venv/bin/python -m tongchuan cli        # terminal-style view
-.venv/bin/python -m tongchuan download   # download models only
+.venv/bin/python -m mirrorvoice            # control panel
+.venv/bin/python -m mirrorvoice cli        # terminal-style view
+.venv/bin/python -m mirrorvoice download   # download models only
 ```
 
 Packaging: macOS `bash packaging/mac/build_dmg.sh`; Windows is built by GitHub Actions (`.github/workflows/build.yml`; pushing a `v*` tag publishes a Release).
 
-Data folder: macOS `~/Library/Application Support/TongChuan`, Windows `%LOCALAPPDATA%\TongChuan` (models, voice sample, transcripts, glossary, settings, logs).
+Data folder: macOS `~/Library/Application Support/MirrorVoice`, Windows `%LOCALAPPDATA%\MirrorVoice` (models, voice sample, transcripts, glossary, settings, logs).
 
 ## Credits
 

@@ -21,7 +21,7 @@ from .net import urlopen
 SHERPA = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
 MS_API = "https://modelscope.cn/api/v1/models/{repo}/repo/files?Revision=master&Recursive=true"
 MS_FILE = "https://modelscope.cn/models/{repo}/resolve/master/{path}"
-UA = {"User-Agent": "TongChuan/0.2 (model downloader)"}
+UA = {"User-Agent": "MirrorVoice/0.2 (model downloader)"}
 
 
 @dataclass

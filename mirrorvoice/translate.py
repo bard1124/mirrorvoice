@@ -156,9 +156,9 @@ def _free_port() -> int:
 
 
 def llama_server_candidates() -> list[Path]:
-    """GPU (Vulkan) build first, CPU build as fallback; TONGCHUAN_LLAMA_SERVER overrides."""
-    if os.environ.get("TONGCHUAN_LLAMA_SERVER"):
-        return [Path(os.environ["TONGCHUAN_LLAMA_SERVER"])]
+    """GPU (Vulkan) build first, CPU build as fallback; MIRRORVOICE_LLAMA_SERVER overrides."""
+    if os.environ.get("MIRRORVOICE_LLAMA_SERVER"):
+        return [Path(os.environ["MIRRORVOICE_LLAMA_SERVER"])]
     exe = "llama-server.exe" if IS_WIN else "llama-server"
     base = resource_dir() / "llama"
     return [p for p in (base / "vulkan" / exe, base / "cpu" / exe, base / exe) if p.exists()]

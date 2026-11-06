@@ -1,6 +1,6 @@
 # Third-party software and models
 
-同传助手 itself is MIT-licensed. It bundles or downloads the following components, each under
+镜声 itself is MIT-licensed. It bundles or downloads the following components, each under
 its own license.
 
 ## Bundled in the installers

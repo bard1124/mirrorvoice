@@ -43,7 +43,7 @@ class UpdateController:
         d.setWindowTitle("发现新版本")
         d.resize(520, 420)
         lay = QVBoxLayout(d)
-        lay.addWidget(QLabel(f"<b>同传助手 {rel.version}</b> 可以更新了（当前 {__version__}）。"
+        lay.addWidget(QLabel(f"<b>镜声 {rel.version}</b> 可以更新了（当前 {__version__}）。"
                              "模型、音色、会议记录和设置都会保留。"))
         notes = QTextBrowser(openExternalLinks=True)
         notes.setMarkdown(rel.notes or "（无更新说明）")
@@ -65,7 +65,7 @@ class UpdateController:
 
     def _start(self, rel: updater.Release) -> None:
         self._dlg = QProgressDialog(f"正在下载 {rel.asset_name} …", "取消", 0, 1000, self.parent)
-        self._dlg.setWindowTitle("更新同传助手")
+        self._dlg.setWindowTitle("更新镜声")
         self._dlg.setWindowModality(Qt.WindowModality.WindowModal)
         self._dlg.setMinimumDuration(0)
         cancel = threading.Event()

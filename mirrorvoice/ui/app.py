@@ -15,7 +15,7 @@ def _taskbar_identity() -> None:
         try:
             import ctypes
 
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("io.github.tongchuan")
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("io.github.mirrorvoice")
         except Exception:  # noqa: BLE001
             pass
 
@@ -30,7 +30,7 @@ def _taskbar_window_identity(win) -> None:
     from .winshell import set_window_identity
 
     exe = sys.executable.replace("python.exe", "pythonw.exe")
-    set_window_identity(int(win.winId()), "同传助手", f"{assets_dir() / 'icon.ico'},0", f'"{exe}" -m tongchuan')
+    set_window_identity(int(win.winId()), "镜声", f"{assets_dir() / 'icon.ico'},0", f'"{exe}" -m mirrorvoice')
 
 
 def run_gui(argv: list[str] | None = None) -> int:
@@ -62,7 +62,7 @@ def run_gui(argv: list[str] | None = None) -> int:
         return 0
 
     app = QApplication(argv)
-    app.setApplicationName("同传助手")
+    app.setApplicationName("镜声")
     theme.apply(app)
     app.setWindowIcon(app_icon())
     from .main_window import MainWindow

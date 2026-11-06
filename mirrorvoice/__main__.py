@@ -1,4 +1,4 @@
-"""Entry point: GUI by default; `python -m tongchuan <cmd>` for headless use.
+"""Entry point: GUI by default; `python -m mirrorvoice <cmd>` for headless use.
 
   gui                      control panel (default)
   cli                      terminal-style front end (coloured log + subtitle bar)
@@ -86,7 +86,7 @@ def _cmd_update(_args) -> None:
         print(f"已下载到 {path}（从源码运行，请手动安装）")
         return
     updater.install(path)
-    print("正在安装，完成后会自动重新打开同传助手")
+    print("正在安装，完成后会自动重新打开镜声")
 
 
 def _utf8_console() -> None:
@@ -113,7 +113,7 @@ def main() -> None:
         from .ui.app import run_gui
 
         sys.exit(run_gui())
-    p = argparse.ArgumentParser(prog="tongchuan")
+    p = argparse.ArgumentParser(prog="mirrorvoice")
     sub = p.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run")
     r.add_argument("--set", action="append", help="override a setting, e.g. --set mic=外置麦克风")

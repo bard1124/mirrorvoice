@@ -44,17 +44,17 @@ jobs:
         shell: pwsh
         run: ./packaging/windows/fetch_vendor.ps1
       - name: PyInstaller
-        run: pyinstaller --noconfirm --clean --log-level WARN --distpath dist --workpath build packaging/tongchuan.spec
+        run: pyinstaller --noconfirm --clean --log-level WARN --distpath dist --workpath build packaging/mirrorvoice.spec
       - name: Smoke test (CLI exe starts and lists devices)
         shell: pwsh
         run: |
-          $env:TONGCHUAN_HOME = "$env:RUNNER_TEMP\tc-home"
-          & dist\TongChuan\TongChuanCLI.exe devices
+          $env:MIRRORVOICE_HOME = "$env:RUNNER_TEMP\tc-home"
+          & dist\MirrorVoice\MirrorVoiceCLI.exe devices
       - name: Inno Setup
         shell: pwsh
         run: |
           choco install innosetup -y --no-progress
-          $ver = python -c "import tongchuan; print(tongchuan.__version__)"
+          $ver = python -c "import mirrorvoice; print(mirrorvoice.__version__)"
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$ver" packaging\windows\installer.iss
       - uses: actions/upload-artifact@v4
         with:

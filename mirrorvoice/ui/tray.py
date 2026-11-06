@@ -28,7 +28,7 @@ class Tray(QObject):
         self.icon: QSystemTrayIcon | None = None
         if QSystemTrayIcon.isSystemTrayAvailable():
             self.icon = QSystemTrayIcon(tray_icon("stopped"), self)
-            self.icon.setToolTip("同传助手")
+            self.icon.setToolTip("镜声")
             self.icon.setContextMenu(self.menu)
             self.icon.activated.connect(self._activated)
             self.icon.show()
@@ -72,4 +72,4 @@ class Tray(QObject):
         state = "muted" if running and eng.muted else ("running" if running else "stopped")
         if self.icon:
             self.icon.setIcon(tray_icon(state))
-            self.icon.setToolTip("同传助手 · " + {"running": "运行中", "muted": "已静音", "stopped": "已停止"}[state])
+            self.icon.setToolTip("镜声 · " + {"running": "运行中", "muted": "已静音", "stopped": "已停止"}[state])

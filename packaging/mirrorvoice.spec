@@ -1,6 +1,6 @@
-# PyInstaller spec for 同传助手 (macOS .app and Windows folder build).
-#   macOS:   pyinstaller packaging/tongchuan.spec   -> dist/同传助手.app
-#   Windows: pyinstaller packaging/tongchuan.spec   -> dist/TongChuan/{TongChuan.exe,TongChuanCLI.exe}
+# PyInstaller spec for 镜声 (macOS .app and Windows folder build).
+#   macOS:   pyinstaller packaging/mirrorvoice.spec   -> dist/镜声.app
+#   Windows: pyinstaller packaging/mirrorvoice.spec   -> dist/MirrorVoice/{MirrorVoice.exe,MirrorVoiceCLI.exe}
 # Models are NOT bundled; the first-run wizard downloads them.
 import sys
 from pathlib import Path
@@ -9,12 +9,12 @@ from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_sub
 
 ROOT = Path(SPECPATH).parent
 sys.path.insert(0, str(ROOT))
-from tongchuan import __version__ as VERSION  # noqa: E402
+from mirrorvoice import __version__ as VERSION  # noqa: E402
 IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
 VENDOR = ROOT / "packaging" / "vendor"
 
-datas = [(str(ROOT / "tongchuan" / "tts_server.py"), "tongchuan"),
+datas = [(str(ROOT / "mirrorvoice" / "tts_server.py"), "mirrorvoice"),
          (str(ROOT / "packaging" / "assets" / "icon.png"), "assets"),  # window / tray icon at runtime
          (str(ROOT / "packaging" / "assets" / "chevron-down.svg"), "assets"),  # combo box arrow (stylesheet)
          (str(ROOT / "LICENSE"), "."), (str(ROOT / "THIRD_PARTY_NOTICES.md"), ".")]
@@ -68,23 +68,23 @@ a = Analysis([str(ROOT / "packaging" / "entry.py")], pathex=[str(ROOT)], binarie
 pyz = PYZ(a.pure)
 
 icon = str(ROOT / "packaging" / "assets" / ("icon.icns" if IS_MAC else "icon.ico"))
-gui_exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="TongChuan", console=False, icon=icon,
+gui_exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="MirrorVoice", console=False, icon=icon,
               argv_emulation=False, target_arch=None, codesign_identity=None, entitlements_file=None)
 exes = [gui_exe]
 if IS_WIN:  # console twin for the command-line display mode (a windowed exe has no console)
-    exes.append(EXE(pyz, a.scripts, [], exclude_binaries=True, name="TongChuanCLI", console=True, icon=icon))
+    exes.append(EXE(pyz, a.scripts, [], exclude_binaries=True, name="MirrorVoiceCLI", console=True, icon=icon))
 
-coll = COLLECT(*exes, a.binaries, a.datas, strip=False, upx=False, name="TongChuan")
+coll = COLLECT(*exes, a.binaries, a.datas, strip=False, upx=False, name="MirrorVoice")
 
 if IS_MAC:
     app = BUNDLE(
-        coll, name="同传助手.app", icon=icon, bundle_identifier="io.github.tongchuan",
+        coll, name="镜声.app", icon=icon, bundle_identifier="io.github.mirrorvoice",
         info_plist={
-            "CFBundleDisplayName": "同传助手",
+            "CFBundleDisplayName": "镜声",
             "CFBundleShortVersionString": VERSION,
             "CFBundleVersion": VERSION,
             "LSMinimumSystemVersion": "14.0",
-            "NSMicrophoneUsageDescription": "同传助手需要麦克风来识别你说的话并实时翻译。",
+            "NSMicrophoneUsageDescription": "镜声需要麦克风来识别你说的话并实时翻译。",
             "NSAppleEventsUsageDescription": "命令行模式需要打开“终端”窗口。",
             "NSHighResolutionCapable": True,
         },

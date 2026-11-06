@@ -18,9 +18,9 @@ def self_cmd(*args: str, console: bool = False) -> list[str]:
     if FROZEN:
         exe = Path(sys.executable)
         if IS_WIN and console:
-            exe = exe.with_name("TongChuanCLI.exe")  # console build (the GUI exe has no console)
+            exe = exe.with_name("MirrorVoiceCLI.exe")  # console build (the GUI exe has no console)
         return [str(exe), *args]
-    return [sys.executable, "-m", "tongchuan", *args]
+    return [sys.executable, "-m", "mirrorvoice", *args]
 
 
 def cli_running() -> int | None:
@@ -53,7 +53,7 @@ def open_cli_terminal() -> None:
         line = "clear && exec " + " ".join(shlex.quote(c) for c in cmd)
         script = ('tell application "Terminal"\nactivate\n'
                   f'set w to do script {applescript_str(line)}\n'
-                  'set custom title of w to "同传助手"\nend tell')
+                  'set custom title of w to "镜声"\nend tell')
         subprocess.run(["osascript", "-e", script])
     elif IS_WIN:
         subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE)
@@ -72,4 +72,4 @@ def applescript_str(s: str) -> str:
 
 def notify(text: str) -> None:
     if IS_MAC:
-        subprocess.run(["osascript", "-e", f'display notification {applescript_str(text)} with title "同传助手"'])
+        subprocess.run(["osascript", "-e", f'display notification {applescript_str(text)} with title "镜声"'])

@@ -19,16 +19,36 @@ IS_APPLE_SILICON = IS_MAC and platform.machine() == "arm64"
 FROZEN = getattr(sys, "frozen", False)  # running from the PyInstaller bundle
 
 
+LEGACY_APP_ID = "TongChuan"  # data folder name before the rename to 镜声 / MirrorVoice
+
+
 def data_dir() -> Path:
     """Per-user writable home: models, voice sample, transcripts, settings."""
-    if os.environ.get("TONGCHUAN_HOME"):
-        p = Path(os.environ["TONGCHUAN_HOME"])
+    env = os.environ.get("MIRRORVOICE_HOME") or os.environ.get("TONGCHUAN_HOME")
+    if env:
+        p = Path(env)
     else:
         from platformdirs import user_data_dir
 
-        p = Path(user_data_dir(APP_ID, appauthor=False))
+        p = _migrate_legacy_home(Path(user_data_dir(LEGACY_APP_ID, appauthor=False)),
+                                 Path(user_data_dir(APP_ID, appauthor=False)))
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def _migrate_legacy_home(old: Path, new: Path) -> Path:
+    """One-time move of the pre-rename data folder (models, voice, settings, GPU pack) so nothing
+    has to be downloaded or recorded again. Same volume, so it is a rename, not a copy. If the
+    move is impossible right now (old version still running, files open), keep using the old
+    folder rather than starting empty; the move is retried on the next start."""
+    if new.exists() or not old.is_dir():
+        return new
+    try:
+        new.parent.mkdir(parents=True, exist_ok=True)
+        old.rename(new)
+        return new
+    except OSError:
+        return old
 
 
 def resource_dir() -> Path:

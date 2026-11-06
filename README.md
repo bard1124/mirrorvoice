@@ -1,10 +1,10 @@
 <p align="center"><b>简体中文</b> | <a href="README.en.md">English</a></p>
 
-<p align="center"><img src="packaging/assets/icon.png" width="120" alt="同传助手"></p>
+<p align="center"><img src="packaging/assets/icon.png" width="120" alt="MirrorVoice"></p>
 
-<h1 align="center">同传助手 TongChuan</h1>
+<h1 align="center">镜声 MirrorVoice</h1>
 
-<p align="center"><a href="https://github.com/bard1124/tongchuan/releases/latest"><img alt="下载最新版" src="https://img.shields.io/github/v/release/bard1124/tongchuan?label=下载最新版"></a> <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue"> <img alt="macOS | Windows" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey"></p>
+<p align="center"><a href="https://github.com/bard1124/mirrorvoice/releases/latest"><img alt="下载最新版" src="https://img.shields.io/github/v/release/bard1124/mirrorvoice?label=下载最新版"></a> <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue"> <img alt="macOS | Windows" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey"></p>
 
 <p align="center">
 <b>本地实时同声传译：你说中文，会议对方听到用你自己声音说的英文；对方说英文，你看到中文字幕。</b><br>
@@ -35,8 +35,8 @@
 
 从 [Releases](../../releases) 下载：
 
-- **macOS（Apple Silicon，macOS 14+）**：`TongChuan-x.y.z-macos-arm64.dmg`，拖进「应用程序」。未经 Apple 公证，首次请右键 →「打开」。
-- **Windows 10/11 x64**：`TongChuan-x.y.z-windows-x64-setup.exe`。未签名，SmartScreen 提示时点「更多信息 → 仍要运行」。
+- **macOS（Apple Silicon，macOS 14+）**：`MirrorVoice-x.y.z-macos-arm64.dmg`，拖进「应用程序」。未经 Apple 公证，首次请右键 →「打开」。
+- **Windows 10/11 x64**：`MirrorVoice-x.y.z-windows-x64-setup.exe`。未签名，SmartScreen 提示时点「更多信息 → 仍要运行」。
 
 首次打开会进入设置向导，模型约 4.5 GB（高质量模式约 8 GB）。
 
@@ -58,7 +58,7 @@ GPU 音色包需要显卡原生支持 bf16（计算能力 ≥ 8.0，即 RTX 30 �
 
 ### 公司网络 / 证书报错
 
-模型下载和检查更新先用应用内置的证书库，校验失败时会自动改用系统证书（macOS 钥匙串 / Windows 证书存储）。公司网络如果做了 HTTPS 检查，只要公司根证书已经装进系统（浏览器能正常打开 GitHub 和 ModelScope 就说明装好了），下载就能正常进行。排查时可以设置环境变量 `TONGCHUAN_TLS=certifi|system|default`，强制只用其中一个证书库。
+模型下载和检查更新先用应用内置的证书库，校验失败时会自动改用系统证书（macOS 钥匙串 / Windows 证书存储）。公司网络如果做了 HTTPS 检查，只要公司根证书已经装进系统（浏览器能正常打开 GitHub 和 ModelScope 就说明装好了），下载就能正常进行。排查时可以设置环境变量 `MIRRORVOICE_TLS=certifi|system|default`，强制只用其中一个证书库。
 
 ## 会议软件设置
 
@@ -83,14 +83,14 @@ GPU 音色包需要显卡原生支持 bf16（计算能力 ≥ 8.0，即 RTX 30 �
 ```bash
 # macOS (Apple Silicon)
 python3.12 -m venv .venv && .venv/bin/pip install -r requirements-mac.txt
-.venv/bin/python -m tongchuan            # 图形界面
-.venv/bin/python -m tongchuan cli        # 命令行风格
-.venv/bin/python -m tongchuan download   # 只下载模型
+.venv/bin/python -m mirrorvoice            # 图形界面
+.venv/bin/python -m mirrorvoice cli        # 命令行风格
+.venv/bin/python -m mirrorvoice download   # 只下载模型
 ```
 
 打包：macOS `bash packaging/mac/build_dmg.sh`；Windows 由 GitHub Actions 构建（`.github/workflows/build.yml`，推送 `v*` 标签自动发布 Release）。
 
-数据目录：macOS `~/Library/Application Support/TongChuan`，Windows `%LOCALAPPDATA%\TongChuan`（模型、音色样本、会议记录、术语表、设置、日志）。
+数据目录：macOS `~/Library/Application Support/MirrorVoice`，Windows `%LOCALAPPDATA%\MirrorVoice`（模型、音色样本、会议记录、术语表、设置、日志）。
 
 ## 参考与致谢
 
