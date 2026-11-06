@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   macos:
-    runs-on: macos-14   # Apple Silicon runner (MLX needs arm64)
+    runs-on: macos-15   # Apple Silicon runner (MLX needs arm64); macos-14 image was retired
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

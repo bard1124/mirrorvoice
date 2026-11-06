@@ -62,7 +62,26 @@ def _cmd_download(_args) -> None:
     print("done")
 
 
+def _utf8_console() -> None:
+    """Windows consoles default to a legacy code page (cp1252/cp936): printing Chinese crashed."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+            ctypes.windll.kernel32.SetConsoleCP(65001)
+        except Exception:  # noqa: BLE001 — no console (windowed exe)
+            pass
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def main() -> None:
+    _utf8_console()
     if len(sys.argv) == 1 or sys.argv[1] in ("gui", "cli") or sys.argv[1].startswith("-psn"):
         from .ui.app import run_gui
 

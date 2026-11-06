@@ -1,3 +1,5 @@
+<p align="center"><b>简体中文</b> | <a href="README.en.md">English</a></p>
+
 <p align="center"><img src="packaging/assets/icon.png" width="120" alt="同传助手"></p>
 
 <h1 align="center">同传助手 TongChuan</h1>
