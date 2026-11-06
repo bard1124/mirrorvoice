@@ -43,10 +43,10 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "..\..\dist\TongChuan\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\{#AppName}"; Filename: "{app}\TongChuan.exe"
+Name: "{group}\{#AppName}"; Filename: "{app}\TongChuan.exe"; AppUserModelID: "io.github.tongchuan"
 Name: "{group}\{#AppName}（命令行模式）"; Filename: "{app}\TongChuanCLI.exe"; Parameters: "cli"
 Name: "{group}\卸载 {#AppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\TongChuan.exe"; Tasks: desktopicon
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\TongChuan.exe"; Tasks: desktopicon; AppUserModelID: "io.github.tongchuan"
 
 [Run]
 Filename: "{app}\TongChuan.exe"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent

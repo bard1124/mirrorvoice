@@ -30,6 +30,11 @@ def take(pkg):
 
 for pkg in ("sherpa_onnx", "sounddevice", "_sounddevice_data", "num2words", "platformdirs", "certifi", "truststore"):
     take(pkg)
+# Qt's Chinese strings for standard dialog buttons (PySide6/translations is not collected by default)
+from PySide6.QtCore import QLibraryInfo  # noqa: E402
+_tr = Path(QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)) / "qtbase_zh_CN.qm"
+if _tr.exists():
+    datas.append((str(_tr), "PySide6/translations"))
 hiddenimports += collect_submodules("pynput")
 
 if IS_MAC:

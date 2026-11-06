@@ -72,7 +72,7 @@ class StyleDialog(QDialog):
         self.toggle_bar, self.toggle_convo = toggle_bar, toggle_convo
         self.bar_visible = bar_visible or (lambda: s.overlay_pinned)
         form = QFormLayout(self)
-        form.addRow(QLabel("<b>对方字幕条</b>（屏幕底部，运行时自动出现）"))
+        form.addRow(QLabel("<b>对方字幕条</b>（屏幕底部，手动打开后常驻）"))
         self.font = QSlider(Qt.Orientation.Horizontal, minimum=14, maximum=48, value=s.overlay_font)
         self.op = QSlider(Qt.Orientation.Horizontal, minimum=30, maximum=100, value=int(s.overlay_opacity * 100))
         self.orig = QCheckBox("显示原文", checked=s.overlay_show_original)

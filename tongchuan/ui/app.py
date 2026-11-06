@@ -20,6 +20,19 @@ def _taskbar_identity() -> None:
             pass
 
 
+def _taskbar_window_identity(win) -> None:
+    """Source runs on Windows: the taskbar would otherwise call the window "Python" (pythonw.exe)."""
+    from ..config import FROZEN
+
+    if sys.platform != "win32" or FROZEN:
+        return
+    from .icons import assets_dir
+    from .winshell import set_window_identity
+
+    exe = sys.executable.replace("python.exe", "pythonw.exe")
+    set_window_identity(int(win.winId()), "同传助手", f"{assets_dir() / 'icon.ico'},0", f'"{exe}" -m tongchuan')
+
+
 def run_gui(argv: list[str] | None = None) -> int:
     argv = argv if argv is not None else sys.argv
     mode = argv[1] if len(argv) > 1 else ""
@@ -57,6 +70,7 @@ def run_gui(argv: list[str] | None = None) -> int:
 
     win = MainWindow(s)
     win.show()
+    _taskbar_window_identity(win)
     if not s.setup_done:
         Wizard(s, win).exec()
         win._load_devices()
