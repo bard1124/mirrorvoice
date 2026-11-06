@@ -69,7 +69,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: out
+      - name: Checksums for the in-app updater
+        run: |
+          mkdir -p rel && find out -type f \( -name '*.dmg' -o -name '*setup.exe' \) -exec cp {} rel/ \;
+          cd rel && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2
         with:
-          files: out/**/*
+          files: rel/*
           generate_release_notes: true

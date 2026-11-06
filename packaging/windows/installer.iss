@@ -23,6 +23,8 @@ ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 WizardStyle=modern
+CloseApplications=yes
+RestartApplications=no
 LicenseFile=..\..\LICENSE
 
 [Languages]
@@ -48,3 +50,5 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\TongChuan.exe"; Tasks: deskto
 
 [Run]
 Filename: "{app}\TongChuan.exe"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+; one-click update runs the installer with /SILENT: relaunch the app afterwards
+Filename: "{app}\TongChuan.exe"; Flags: nowait skipifnotsilent

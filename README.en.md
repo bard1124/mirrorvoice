@@ -26,8 +26,9 @@ Runs entirely on your machine · works offline · no API keys · macOS (Apple Si
 | 🎛️ **Push-to-talk / mute** | Global hotkeys: hold Right Option/Alt to talk, or ⌃⌥M (Ctrl+Alt+M) to mute |
 | 🔁 **Passthrough** | When you already speak their language, your real voice is sent untranslated |
 | 🌏 **Languages** | Chinese / English / Japanese / Korean in any direction (Cantonese as input) |
-| 🖥️ **Two front ends** | Graphical control panel (default) or a terminal-style view with coloured logs (type `m` mute / `q` quit / `ui` switch back) |
+| 🖥️ **Two front ends** | Graphical control panel (default) or a terminal-style view with coloured logs (type `m` mute / `u` update / `q` quit / `ui` switch back) |
 | 🧭 **First-run wizard** | Downloads models (ModelScope/GitHub, resumable), installs the virtual audio cable, records your voice, explains the meeting-app setup |
+| 🔄 **One-click update** | Checks GitHub for a newer release on startup (skipped offline); downloads, verifies SHA256, swaps in place and relaunches; models and settings are kept. In terminal mode type `u` |
 
 ## Install
 

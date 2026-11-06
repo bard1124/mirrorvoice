@@ -8,6 +8,8 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
 
 ROOT = Path(SPECPATH).parent
+sys.path.insert(0, str(ROOT))
+from tongchuan import __version__ as VERSION  # noqa: E402
 IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
 VENDOR = ROOT / "packaging" / "vendor"
@@ -72,7 +74,8 @@ if IS_MAC:
         coll, name="同传助手.app", icon=icon, bundle_identifier="io.github.tongchuan",
         info_plist={
             "CFBundleDisplayName": "同传助手",
-            "CFBundleShortVersionString": "0.2.0",
+            "CFBundleShortVersionString": VERSION,
+            "CFBundleVersion": VERSION,
             "LSMinimumSystemVersion": "14.0",
             "NSMicrophoneUsageDescription": "同传助手需要麦克风来识别你说的话并实时翻译。",
             "NSAppleEventsUsageDescription": "命令行模式需要打开“终端”窗口。",

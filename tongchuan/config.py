@@ -94,6 +94,8 @@ class Settings:
     overlay_x: int = -1
     overlay_y: int = -1
     display: str = "ui"            # "ui" control panel | "cli" terminal style
+    auto_check_update: bool = True  # look for a newer release on startup (silent when offline)
+    skip_version: str = ""         # "跳过此版本"
     setup_done: bool = False
     extra: dict = field(default_factory=dict)
 

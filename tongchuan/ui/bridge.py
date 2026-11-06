@@ -7,6 +7,8 @@ from PySide6.QtCore import QObject, Signal
 class Bridge(QObject):
     event = Signal(str, dict)
     command = Signal(str)  # typed CLI commands, emitted from the stdin thread
+    update = Signal(object, str)  # (Release | None, error) from the update checker
+    progress = Signal(int, int)   # download progress
 
     def emit_event(self, kind: str, **data) -> None:
         self.event.emit(kind, data)

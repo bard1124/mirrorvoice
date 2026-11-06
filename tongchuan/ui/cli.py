@@ -13,6 +13,7 @@ import time
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
+from .. import __version__, updater
 from ..config import PID_FILE, Settings
 from ..engine import Engine
 from ..languages import label
@@ -38,7 +39,7 @@ def run_cli(app: QApplication) -> int:
     state = {"switch_ui": False}
 
     print(f"{C['bold']}同传助手 · 命令行模式{C['off']}  我说 {label(s.my_lang)} → 对方听 {label(s.their_lang)}"
-          f"   （输入 m 静音 / q 退出 / ui 切换图形界面）", flush=True)
+          f"   （输入 m 静音 / u 更新 / q 退出 / ui 切换图形界面）", flush=True)
 
     def on_event(kind: str, d: dict) -> None:
         if kind == "status":
@@ -74,8 +75,60 @@ def run_cli(app: QApplication) -> int:
 
     bridge.event.connect(on_event)
 
+    pending: dict = {}
+
+    def on_update(rel, err: str) -> None:
+        if rel is not None and rel.version != s.skip_version:
+            pending["rel"] = rel
+            out("update", f"发现新版本 v{rel.version}（当前 v{__version__}）— 输入 u 一键更新", C["yellow"])
+        elif pending.get("manual"):
+            out("update", f"无法检查更新：{err[:100]}" if err else f"已是最新版本 v{__version__}", C["dim"])
+
+    def on_progress(done: int, total: int) -> None:
+        if done >= 0:
+            pct = int(100 * done / max(total, 1))
+            if pct >= pending.get("pct", -10) + 10 or done == total:
+                pending["pct"] = pct
+                out("update", f"下载中 {pct}%  ({done >> 20}/{total >> 20} MB)", C["dim"])
+        elif done == -2:
+            out("update", f"更新失败：{pending.get('err')}", C["red"])
+        else:
+            out("update", "下载完成，正在安装并重启…", C["green"])
+            engine.stop()
+            try:
+                updater.install(pending["path"])
+            except Exception as e:  # noqa: BLE001
+                out("update", f"更新失败：{e}", C["red"])
+                return
+            app.quit()
+
+    bridge.update.connect(on_update)
+    bridge.progress.connect(on_progress)
+
+    def start_update() -> None:
+        rel = pending.get("rel")
+        if rel is None:
+            pending["manual"] = True
+            out("update", "正在检查更新…", C["dim"])
+            updater.check_async(lambda r, e: bridge.update.emit(r, e))
+            return
+        if not updater.can_self_install():
+            out("update", f"从源码运行，请手动更新：{rel.page}", C["yellow"])
+            return
+
+        def work():
+            try:
+                pending["path"] = updater.download(rel, lambda d, t: bridge.progress.emit(d, t))
+                bridge.progress.emit(-1, 0)
+            except Exception as e:  # noqa: BLE001
+                pending["err"] = str(e)
+                bridge.progress.emit(-2, 0)
+        threading.Thread(target=work, daemon=True).start()
+
     def on_command(cmd: str) -> None:  # runs on the Qt thread (queued signal)
-        if cmd == "m":
+        if cmd == "u":
+            start_update()
+        elif cmd == "m":
             engine.set_muted(not engine.muted)
         elif cmd in ("q", "quit", "exit"):
             app.quit()
@@ -83,7 +136,7 @@ def run_cli(app: QApplication) -> int:
             state["switch_ui"] = True
             app.quit()
         elif cmd:
-            out("help", "m 静音/取消静音   q 退出   ui 切换图形界面", C["dim"])
+            out("help", "m 静音/取消静音   u 检查/一键更新   q 退出   ui 切换图形界面", C["dim"])
 
     bridge.command.connect(on_command)
 
@@ -101,6 +154,8 @@ def run_cli(app: QApplication) -> int:
     keep_alive.start()
 
     engine.start(s)
+    if s.auto_check_update:
+        updater.check_async(lambda r, e: bridge.update.emit(r, e))
     rc = app.exec()
     engine.stop()
     PID_FILE.unlink(missing_ok=True)

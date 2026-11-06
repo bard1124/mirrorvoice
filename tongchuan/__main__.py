@@ -5,6 +5,7 @@
   run [--key value ...]    headless engine using saved settings (overrides by flag)
   devices                  list audio devices
   download                 download models for the current settings
+  update                   check GitHub Releases and install a newer version
 """
 from __future__ import annotations
 
@@ -62,6 +63,29 @@ def _cmd_download(_args) -> None:
     print("done")
 
 
+def _cmd_update(_args) -> None:
+    from . import __version__, updater
+
+    rel = updater.check()
+    if rel is None:
+        print(f"已是最新版本 v{__version__}")
+        return
+    print(f"发现新版本 v{rel.version}（当前 v{__version__}），开始下载 {rel.asset_name}")
+    last = [-10]
+
+    def p(done, total):
+        pct = int(100 * done / max(total, 1))
+        if pct >= last[0] + 10 or done == total:
+            last[0] = pct
+            print(f"  {pct}%  {done >> 20}/{total >> 20} MB", flush=True)
+    path = updater.download(rel, p)
+    if not updater.can_self_install():
+        print(f"已下载到 {path}（从源码运行，请手动安装）")
+        return
+    updater.install(path)
+    print("正在安装，完成后会自动重新打开同传助手")
+
+
 def _utf8_console() -> None:
     """Windows consoles default to a legacy code page (cp1252/cp936): printing Chinese crashed."""
     if sys.platform == "win32":
@@ -93,6 +117,7 @@ def main() -> None:
     r.set_defaults(fn=_cmd_run)
     sub.add_parser("devices").set_defaults(fn=_cmd_devices)
     sub.add_parser("download").set_defaults(fn=_cmd_download)
+    sub.add_parser("update").set_defaults(fn=_cmd_update)
     a = p.parse_args()
     a.fn(a)
 

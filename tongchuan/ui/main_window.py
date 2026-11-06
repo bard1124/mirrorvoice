@@ -34,6 +34,13 @@ class MainWindow(QMainWindow):
         self.overlay = Overlay(s)
         self._build()
         self._load_devices()
+        from PySide6.QtCore import QTimer
+
+        from .update_ui import UpdateController
+
+        self.updates = UpdateController(self, s, self._before_update)
+        if s.auto_check_update:
+            QTimer.singleShot(3000, lambda: self.updates.check(manual=False))
 
     # ---------------------------------------------------------------- layout
     def _build(self) -> None:
@@ -118,6 +125,10 @@ class MainWindow(QMainWindow):
         oh.addStretch()
         v.addLayout(oh)
         hk = self.s.mute_hotkey.replace("<ctrl>", "⌃" if IS_MAC else "Ctrl+").replace("<alt>", "⌥" if IS_MAC else "Alt+").replace("+", "").upper() if IS_MAC else self.s.mute_hotkey.replace("<", "").replace(">", "").title()
+        self.auto_upd = QCheckBox("启动时检查更新（离线时自动跳过）")
+        self.auto_upd.setChecked(self.s.auto_check_update)
+        self.auto_upd.toggled.connect(lambda on: (setattr(self.s, "auto_check_update", on), self.s.save()))
+        v.addWidget(self.auto_upd)
         v.addWidget(QLabel(f"静音快捷键：{hk}　（全局快捷键需要系统“辅助功能/输入监控”权限）",
                            styleSheet="color: gray;"))
         lay.addWidget(g)
@@ -138,7 +149,8 @@ class MainWindow(QMainWindow):
 
         bh = QHBoxLayout()
         for text, fn in (("术语表", self._glossary), ("字幕样式", self._style), ("音色", self._voice),
-                         ("会议记录", self._open_transcripts), ("设置向导", self._wizard)):
+                         ("会议记录", self._open_transcripts), ("设置向导", self._wizard),
+                         ("检查更新", lambda: self.updates.check(manual=True))):
             b = QPushButton(text)
             b.clicked.connect(fn)
             bh.addWidget(b)
@@ -284,6 +296,10 @@ class MainWindow(QMainWindow):
     def _wizard(self) -> None:
         Wizard(self.s, self).exec()
         self._load_devices()
+
+    def _before_update(self) -> None:
+        self.engine.stop()
+        self.overlay.close()
 
     def closeEvent(self, e) -> None:
         self.engine.stop()
