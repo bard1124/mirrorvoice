@@ -77,9 +77,14 @@ class Engine:
             self._log.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
 
     def _them_gate(self) -> bool:
-        """Ignore the other side's source while our own translation plays on the monitor output:
-        with speakers as monitor the loopback hears our English and translates it back."""
-        return not (self.s.monitor and self._player is not None and self._player.busy())
+        """Ignore the other side's source while our own translation plays on the monitor output —
+        only when that source is a speaker loopback (Windows), which hears the monitor and would
+        translate our English back. BlackHole on macOS carries meeting audio only, so there the
+        other side keeps being heard even while we speak."""
+        s = self.s
+        if not (s.monitor and s.their_source.startswith("loopback:")):
+            return True
+        return not (self._player is not None and self._player.busy())
 
     def _gate(self) -> bool:
         if self.muted:
