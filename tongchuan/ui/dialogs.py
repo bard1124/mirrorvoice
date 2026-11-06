@@ -181,7 +181,8 @@ class VoiceDialog(QDialog):
         self.prompt = QLabel(SAMPLE[self.lang.currentData()], wordWrap=True)
         self.lang.currentIndexChanged.connect(self._lang_changed)
         self._lang_changed()
-        self.prompt.setStyleSheet("font-size: 16px; padding: 8px; background: palette(base); border-radius: 6px;")
+        self.prompt.setStyleSheet("font-size: 16px; padding: 12px; background: #F7F8FA; border: 1px solid #E8EAEE;"
+                                  " border-radius: 10px;")
         lay.addWidget(self.prompt)
         self.meter = QProgressBar(maximum=100, textVisible=False)
         lay.addWidget(self.meter)

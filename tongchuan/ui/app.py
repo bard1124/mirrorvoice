@@ -26,11 +26,13 @@ def run_gui(argv: list[str] | None = None) -> int:
     s = Settings.load()
     _taskbar_identity()
     from .icons import app_icon
+    from . import theme
 
     if mode == "cli":  # we ARE the terminal front end
         from .cli import run_cli
 
         app = QApplication(argv)
+        theme.apply(app)
         app.setWindowIcon(app_icon())
         app.setQuitOnLastWindowClosed(False)
         return run_cli(app)
@@ -48,6 +50,7 @@ def run_gui(argv: list[str] | None = None) -> int:
 
     app = QApplication(argv)
     app.setApplicationName("同传助手")
+    theme.apply(app)
     app.setWindowIcon(app_icon())
     from .main_window import MainWindow
     from .wizard import Wizard
