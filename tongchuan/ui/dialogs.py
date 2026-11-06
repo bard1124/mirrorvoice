@@ -102,6 +102,9 @@ def transcribe(audio_24k: np.ndarray, lang: str) -> tuple[str, str]:
     return text, spoken
 
 
+CPU_CLONE_HINT = ("CPU 版克隆音色（Pocket TTS）只能输出英文，而且用非英文样本时经常合成失控："
+                  "句尾会多出杂音、每句要多等 1～3 秒。没有 RTX 30 系以上显卡或 Mac 时，请用英文朗读。")
+
 SAMPLE = {
     "zh": "大家好，今天我想和大家分享一下我们项目的最新进展，包括已经完成的部分、遇到的问题，以及下一步的计划。",
     "en": "Hi everyone, today I'd like to share the latest progress on our project, including what we've "
@@ -130,16 +133,19 @@ class VoiceDialog(QDialog):
         self.lang.addItem("用英文朗读（推荐）", "en")
         from ..models import voice_backend
 
-        self.english_only = voice_backend(s) == "pocket"  # CPU clone needs an English reading
-        if self.english_only:
+        self.cpu_clone = voice_backend(s) == "pocket"  # Pocket TTS wants an English reading
+        if self.cpu_clone:
             self.lang.setCurrentIndex(self.lang.findData("en"))
-            self.lang.setEnabled(False)
-            self.lang.setToolTip("CPU 版克隆音色需要用英文朗读的样本")
+            self.lang.setToolTip(CPU_CLONE_HINT)
         row.addWidget(self.lang)
         row.addStretch()
         lay.addLayout(row)
+        self.lang_hint = QLabel(wordWrap=True)
+        self.lang_hint.setStyleSheet("color: #9a6700;")
+        lay.addWidget(self.lang_hint)
         self.prompt = QLabel(SAMPLE[self.lang.currentData()], wordWrap=True)
-        self.lang.currentIndexChanged.connect(lambda: self.prompt.setText(SAMPLE[self.lang.currentData()]))
+        self.lang.currentIndexChanged.connect(self._lang_changed)
+        self._lang_changed()
         self.prompt.setStyleSheet("font-size: 16px; padding: 8px; background: palette(base); border-radius: 6px;")
         lay.addWidget(self.prompt)
         self.meter = QProgressBar(maximum=100, textVisible=False)
@@ -245,16 +251,26 @@ class VoiceDialog(QDialog):
         QMessageBox.information(self, "模型已就绪", "模型下载完成，已自动识别你读的文字。核对无误后点“保存”。")
         self._check_spoken()
 
+    def _lang_changed(self) -> None:
+        lang = self.lang.currentData()
+        self.prompt.setText(SAMPLE[lang])
+        self.lang_hint.setText("⚠️ " + CPU_CLONE_HINT if self.cpu_clone and lang != "en" else "")
+        self.lang_hint.setVisible(bool(self.lang_hint.text()))
+
     def _mismatch(self) -> bool:
         return bool(self._spoken) and self._spoken != self._lang
+
+    def _non_english_for_cpu(self) -> bool:
+        """CPU clone voice about to get a sample that is not English (by choice or by mistake)."""
+        return self.cpu_clone and (self._spoken or self._lang) != "en"
 
     def _check_spoken(self) -> None:
         if not self._mismatch():
             return
         heard, want = label(self._spoken), label(self._lang)
-        if self.english_only:
-            QMessageBox.warning(self, "请用英文朗读", f"听起来你读的是{heard}，但 CPU 版克隆音色只能用英文样本"
-                                "（中文样本会让它合成时停不下来、每句慢十几秒）。\n请点“重新录音”，朗读上面的英文段落。")
+        if self._non_english_for_cpu():
+            QMessageBox.warning(self, "朗读语言不一致", f"听起来你读的是{heard}，而选择的是{want}。\n" + CPU_CLONE_HINT
+                                + "\n建议点“重新录音”，朗读上面的英文段落。")
         else:
             QMessageBox.information(self, "朗读语言不一致", f"听起来你读的是{heard}，而选择的是{want}。"
                                     "可以保存，但合成的口音可能不自然；建议按所选语言重录。")
@@ -274,10 +290,14 @@ class VoiceDialog(QDialog):
                 "录音已保留在本窗口，不用重录；下载进度见主窗口顶部或设置向导的“下载模型”页。"
                 "下载完成后会自动识别文字，再点“保存”即可。")
             return
-        if self.english_only and self._mismatch():
-            QMessageBox.warning(self, "请用英文朗读", f"这段录音听起来是{label(self._spoken)}，CPU 版克隆音色需要英文样本，"
-                                "请重新录音。")
-            return
+        if self.audio is not None and self._non_english_for_cpu():
+            heard = label(self._spoken or self._lang)
+            if QMessageBox.question(
+                    self, "确定保存非英文样本？",
+                    f"这段录音是{heard}。" + CPU_CLONE_HINT + "\n\n仍要保存吗？",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+                return
         if self.audio is not None:
             for p in (REF_WAV, REF_TXT):  # keep one previous sample
                 if p.exists():
