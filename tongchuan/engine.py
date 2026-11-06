@@ -48,7 +48,18 @@ class Engine:
         self.muted = False
         self._player = self._voice = self._transcript = self._me = None
         self._prev = {"me": None, "them": None}  # (source, translation, t_end) of the last part
-        self._log = open(LOG_FILE, "w", encoding="utf-8", buffering=1)
+        # A fresh queue per session: the previous worker may still be busy (and the previous
+        # stop() left a "stop" job behind). Sharing the queue let a new worker swallow that stale
+        # "stop" and exit while its listeners kept running — "nothing happens" until restart.
+        self._jobs = queue.PriorityQueue()
+        self._seq = itertools.count()
+        try:  # keep earlier sessions for diagnosis; start over when the file gets big
+            if LOG_FILE.exists() and LOG_FILE.stat().st_size > 2_000_000:
+                LOG_FILE.unlink()
+        except OSError:
+            pass
+        self._log = open(LOG_FILE, "a", encoding="utf-8", buffering=1)
+        self.log(f"===== 开始 {time.strftime('%Y-%m-%d')} =====")
         threading.Thread(target=self._boot, daemon=True, name="engine-boot").start()
 
     def stop(self) -> None:
@@ -165,8 +176,9 @@ class Engine:
                   voice="你的克隆音色" if (voice and voice.clone) else ("标准音色" if voice else "不出声"),
                   transcript=str(transcript.md))
 
+        jobs = self._jobs  # bind this session's queue: start() replaces the attribute
         while self.running:
-            prio, _, kind, utt = self._jobs.get()
+            prio, _, kind, utt = jobs.get()
             if kind == "stop":
                 break
             if kind == "glossary":
@@ -192,7 +204,9 @@ class Engine:
     def _do_me(self, tr: Translator, utt: Utterance) -> None:
         s = self.s
         t0 = time.time()
+        waited = t0 - utt.t_end  # time the sentence sat in the queue behind earlier work
         out = tr.translate(utt.text, s.my_lang, s.their_lang, context=self._context("me", utt))
+        t_tr = time.time() - t0
         if not out:
             return
         self._prev["me"] = (utt.text, out, utt.t_end)
@@ -205,14 +219,17 @@ class Engine:
                 if not getattr(self._voice, "native_speed", False):
                     chunk = time_stretch(chunk, sr, self._voice.speed)
                 self._player.put(chunk, sr)
+        self.log(f"[me] 排队 {waited:.1f}s 翻译 {t_tr:.2f}s 合成 {time.time() - t0 - t_tr:.2f}s: {out[:40]!r}")
         self.emit("me", src=utt.text, tgt=out, latency=latency or (time.time() - utt.t_end),
-                  translate_s=time.time() - t0, passthrough=False)
+                  translate_s=t_tr, passthrough=False)
         self._transcript.add("me", utt.text, out)
 
     def _do_them(self, tr: Translator, utt: Utterance) -> None:
         s = self.s
         src = utt.lang if utt.lang in LANGS else s.their_lang
+        t0 = time.time()
         out = tr.translate(utt.text, src, s.my_lang, subtitle=True, context=self._context("them", utt))
+        self.log(f"[them] 排队 {t0 - utt.t_end:.1f}s 翻译 {time.time() - t0:.2f}s: {out[:40]!r}")
         self._prev["them"] = (utt.text, out, utt.t_end)
         self.emit("them", src=utt.text, tgt=out, latency=time.time() - utt.t_end)
         self._transcript.add("them", utt.text, out)
