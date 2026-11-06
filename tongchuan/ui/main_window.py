@@ -1,0 +1,291 @@
+"""Control panel: start/stop, languages, devices, features, live transcript."""
+from __future__ import annotations
+
+import subprocess
+import sys
+
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QColor, QDesktopServices
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout,
+                               QLabel, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QProgressBar,
+                               QPushButton, QRadioButton, QVBoxLayout, QWidget)
+
+from .. import __version__, models
+from ..audio import list_devices
+from ..config import IS_MAC, LOG_FILE, TRANSCRIPTS, Settings
+from ..engine import Engine
+from ..hotkeys import PTT_KEYS
+from ..languages import LANGS
+from .bridge import Bridge
+from .dialogs import GlossaryDialog, StyleDialog, VoiceDialog
+from .overlay import Overlay
+from .wizard import Wizard
+
+
+class MainWindow(QMainWindow):
+    def __init__(self, s: Settings) -> None:
+        super().__init__()
+        self.s = s
+        self.setWindowTitle(f"同传助手 {__version__}")
+        self.resize(560, 820)
+        self.bridge = Bridge()
+        self.bridge.event.connect(self._on_event)
+        self.engine = Engine(self.bridge.emit_event)
+        self.overlay = Overlay(s)
+        self._build()
+        self._load_devices()
+
+    # ---------------------------------------------------------------- layout
+    def _build(self) -> None:
+        root = QWidget()
+        lay = QVBoxLayout(root)
+
+        top = QHBoxLayout()
+        self.status = QLabel("● 已停止")
+        self.status.setStyleSheet("font-size: 15px; color: gray;")
+        self.start_btn = QPushButton("开始")
+        self.start_btn.setMinimumHeight(40)
+        self.start_btn.setStyleSheet("font-size: 16px; font-weight: 600;")
+        self.start_btn.clicked.connect(self._toggle)
+        self.mute_btn = QPushButton("静音")
+        self.mute_btn.setCheckable(True)
+        self.mute_btn.toggled.connect(self.engine.set_muted)
+        top.addWidget(self.status, 1)
+        top.addWidget(self.mute_btn)
+        top.addWidget(self.start_btn)
+        lay.addLayout(top)
+
+        g = QGroupBox("语言")
+        h = QHBoxLayout(g)
+        self.my, self.their = QComboBox(), QComboBox()
+        for c, lg in LANGS.items():
+            self.my.addItem(lg.label, c)
+            if lg.tts:
+                self.their.addItem(lg.label, c)
+        swap = QPushButton("⇄")
+        swap.setFixedWidth(36)
+        swap.clicked.connect(self._swap)
+        h.addWidget(QLabel("我说"))
+        h.addWidget(self.my, 1)
+        h.addWidget(swap)
+        h.addWidget(QLabel("对方说"))
+        h.addWidget(self.their, 1)
+        lay.addWidget(g)
+
+        g = QGroupBox("声音设备")
+        f = QFormLayout(g)
+        self.mic, self.call, self.mon, self.src = QComboBox(), QComboBox(), QComboBox(), QComboBox()
+        f.addRow("我的麦克风", self.mic)
+        f.addRow("送进会议（虚拟麦克风）", self.call)
+        f.addRow("我自己监听（耳机）", self.mon)
+        f.addRow("对方声音来源", self.src)
+        rb = QPushButton("刷新设备")
+        rb.clicked.connect(self._load_devices)
+        f.addRow("", rb)
+        lay.addWidget(g)
+
+        g = QGroupBox("功能")
+        v = QVBoxLayout(g)
+        self.speak = QCheckBox("用我的声音说出翻译（送进会议）")
+        self.subs = QCheckBox("对方说话显示翻译字幕")
+        self.passthru = QCheckBox("我直接说对方的语言时，透传原声不翻译")
+        for w in (self.speak, self.subs, self.passthru):
+            v.addWidget(w)
+        mh = QHBoxLayout()
+        self.cont, self.ptt = QRadioButton("持续翻译"), QRadioButton("按住说话")
+        bg = QButtonGroup(self)
+        bg.addButton(self.cont)
+        bg.addButton(self.ptt)
+        self.ptt_key = QComboBox()
+        for k, name in PTT_KEYS.items():
+            self.ptt_key.addItem(name, k)
+        mh.addWidget(self.cont)
+        mh.addWidget(self.ptt)
+        mh.addWidget(self.ptt_key)
+        mh.addStretch()
+        v.addLayout(mh)
+        oh = QHBoxLayout()
+        self.quality = QComboBox()
+        self.quality.addItem("快速", "fast")
+        self.quality.addItem("高质量", "quality")
+        self.display = QComboBox()
+        self.display.addItem("图形界面", "ui")
+        self.display.addItem("命令行风格", "cli")
+        oh.addWidget(QLabel("模型"))
+        oh.addWidget(self.quality)
+        oh.addWidget(QLabel("显示方式"))
+        oh.addWidget(self.display)
+        oh.addStretch()
+        v.addLayout(oh)
+        hk = self.s.mute_hotkey.replace("<ctrl>", "⌃" if IS_MAC else "Ctrl+").replace("<alt>", "⌥" if IS_MAC else "Alt+").replace("+", "").upper() if IS_MAC else self.s.mute_hotkey.replace("<", "").replace(">", "").title()
+        v.addWidget(QLabel(f"静音快捷键：{hk}　（全局快捷键需要系统“辅助功能/输入监控”权限）",
+                           styleSheet="color: gray;"))
+        lay.addWidget(g)
+
+        mh = QHBoxLayout()
+        self.lv_me, self.lv_them = QProgressBar(maximum=100, textVisible=False), QProgressBar(maximum=100, textVisible=False)
+        for w in (self.lv_me, self.lv_them):
+            w.setMaximumHeight(8)
+        mh.addWidget(QLabel("我"))
+        mh.addWidget(self.lv_me)
+        mh.addWidget(QLabel("对方"))
+        mh.addWidget(self.lv_them)
+        lay.addLayout(mh)
+
+        self.log = QListWidget()
+        self.log.setWordWrap(True)
+        lay.addWidget(self.log, 1)
+
+        bh = QHBoxLayout()
+        for text, fn in (("术语表", self._glossary), ("字幕样式", self._style), ("音色", self._voice),
+                         ("会议记录", self._open_transcripts), ("设置向导", self._wizard)):
+            b = QPushButton(text)
+            b.clicked.connect(fn)
+            bh.addWidget(b)
+        lay.addLayout(bh)
+        self.setCentralWidget(root)
+
+        # load settings into widgets, save on any change
+        s = self.s
+        self.my.setCurrentIndex(self.my.findData(s.my_lang))
+        self.their.setCurrentIndex(self.their.findData(s.their_lang))
+        self.speak.setChecked(s.speak)
+        self.subs.setChecked(s.subtitles)
+        self.passthru.setChecked(s.passthrough)
+        (self.ptt if s.mode == "ptt" else self.cont).setChecked(True)
+        self.ptt_key.setCurrentIndex(max(0, self.ptt_key.findData(s.ptt_key)))
+        self.quality.setCurrentIndex(self.quality.findData(s.quality))
+        self.display.setCurrentIndex(self.display.findData(s.display))
+        for w in (self.my, self.their, self.ptt_key, self.quality, self.display, self.mic, self.call, self.mon, self.src):
+            w.currentIndexChanged.connect(self._save)
+        for w in (self.speak, self.subs, self.passthru, self.ptt):
+            w.toggled.connect(self._save)
+        self.display.currentIndexChanged.connect(self._display_changed)
+
+    def _load_devices(self) -> None:
+        def fill(combo: QComboBox, items: list[tuple[str, str]], cur: str) -> None:
+            combo.blockSignals(True)
+            combo.clear()
+            for text, data in items:
+                combo.addItem(text, data)
+            i = combo.findData(cur)
+            if i < 0 and cur:
+                combo.addItem(f"{cur}（未连接）", cur)
+                i = combo.count() - 1
+            combo.setCurrentIndex(max(0, i))
+            combo.blockSignals(False)
+
+        ins, outs = list_devices("input"), list_devices("output")
+        fill(self.mic, [("系统默认", "")] + [(n, n) for n in ins if not n.startswith("loopback:")], self.s.mic)
+        fill(self.call, [(n, n) for n in outs], self.s.call_out)
+        fill(self.mon, [("不监听", "")] + [(n, n) for n in outs], self.s.monitor)
+        src_items = [(("扬声器回采：" + n.split(':', 1)[1]) if n.startswith("loopback:") else n, n) for n in ins]
+        fill(self.src, [("不显示字幕", "")] + src_items, self.s.their_source)
+
+    def _save(self) -> None:
+        s = self.s
+        s.my_lang, s.their_lang = self.my.currentData(), self.their.currentData()
+        s.mic, s.call_out, s.monitor, s.their_source = (self.mic.currentData(), self.call.currentData(),
+                                                        self.mon.currentData(), self.src.currentData())
+        s.speak, s.subtitles, s.passthrough = self.speak.isChecked(), self.subs.isChecked(), self.passthru.isChecked()
+        s.mode = "ptt" if self.ptt.isChecked() else "continuous"
+        s.ptt_key, s.quality, s.display = self.ptt_key.currentData(), self.quality.currentData(), self.display.currentData()
+        s.save()
+
+    def _swap(self) -> None:
+        my, their = self.my.currentData(), self.their.currentData()
+        if LANGS[my].tts:
+            self.their.setCurrentIndex(self.their.findData(my))
+            self.my.setCurrentIndex(self.my.findData(their))
+
+    def _display_changed(self) -> None:
+        if self.display.currentData() == "cli":
+            r = QMessageBox.question(self, "切换到命令行风格", "下次点击应用图标会以命令行窗口启动。现在就切换吗？")
+            if r == QMessageBox.StandardButton.Yes:
+                from .launch import open_cli_terminal
+
+                self.engine.stop()
+                open_cli_terminal()
+                self.close()
+
+    # ---------------------------------------------------------------- actions
+    def _toggle(self) -> None:
+        if self.engine.running:
+            self.engine.stop()
+            return
+        self._save()
+        if not all(m.ready() for m in models.required(self.s.quality)):
+            QMessageBox.information(self, "需要下载模型", "模型还没下载完整，先打开设置向导。")
+            self._wizard()
+            return
+        self.start_btn.setText("停止")
+        self.status.setText("● 启动中…")
+        self.status.setStyleSheet("font-size: 15px; color: #d08700;")
+        self.engine.start(self.s)
+
+    def _on_event(self, kind: str, d: dict) -> None:
+        if kind == "level":
+            (self.lv_me if d["who"] == "me" else self.lv_them).setValue(min(100, int(d["rms"] * 600)))
+        elif kind == "status":
+            self.status.setText("● " + d["text"])
+        elif kind == "ready":
+            self.status.setText(f"● 运行中 · {d['voice']}")
+            self.status.setStyleSheet("font-size: 15px; color: #1a9e4b;")
+            if self.s.subtitles and d["them"]:
+                self.overlay.show()
+        elif kind == "me":
+            tag = "我·原声" if d["passthrough"] else "我"
+            self._add(f"{tag}  {d['src']}\n→ {d['tgt']}   ({d['latency']:.1f}s)", "#1f6feb")
+        elif kind == "them":
+            self._add(f"对方  {d['src']}\n→ {d['tgt']}   ({d['latency']:.1f}s)", "#8250df")
+            self.overlay.show_text(d["tgt"], d["src"] if d["tgt"] != d["src"] else "")
+        elif kind == "mute":
+            self.mute_btn.blockSignals(True)
+            self.mute_btn.setChecked(d["muted"])
+            self.mute_btn.blockSignals(False)
+            self.mute_btn.setText("已静音" if d["muted"] else "静音")
+        elif kind == "ptt":
+            self.status.setText("● 说话中…" if d["down"] else "● 运行中")
+        elif kind == "error":
+            QMessageBox.warning(self, "出错了", d["message"] + f"\n\n详细日志：{LOG_FILE}")
+        elif kind == "stopped":
+            self.start_btn.setText("开始")
+            self.status.setText("● 已停止")
+            self.status.setStyleSheet("font-size: 15px; color: gray;")
+            self.overlay.hide()
+
+    def _add(self, text: str, color: str) -> None:
+        it = QListWidgetItem(text)
+        it.setForeground(QColor(color))
+        self.log.addItem(it)
+        if self.log.count() > 300:
+            self.log.takeItem(0)
+        self.log.scrollToBottom()
+
+    def _glossary(self) -> None:
+        if GlossaryDialog(self).exec():
+            self.engine.reload_glossary()
+
+    def _style(self) -> None:
+        self.overlay.show()
+        StyleDialog(self.s, self.overlay.apply_style, self).exec()
+        if not self.engine.running:
+            self.overlay.hide()
+
+    def _voice(self) -> None:
+        VoiceDialog(self.s, self).exec()
+
+    def _open_transcripts(self) -> None:
+        if IS_MAC:
+            subprocess.run(["open", str(TRANSCRIPTS)])
+        else:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(TRANSCRIPTS)))
+
+    def _wizard(self) -> None:
+        Wizard(self.s, self).exec()
+        self._load_devices()
+
+    def closeEvent(self, e) -> None:
+        self.engine.stop()
+        self.overlay.close()
+        super().closeEvent(e)

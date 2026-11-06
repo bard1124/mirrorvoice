@@ -1,0 +1,220 @@
+"""Engine: wires listeners, translator, voice and player; reports events to the UI.
+
+Threads: one Listener per direction (capture/VAD/ASR on CPU) and ONE model worker that owns
+every MLX/LLM/TTS object (MLX streams are per-thread). My speech (priority 0) always jumps
+ahead of the other side's subtitles (priority 1).
+"""
+from __future__ import annotations
+
+import itertools
+import queue
+import threading
+import time
+import traceback
+from typing import Callable
+
+from . import models
+from .asr import Listener, Utterance
+from .audio import Player, find_device
+from .config import LOG_FILE, Settings
+from .hotkeys import Hotkeys
+from .languages import LANGS
+from .transcript import Transcript
+from .translate import Translator, spoken_en
+from .tts import make_voice
+
+Emit = Callable[..., None]  # emit(kind: str, **data)
+
+SIMILAR = {"zh": {"zh", "yue"}, "yue": {"yue", "zh"}}
+
+
+class Engine:
+    def __init__(self, emit: Emit) -> None:
+        self.emit = emit
+        self.running = False
+        self.muted = False
+        self.ptt_down = False
+        self._jobs: queue.PriorityQueue = queue.PriorityQueue()
+        self._seq = itertools.count()
+        self._closers: list[Callable[[], None]] = []
+        self._log = None
+
+    # ------------------------------------------------------------ public
+    def start(self, s: Settings) -> None:
+        if self.running:
+            return
+        self.s = s
+        self.running = True
+        self.muted = False
+        self._player = self._voice = self._transcript = self._me = None
+        self._log = open(LOG_FILE, "w", encoding="utf-8", buffering=1)
+        threading.Thread(target=self._boot, daemon=True, name="engine-boot").start()
+
+    def stop(self) -> None:
+        if not self.running:
+            return
+        self.running = False
+        self._jobs.put((99, next(self._seq), "stop", None))
+        for close in reversed(self._closers):
+            try:
+                close()
+            except Exception:  # noqa: BLE001 — best-effort teardown
+                pass
+        self._closers.clear()
+        self.emit("stopped")
+
+    def set_muted(self, muted: bool) -> None:
+        self.muted = muted
+        self.emit("mute", muted=muted)
+
+    def reload_glossary(self) -> None:
+        self._jobs.put((0, next(self._seq), "glossary", None))
+
+    # ------------------------------------------------------------ internals
+    def log(self, msg: str) -> None:
+        if self._log:
+            self._log.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
+
+    def _gate(self) -> bool:
+        if self.muted:
+            return False
+        return self.ptt_down if self.s.mode == "ptt" else True
+
+    def _boot(self) -> None:
+        try:
+            self._worker()
+        except Exception as e:  # noqa: BLE001 — surface to UI instead of dying silently
+            self.log(traceback.format_exc())
+            self.emit("error", message=str(e))
+            if self.running:
+                self.stop()
+
+    def _worker(self) -> None:
+        s = self.s
+        backend = models.voice_backend()
+        need = [m for m in models.required(s.quality) if not m.ready()]
+        if need:
+            raise RuntimeError("模型未下载完整：" + "、".join(m.title for m in need) + "（请运行设置向导）")
+
+        self.emit("status", text="加载翻译模型…")
+        tr = Translator(models.LLM[s.quality].path)
+        self._closers.append(tr.close)
+
+        voice = player = None
+        their_tts = LANGS[s.their_lang].tts
+        if s.speak and their_tts:
+            self.emit("status", text="加载语音合成…")
+            tts_model = models.KOKORO if backend == "kokoro" else models.TTS_CLONE[s.quality]
+            voice = make_voice(backend, tts_model.path)
+            self._closers.append(voice.close)
+        if s.speak or s.passthrough:
+            self.emit("status", text="打开音频设备…")
+            mon = None
+            if s.monitor:
+                try:
+                    mon = find_device(s.monitor, "output")
+                except LookupError:
+                    self.emit("status", text=f"监听设备 {s.monitor} 未连接，已跳过")
+            player = Player(find_device(s.call_out, "output"), mon, s.gain)
+            self._closers.append(player.close)
+
+        self.emit("status", text="预热…")
+        tr.translate("你好", "zh", "en")
+        if voice:
+            for _ in voice.stream("Hello.", s.their_lang):
+                pass
+
+        transcript = Transcript(s.my_lang, s.their_lang)
+        self._transcript = transcript
+        self._player, self._voice = player, voice
+
+        me = Listener("me", s.mic, "auto", s.pause, self._on_me, self._on_level, self._gate, self.log)
+        me.start()
+        self._closers.append(me.close)
+        self._me = me
+        them = None
+        if s.subtitles and s.their_source:
+            try:
+                them = Listener("them", s.their_source, "auto", s.pause, self._on_them,
+                                self._on_level, None, self.log)
+                them.start()
+                self._closers.append(them.close)
+            except Exception as e:  # noqa: BLE001 — subtitles are optional
+                self.emit("status", text=f"对方声音来源不可用（{e}），字幕关闭")
+
+        hk = Hotkeys(s.ptt_key, s.mute_hotkey, self._on_ptt, lambda: self.set_muted(not self.muted))
+        try:
+            hk.start()
+            self._closers.append(hk.stop)
+        except Exception as e:  # noqa: BLE001 — no permission: hotkeys just don't work
+            self.emit("status", text=f"全局快捷键不可用：{e}")
+
+        self.emit("ready", mic=me.label, call=s.call_out, them=them.label if them else "",
+                  voice="你的克隆音色" if (voice and voice.clone) else ("标准音色" if voice else "不出声"),
+                  transcript=str(transcript.md))
+
+        while self.running:
+            prio, _, kind, utt = self._jobs.get()
+            if kind == "stop":
+                break
+            if kind == "glossary":
+                tr.reload_glossary()
+                continue
+            if kind == "me":
+                self._do_me(tr, utt)
+            else:
+                self._do_them(tr, utt)
+
+    def _do_me(self, tr: Translator, utt: Utterance) -> None:
+        s = self.s
+        t0 = time.time()
+        out = tr.translate(utt.text, s.my_lang, s.their_lang)
+        if not out:
+            return
+        latency = None
+        if self._voice and not self.muted:  # muted: drop speech that was already queued
+            text = spoken_en(out) if s.their_lang == "en" else out
+            for chunk, sr in self._voice.stream(text, s.their_lang):
+                if latency is None:
+                    latency = time.time() - utt.t_end
+                self._player.put(chunk, sr)
+        self.emit("me", src=utt.text, tgt=out, latency=latency or (time.time() - utt.t_end),
+                  translate_s=time.time() - t0, passthrough=False)
+        self._transcript.add("me", utt.text, out)
+
+    def _do_them(self, tr: Translator, utt: Utterance) -> None:
+        s = self.s
+        src = utt.lang if utt.lang in LANGS else s.their_lang
+        out = tr.translate(utt.text, src, s.my_lang, subtitle=True)
+        self.emit("them", src=utt.text, tgt=out, latency=time.time() - utt.t_end)
+        self._transcript.add("them", utt.text, out)
+
+    # ------------------------------------------------------------ listener callbacks
+    def _on_level(self, who: str, rms: float) -> None:
+        self.emit("level", who=who, rms=rms)
+
+    def _on_me(self, utt: Utterance) -> None:
+        s = self.s
+        if utt.lang == s.their_lang and s.passthrough and self._player and not self.muted:
+            # I already speak their language: send my real voice, no translation
+            self._player.outs[0].put(utt.audio, 16000)
+            self.emit("me", src=utt.text, tgt=utt.text, latency=time.time() - utt.t_end,
+                      translate_s=0.0, passthrough=True)
+            self._transcript.add("me", utt.text, "（原声透传）")
+            return
+        self._jobs.put((0, next(self._seq), "me", utt))
+
+    def _on_them(self, utt: Utterance) -> None:
+        if utt.lang in SIMILAR.get(self.s.my_lang, {self.s.my_lang}):
+            self.emit("them", src=utt.text, tgt=utt.text, latency=0.0)  # same language: show as-is
+            self._transcript.add("them", utt.text, utt.text)
+            return
+        self._jobs.put((1, next(self._seq), "them", utt))
+
+    def _on_ptt(self, down: bool) -> None:
+        if self.s.mode != "ptt":
+            return
+        self.ptt_down = down
+        self.emit("ptt", down=down)
+        if not down and self._me:
+            self._me.flush()

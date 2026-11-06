@@ -1,0 +1,11 @@
+# Windows x64 runtime (translation runs in the bundled llama-server; the CUDA voice pack
+# with torch + qwen-tts is installed on demand by the setup wizard)
+sherpa-onnx==2.0.1
+sounddevice==0.5.5
+soundfile==0.14.0
+soundcard==0.4.6
+numpy
+num2words==0.5.14
+PySide6-Essentials==6.12.0
+pynput==1.8.2
+platformdirs
