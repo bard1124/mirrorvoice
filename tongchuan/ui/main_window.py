@@ -242,8 +242,13 @@ class MainWindow(QMainWindow):
         src_items = [(("扬声器回采：" + n.split(':', 1)[1]) if n.startswith("loopback:") else n, n) for n in ins]
         fill(self.src, [("不显示字幕", "")] + src_items, self.s.their_source)
 
+    # settings that only take effect when the engine (re)starts
+    RESTART_KEYS = ("my_lang", "their_lang", "mic", "call_out", "their_source", "speak", "subtitles",
+                    "passthrough", "mode", "ptt_key", "quality")
+
     def _save(self) -> None:
         s = self.s
+        before = {k: getattr(s, k) for k in self.RESTART_KEYS + ("monitor",)}
         s.my_lang, s.their_lang = self.my.currentData(), self.their.currentData()
         s.mic, s.call_out, s.monitor, s.their_source = (self.mic.currentData(), self.call.currentData(),
                                                         self.mon.currentData(), self.src.currentData())
@@ -253,6 +258,12 @@ class MainWindow(QMainWindow):
         s.save()
         if hasattr(self, "banner"):
             self._refresh_banner()
+        if self.engine.running:
+            if before["monitor"] != s.monitor:
+                self.engine.set_monitor(s.monitor)  # the one device that can be swapped live
+            if any(before[k] != getattr(s, k) for k in self.RESTART_KEYS):
+                self.status.setText("● 运行中 · 设置已保存，点“停止”再“开始”后生效")
+                self.status.setStyleSheet("font-size: 15px; color: #d08700;")
 
     def _swap(self) -> None:
         my, their = self.my.currentData(), self.their.currentData()

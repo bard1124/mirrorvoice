@@ -190,6 +190,18 @@ class Engine:
         self._transcript.add("them", utt.text, out)
 
     # ------------------------------------------------------------ listener callbacks
+    def set_monitor(self, name: str) -> None:
+        """Switch the headphone monitor while running; other device changes still need a restart."""
+        if not self._player:
+            return
+        try:
+            dev = find_device(name, "output") if name else None
+        except LookupError:
+            self.emit("status", text=f"监听设备 {name} 未连接，已跳过")
+            return
+        self._player.set_monitor(dev)
+        self.emit("status", text=f"运行中 · 监听：{name or '关'}")
+
     def _on_level(self, who: str, rms: float) -> None:
         self.emit("level", who=who, rms=rms)
 

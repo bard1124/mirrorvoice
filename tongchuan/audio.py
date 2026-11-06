@@ -111,6 +111,12 @@ class Player:
         for o in self.outs:
             o.put(chunk, sr)
 
+    def set_monitor(self, monitor_dev: int | None) -> None:
+        """Replace the headphone monitor (outs[1:]) without touching the call output."""
+        old, self.outs = self.outs[1:], self.outs[:1] + ([DeviceOut(monitor_dev, 24000)] if monitor_dev is not None else [])
+        for o in old:
+            o.close()
+
     def busy(self) -> bool:
         return any(o.busy() for o in self.outs)
 
