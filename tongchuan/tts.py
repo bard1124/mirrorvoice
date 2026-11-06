@@ -100,7 +100,7 @@ class PocketCloneVoice:
         import sherpa_onnx as so
 
         if sample_language() != "en":
-            raise RuntimeError("没有 NVIDIA 显卡时克隆音色需要“用英文朗读”的样本，请在“音色”里用英文重录一次"
+            raise RuntimeError("CPU 版克隆音色需要“用英文朗读”的样本，请在“音色”里用英文重录一次"
                                "（或在设置里改用标准音色）")
         d = model_path
         cfg = so.OfflineTtsConfig(model=so.OfflineTtsModelConfig(

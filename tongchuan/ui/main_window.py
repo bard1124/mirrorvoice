@@ -144,15 +144,25 @@ class MainWindow(QMainWindow):
         oh.addWidget(self.quality)
         oh.addWidget(QLabel("显示方式"))
         oh.addWidget(self.display)
-        from ..config import has_nvidia_gpu
+        from ..config import cuda_voice_ok, has_nvidia_gpu
 
+        self.gpu_voice = QComboBox()
+        self.gpu_voice.addItem("自动（RTX 30 系及以上）", "auto")
+        self.gpu_voice.addItem("强制使用（旧卡会很慢）", "cuda")
+        self.gpu_voice.addItem("不使用", "cpu")
+        self.gpu_voice.setCurrentIndex(max(0, self.gpu_voice.findData(self.s.gpu_voice)))
+        self.gpu_voice.currentIndexChanged.connect(
+            lambda: (setattr(self.s, "gpu_voice", self.gpu_voice.currentData()), self.s.save(), self._refresh_banner()))
+        if not IS_MAC and has_nvidia_gpu():
+            oh.addWidget(QLabel("GPU 音色"))
+            oh.addWidget(self.gpu_voice)
         self.cpu_voice = QComboBox()
         self.cpu_voice.addItem("我的克隆音色（CPU，英文样本）", "clone")
         self.cpu_voice.addItem("标准音色", "standard")
         self.cpu_voice.setCurrentIndex(max(0, self.cpu_voice.findData(self.s.cpu_voice)))
         self.cpu_voice.currentIndexChanged.connect(
             lambda: (setattr(self.s, "cpu_voice", self.cpu_voice.currentData()), self.s.save(), self._refresh_banner()))
-        if not IS_MAC and not has_nvidia_gpu():  # only meaningful on Windows without NVIDIA
+        if not IS_MAC and not cuda_voice_ok(self.s.gpu_voice):  # Windows without a usable CUDA voice
             oh.addWidget(QLabel("音色"))
             oh.addWidget(self.cpu_voice)
         oh.addStretch()

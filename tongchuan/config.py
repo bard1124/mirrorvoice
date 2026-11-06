@@ -58,18 +58,61 @@ os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 
 @functools.lru_cache(maxsize=1)
-def has_nvidia_gpu() -> bool:
+def nvidia_gpu() -> tuple[str, float] | None:
+    """(name, compute capability) of the first NVIDIA GPU, via nvidia-smi; None without one.
+    Capability is 0.0 when the driver is too old to report it (then too old for CUDA torch too)."""
     if not IS_WIN:
-        return False
+        return None
     exe = shutil.which("nvidia-smi")
     if not exe:
-        return False
+        return None
     try:
-        out = subprocess.run([exe, "-L"], capture_output=True, text=True, timeout=5,
+        out = subprocess.run([exe, "--query-gpu=name,compute_cap", "--format=csv,noheader"],
+                             capture_output=True, text=True, timeout=5,
                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        return "GPU" in out.stdout
-    except Exception:  # noqa: BLE001
+        line = out.stdout.strip().splitlines()[0]
+        name, _, cap = line.rpartition(",")
+        return name.strip(), float(cap)
+    except Exception:  # noqa: BLE001 — no GPU, or a driver without the compute_cap field
+        try:
+            out = subprocess.run([exe, "-L"], capture_output=True, text=True, timeout=5,
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            line = out.stdout.strip().splitlines()[0] if "GPU" in out.stdout else ""
+            if not line:
+                return None
+            name = line.partition(": ")[2].partition(" (UUID")[0] or line  # "GPU 0: NAME (UUID: ...)"
+            return name, 0.0
+        except Exception:  # noqa: BLE001
+            return None
+
+
+def has_nvidia_gpu() -> bool:
+    return nvidia_gpu() is not None
+
+
+# Qwen3-TTS runs in bf16 (fp16 overflows to NaN). bf16 is native from Ampere (RTX 30, 8.0) on;
+# Turing (RTX 20 / GTX 16, 7.5) emulates it ~6x slower: a 3 s sentence took 10 s on an RTX 2060.
+CUDA_VOICE_MIN_CAP = 8.0
+
+
+def cuda_voice_ok(gpu_voice: str = "auto") -> bool:
+    """Use the CUDA voice pack? "auto" needs a capable GPU; "cuda"/"cpu" force it on/off."""
+    gpu = nvidia_gpu()
+    if gpu is None or gpu_voice == "cpu":
         return False
+    return gpu_voice == "cuda" or gpu[1] >= CUDA_VOICE_MIN_CAP
+
+
+def cpu_voice_reason() -> str:
+    """Why the CPU voice path is in use (for wizard / status text)."""
+    gpu = nvidia_gpu()
+    if gpu is None:
+        return "未检测到 NVIDIA 显卡"
+    if gpu[1] == 0.0:
+        return f"{gpu[0]} 的驱动过旧，无法判断显卡能力（请更新 NVIDIA 驱动）"
+    if gpu[1] < CUDA_VOICE_MIN_CAP:
+        return f"{gpu[0]}（算力 {gpu[1]:.1f}）不原生支持 bf16，克隆音色无法实时"
+    return "已设置为不使用 GPU 音色"
 
 
 def gpu_pack_python() -> Path:
@@ -101,7 +144,8 @@ class Settings:
     mute_hotkey: str = "<ctrl>+<alt>+m"
     pause: float = 0.5              # silence that ends a sentence
     quality: str = "fast"           # "fast" | "quality" (bigger models)
-    cpu_voice: str = "clone"        # Windows without NVIDIA: "clone" (Pocket TTS, English) | "standard" (Kokoro)
+    cpu_voice: str = "clone"        # Windows without CUDA voice: "clone" (Pocket TTS, English) | "standard" (Kokoro)
+    gpu_voice: str = "auto"         # NVIDIA clone voice: "auto" (compute capability >= 8.0 only) | "cuda" | "cpu"
     gain: float = 1.0
     overlay_font: int = 26
     overlay_opacity: float = 0.86

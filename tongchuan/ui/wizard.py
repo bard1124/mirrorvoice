@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (QComboBox, QDialog, QFormLayout, QHBoxLayout, QLa
                                QProgressBar, QPushButton, QStackedWidget, QVBoxLayout, QWidget)
 
 from .. import models, virtual_audio
-from ..config import IS_MAC, Settings, gpu_pack_installed
+from ..config import IS_MAC, Settings, cpu_voice_reason, gpu_pack_installed, has_nvidia_gpu
 from ..languages import LANGS
 from ..tts import has_voice_sample
 from .dialogs import VoiceDialog
@@ -105,9 +105,9 @@ class Wizard(QDialog):
         backend = models.voice_backend(self.s)
         note = {"mlx": "Apple Silicon：翻译与克隆音色用 MLX 加速。",
                 "cuda": "检测到 NVIDIA 显卡：将用你的克隆音色（需在下一步安装 GPU 音色包）。",
-                "pocket": "未检测到 NVIDIA 显卡：用 CPU 版克隆音色 Pocket TTS（只能说英文，录音色时需用英文朗读；"
+                "pocket": f"{cpu_voice_reason()}：用 CPU 版克隆音色 Pocket TTS（只能说英文，录音色时需用英文朗读；"
                           "该模型仅限非商业用途）。",
-                "kokoro": "未检测到 NVIDIA 显卡：使用标准音色（不是你的声音）。"}[backend]
+                "kokoro": f"{cpu_voice_reason()}：使用标准音色（不是你的声音）。"}[backend]
         lay.addWidget(QLabel(note + "\n进入本页会自动开始下载（来源 ModelScope / GitHub，支持断点续传）。"
                              "可以先去做下一步，关掉向导也会在后台继续下载。", wordWrap=True))
         self.dl_total = QProgressBar(maximum=1000)
@@ -197,6 +197,9 @@ class Wizard(QDialog):
                                  "BlackHole 16ch + 多输出设备：把会议里对方的声音同时送给耳机和字幕。"))
         else:
             lay.addWidget(QLabel("VB-CABLE：把你的翻译语音送进会议软件（当麦克风）。对方声音直接从扬声器回采，无需额外设置。"))
+            if has_nvidia_gpu() and models.voice_backend(self.s) != "cuda":
+                lay.addWidget(QLabel(f"{cpu_voice_reason()}，已改用 CPU 音色方案，不需要 GPU 音色包。"
+                                     "如仍想试用，可在主界面“GPU 音色”里强制开启。", wordWrap=True))
         self.audio_status = QLabel()
         lay.addWidget(self.audio_status)
         row = QHBoxLayout()
@@ -260,7 +263,7 @@ class Wizard(QDialog):
             self.voice_status.setText("❌ 还没有音色样本，点下面按钮录 12 秒" +
                                       ("（请用英文朗读）" if backend == "pocket" else ""))
         elif backend == "pocket" and sample_language() != "en":
-            self.voice_status.setText("⚠️ 现有样本不是用英文朗读的。没有 NVIDIA 显卡时克隆音色需要英文朗读的样本，请重录。")
+            self.voice_status.setText("⚠️ 现有样本不是用英文朗读的。CPU 版克隆音色需要英文朗读的样本，请重录。")
         else:
             self.voice_status.setText("✅ 已有音色样本")
 

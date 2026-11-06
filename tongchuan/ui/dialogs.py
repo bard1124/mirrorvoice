@@ -119,7 +119,7 @@ class VoiceDialog(QDialog):
         if voice_backend(s) == "pocket":  # CPU clone needs an English reading
             self.lang.setCurrentIndex(self.lang.findData("en"))
             self.lang.setEnabled(False)
-            self.lang.setToolTip("没有 NVIDIA 显卡时，克隆音色需要用英文朗读的样本")
+            self.lang.setToolTip("CPU 版克隆音色需要用英文朗读的样本")
         row.addWidget(self.lang)
         row.addStretch()
         lay.addLayout(row)

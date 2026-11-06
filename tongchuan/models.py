@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from .config import IS_MAC, MODELS, has_nvidia_gpu
+from .config import IS_MAC, MODELS, cuda_voice_ok
 from .net import urlopen
 
 SHERPA = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
@@ -88,14 +88,14 @@ KOKORO = Model("tts", "标准音色 Kokoro (CPU)", "kokoro-int8-multi-lang-v1_1"
 
 
 def voice_backend(s=None) -> str:
-    """'mlx' (Apple Silicon) | 'cuda' (Windows + NVIDIA) | 'pocket' (CPU clone, English) | 'kokoro'."""
+    """'mlx' (Apple Silicon) | 'cuda' (Windows + NVIDIA >= Ampere) | 'pocket' (CPU clone, English) | 'kokoro'."""
     if IS_MAC:
         return "mlx"
-    if has_nvidia_gpu():
-        return "cuda"
     from .config import Settings
 
     s = s or Settings.load()
+    if cuda_voice_ok(s.gpu_voice):
+        return "cuda"
     return "pocket" if (s.cpu_voice == "clone" and s.their_lang == "en") else "kokoro"
 
 

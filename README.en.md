@@ -41,13 +41,15 @@ The setup wizard starts on first launch. Models are about 4.5 GB (about 8 GB in 
 
 ### Platform support
 
-| | macOS Apple Silicon | Windows + NVIDIA GPU | Windows without NVIDIA |
+| | macOS Apple Silicon | Windows + NVIDIA RTX 30 series or newer | Windows otherwise (no NVIDIA, or RTX 20 / GTX 16) |
 |---|---|---|---|
 | Recognition / subtitles | ✅ | ✅ | ✅ |
 | Translation | MLX (Qwen3) | llama.cpp Vulkan/CUDA | llama.cpp CPU/Vulkan |
 | Spoken translation | ✅ your cloned voice | ✅ your cloned voice (install the ~3 GB GPU voice pack from the wizard) | ✅ your cloned voice (Pocket TTS, real-time on CPU, English output only, record the sample in English); or the standard Kokoro voice |
 | Virtual microphone | BlackHole 2ch (bundled) | VB-CABLE (downloaded by the wizard) | VB-CABLE |
 | Other side's audio | BlackHole 16ch + Multi-Output device (created by the wizard) | speaker loopback (no setup) | speaker loopback |
+
+The GPU voice pack needs native bf16 (compute capability ≥ 8.0, i.e. RTX 30 series or newer). RTX 20 / GTX 16 only emulate bf16 (an RTX 2060 took 10 s to synthesize 3 s of speech) and fp16 overflows, so those GPUs are treated like "no NVIDIA"; you can still force the GPU voice in the main window.
 
 ### Memory
 

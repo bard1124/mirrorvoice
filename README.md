@@ -41,13 +41,15 @@
 
 ### 各平台能力
 
-| | macOS Apple Silicon | Windows + NVIDIA 显卡 | Windows 无 NVIDIA |
+| | macOS Apple Silicon | Windows + NVIDIA RTX 30 系及以上 | Windows 其它（无 N 卡，或 RTX 20 / GTX 16） |
 |---|---|---|---|
 | 识别 / 字幕 | ✅ | ✅ | ✅ |
 | 翻译 | MLX (Qwen3) | llama.cpp Vulkan/CUDA | llama.cpp CPU/Vulkan |
 | 说出译文 | ✅ 你的克隆音色 | ✅ 你的克隆音色（向导里装 GPU 音色包，约 3 GB） | ✅ 你的克隆音色（Pocket TTS，CPU 实时，仅英文输出，需用英文朗读录样本）；或标准音色 Kokoro |
 | 虚拟麦克风 | BlackHole 2ch（安装包内置） | VB-CABLE（向导里下载） | VB-CABLE |
 | 对方声音来源 | BlackHole 16ch + 多输出设备（向导自动创建） | 扬声器回采（无需设置） | 扬声器回采 |
+
+GPU 音色包需要显卡原生支持 bf16（计算能力 ≥ 8.0，即 RTX 30 系及以上）。RTX 20 / GTX 16 只能模拟 bf16，实测 RTX 2060 合成 3 秒语音要 10 秒，fp16 则会溢出，所以这类显卡自动按"无 NVIDIA"处理；可在主界面"GPU 音色"里强制开启。
 
 ### 内存需求
 
