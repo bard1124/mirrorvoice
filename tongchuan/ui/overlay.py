@@ -73,13 +73,25 @@ class Overlay(QWidget):
 
     def _fit(self) -> None:
         """Grow/shrink with the text while keeping the bottom edge where the user put it."""
-        bottom = self.y() + self.height()
+        # Before the first show, height() is QWidget's default 480, not our bar: anchoring to that
+        # bottom edge pushed the bar ~400 px below the screen on Windows (macOS clamps windows back).
+        bottom = self.y() + self.height() if self.isVisible() else None
         inner = self.width() - 48
         h = 24 + self.zh.heightForWidth(inner)
         if self.en.isVisible() and self.en.text():
             h += 4 + self.en.heightForWidth(inner)
         self.setFixedHeight(max(90, h))
-        self.move(self.x(), bottom - self.height())
+        if bottom is not None:
+            self.move(self.x(), bottom - self.height())
+        self._clamp()
+
+    def _clamp(self) -> None:
+        """Keep the whole bar inside the screen it is on (saved positions, resizes, monitor changes)."""
+        scr = (QApplication.screenAt(self.frameGeometry().center()) or QApplication.primaryScreen()).availableGeometry()
+        x = min(max(self.x(), scr.left()), max(scr.left(), scr.right() - self.width() + 1))
+        y = min(max(self.y(), scr.top()), max(scr.top(), scr.bottom() - self.height() + 1))
+        if (x, y) != (self.x(), self.y()):
+            self.move(x, y)
 
     def _tick(self) -> None:
         if time.time() - self._last > HIDE_AFTER and self.zh.text():
