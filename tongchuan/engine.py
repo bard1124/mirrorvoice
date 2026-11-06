@@ -33,6 +33,9 @@ class Engine:
         self.emit = emit
         self.running = False
         self.muted = False
+        # exist before the first start(): the UI may call set_voice_speed / set_monitor / reload_voice early
+        self._player = self._voice = self._transcript = self._me = None
+        self._prev = {"me": None, "them": None}
         self.ptt_down = False
         self._jobs: queue.PriorityQueue = queue.PriorityQueue()
         self._seq = itertools.count()
