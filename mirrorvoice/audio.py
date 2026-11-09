@@ -92,6 +92,18 @@ def device_name(idx: int | None, kind: str) -> str:
     return sd.query_devices(idx, kind)["name"]
 
 
+def default_output_name() -> str:
+    """Name of the system default speaker ('' if unknown) — what 'loopback:default' records on Windows."""
+    try:
+        if IS_WIN:
+            import soundcard as sc
+
+            return str(sc.default_speaker().name)
+        return str(sd.query_devices(kind="output")["name"])
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 # ------------------------------------------------------------------ outputs
 class DeviceOut:
     """One output device: callback stream fed from its own buffer (never blocks the producer).

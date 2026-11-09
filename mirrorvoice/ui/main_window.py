@@ -11,7 +11,8 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
                                QProgressBar, QPushButton, QRadioButton, QScrollArea, QVBoxLayout, QWidget)
 
 from .. import __version__, models
-from ..audio import list_devices
+from .. import device_hints as dh
+from ..audio import default_output_name, list_devices
 from ..config import IS_MAC, LOG_FILE, TRANSCRIPTS, Settings
 from ..engine import Engine
 from ..hotkeys import PTT_KEYS
@@ -146,6 +147,9 @@ class MainWindow(QMainWindow):
         f.addRow(QLabel("我自己监听（耳机）", objectName="muted"), self.mon)
         f.addRow(QLabel("对方声音来源", objectName="muted"), self.src)
         body.addLayout(f)
+        self.dev_warn = QLabel(objectName="devWarn", wordWrap=True)  # problems with the current choice
+        self.dev_warn.hide()
+        body.addWidget(self.dev_warn)
         cl.addWidget(g)
 
         g, v = card("功能")
@@ -265,6 +269,8 @@ class MainWindow(QMainWindow):
         for w in (self.speak, self.subs, self.passthru, self.cont, self.ptt):
             w.toggled.connect(self._save)
         self.display.currentIndexChanged.connect(self._display_changed)
+        for role, combo, _ in self._device_combos():
+            combo.currentIndexChanged.connect(lambda _i, role=role: self._device_picked(role))
 
     def _center_on_screen(self) -> None:
         """Open centred on the screen under the cursor (fit the window to it first)."""
@@ -333,11 +339,55 @@ class MainWindow(QMainWindow):
             combo.blockSignals(False)
 
         ins, outs = list_devices("input"), list_devices("output")
-        fill(self.mic, [("系统默认", "")] + [(n, n) for n in ins if not n.startswith("loopback:")], self.s.mic)
-        fill(self.call, [(n, n) for n in outs], self.s.call_out)
-        fill(self.mon, [("不监听", "")] + [(n, n) for n in outs], self.s.monitor)
-        src_items = [(("扬声器回采：" + n.split(':', 1)[1]) if n.startswith("loopback:") else n, n) for n in ins]
-        fill(self.src, [("不显示字幕", "")] + src_items, self.s.their_source)
+        self._default_out = default_output_name()
+        ctx = self._device_ctx(self.s.call_out, self.s.their_source)
+        mics = [n for n in ins if not n.startswith("loopback:")]
+        fill(self.mic, [("系统默认", "")] + [(n, n) for n in dh.ordered("mic", mics, ctx)], self.s.mic)
+        fill(self.call, [(n, n) for n in dh.ordered("call", outs, ctx)], self.s.call_out)
+        fill(self.mon, [("不监听", "")] + [(n, n) for n in dh.ordered("monitor", outs, ctx)], self.s.monitor)
+        fill(self.src, [("不显示字幕", "")] + [(n, n) for n in dh.ordered("source", ins, ctx)], self.s.their_source)
+        self._annotate_devices()
+
+    def _device_ctx(self, call_out: str, their_source: str) -> "dh.Context":
+        return dh.Context(call_out or "", their_source or "", getattr(self, "_default_out", ""))
+
+    def _device_combos(self) -> list[tuple[str, QComboBox, str]]:
+        return [("mic", self.mic, "我的麦克风"), ("call", self.call, "送进会议"),
+                ("monitor", self.mon, "我自己监听"), ("source", self.src, "对方声音来源")]
+
+    def _annotate_devices(self) -> None:
+        """Tag every entry for the current combination and list the problems of the current choice."""
+        ctx = self._device_ctx(self.call.currentData(), self.src.currentData())
+        problems = []
+        for role, combo, title in self._device_combos():
+            for i in range(combo.count()):
+                name = combo.itemData(i) or ""
+                if not name:
+                    continue
+                h = dh.hint(role, name, ctx)
+                text = dh.label(name, h)
+                if combo.itemText(i).endswith("（未连接）"):
+                    text += "（未连接）"
+                combo.setItemText(i, text)
+                combo.setItemData(i, h.warning or None, Qt.ItemDataRole.ToolTipRole)
+            h = dh.hint(role, combo.currentData() or "", ctx)
+            if h.rank >= dh.UNSUITED and h.warning:
+                text = h.warning.replace("\n\n", " ")
+                problems.append((h.rank, f"{'⚠️' if h.rank == dh.CONFLICT else 'ℹ️'} {title}：{text}"))
+        problems.sort(key=lambda p: -p[0])
+        self.dev_warn.setText("\n".join(p[1] for p in problems))
+        self.dev_warn.setProperty("level", "conflict" if problems and problems[0][0] == dh.CONFLICT else "info")
+        repolish(self.dev_warn)
+        self.dev_warn.setVisible(bool(problems))
+
+    def _device_picked(self, role: str) -> None:
+        """The user picked a device: explain right away if it breaks the setup."""
+        self._annotate_devices()
+        combo, title = next((c, t) for r, c, t in self._device_combos() if r == role)
+        ctx = self._device_ctx(self.call.currentData(), self.src.currentData())
+        h = dh.hint(role, combo.currentData() or "", ctx)
+        if h.rank >= dh.UNSUITED and h.warning:
+            QMessageBox.warning(self, f"{title}：{dh.label(combo.currentData(), dh.Hint(h.rank))}", h.warning)
 
     # settings that only take effect when the engine (re)starts
     RESTART_KEYS = ("my_lang", "their_lang", "mic", "call_out", "their_source", "speak", "subtitles",

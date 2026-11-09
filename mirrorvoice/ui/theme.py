@@ -81,6 +81,8 @@ QLabel#cardTitle {{ font-size: 14px; font-weight: 600; }}
 QFrame#banner {{ background: #FFF7E6; border: 1px solid #FFE1A8; border-radius: 10px; }}
 QFrame#banner QLabel {{ color: #8A5300; }}
 QLabel#muted {{ color: {TEXT_2}; }}
+QLabel#devWarn {{ padding: 8px 10px; border-radius: 8px; font-size: 12px; background: #E8F1FF; color: #2F5BB7; }}
+QLabel#devWarn[level="conflict"] {{ background: #FDECEC; color: #B3261E; }}
 QDialog#msgbox {{ background: {BG}; }}
 QLabel#msgTitle {{ font-size: 16px; font-weight: 700; }}
 QLabel#msgText {{ font-size: 13px; color: #3B414B; }}
