@@ -19,16 +19,18 @@
 |---|---|
 | 🎙️ **你的声音说外语** | 录 12 秒样本，用 Qwen3-TTS 零样本克隆你的音色，把译文用"你的声音"送进 Teams / Zoom / Meet / 腾讯会议 |
 | 💬 **对方说话出字幕** | 会议里对方的声音实时识别并翻译，屏幕底部悬浮字幕条（置顶、可拖动、全屏会议上方也可见） |
-| ⚡ **低延迟** | 说完一句约 1.5 秒对方听到（M1 Pro 实测）；你的发言优先于字幕处理 |
+| ⚡ **低延迟** | 说完一句约 1.5 秒对方听到（M1 Pro 实测）；你的发言优先于字幕处理。每句显示识别 / 翻译 / 发声各花多少时间，并提示瓶颈 |
 | 🔒 **完全本地** | 识别 SenseVoice、翻译 Qwen3、合成 Qwen3-TTS 都在本机；模型下载后可断网使用 |
-| 📖 **术语表** | 产品名、人名、专业词固定译法，双向生效 |
+| 📖 **术语表与会议背景** | 产品名、人名、专业词固定译法，双向生效；可填“识别常错成”的写法（如 万佛马 → OneForma），翻译前自动纠正；一句话会议背景帮助选对专业用词 |
+| 🩺 **一键测试链路** | 不用开会，自动检测对方能否听到你的翻译、对方字幕能否出来、麦克风和监听是否正常，并给出修复建议；Teams / Zoom / 腾讯会议 / 飞书分步设置说明 |
+| 🎧 **设备防呆** | 每个声音设备标注用途和推荐项，选了会回声或对方听不到的组合会提示；macOS 换耳机后一键让会议扬声器跟着换 |
 | 📝 **会议记录** | 每场会议自动保存中英对照 Markdown + CSV |
 | 🎛️ **按住说话 / 一键静音** | 全局快捷键：按住右 Option/Alt 才翻译，或 ⌃⌥M 静音 |
 | 🔁 **原声透传** | 你直接说对方的语言时，不翻译、把你的原声送过去 |
 | 🌏 **多语言** | 中文 / 英语 / 日语 / 韩语（粤语可作为输入）任意组合 |
 | 🖥️ **两种界面** | 图形控制面板（默认）或命令行风格（彩色日志，输入 `m` 静音 / `u` 更新 / `q` 退出 / `ui` 切回） |
 | 🪟 **悬浮窗与托盘** | 对话悬浮窗（我和对方的原文 + 译文，置顶、可拖动缩放）、对方字幕条可常驻；托盘 / 菜单栏图标和 macOS Dock 右键菜单：开始/停止、暂停/继续、退出 |
-| 🧭 **首次向导** | 自动下载模型（ModelScope/GitHub，断点续传）、安装虚拟声卡、录音色、会议软件设置 |
+| 🧭 **首次向导** | 自动下载模型（ModelScope / HuggingFace 自动选更快的源，大文件多线程，断点续传）、安装虚拟声卡、录音色、会议软件设置 |
 | 🔄 **一键更新** | 启动时检查 GitHub 新版本（离线自动跳过），一键下载、SHA256 校验、替换并重启；模型和设置全部保留。命令行模式输入 `u` |
 
 ## 安装
@@ -56,9 +58,11 @@ GPU 音色包需要显卡原生支持 bf16（计算能力 ≥ 8.0，即 RTX 30 �
 
 全部功能开启（翻译 + 克隆音色 + 对方字幕）实测约 **5 GB** 内存（M1 Pro）；Windows CPU 方案相近。**16 GB 内存的电脑可以流畅运行**（建议用“快速”模型；“高质量”约多占 3 GB）。CPU 较老时翻译会慢一些（每句约 1–3 秒）。
 
+8 GB 内存或老电脑可以选“极速”档（Qwen3-1.7B）：翻译速度约快一倍（M1 Pro 实测每句 0.36 秒，快速档 0.78 秒），但翻译质量明显较低。
+
 ### 公司网络 / 证书报错
 
-模型下载和检查更新先用应用内置的证书库，校验失败时会自动改用系统证书（macOS 钥匙串 / Windows 证书存储）。公司网络如果做了 HTTPS 检查，只要公司根证书已经装进系统（浏览器能正常打开 GitHub 和 ModelScope 就说明装好了），下载就能正常进行。排查时可以设置环境变量 `MIRRORVOICE_TLS=certifi|system|default`，强制只用其中一个证书库。
+模型下载和检查更新先用应用内置的证书库，校验失败时会自动改用系统证书（macOS 钥匙串 / Windows 证书存储）。公司网络如果做了 HTTPS 检查，只要公司根证书已经装进系统（浏览器能正常打开 GitHub 和 ModelScope 就说明装好了），下载就能正常进行。排查时可以设置环境变量 `MIRRORVOICE_TLS=certifi|system|default`，强制只用其中一个证书库；`MIRRORVOICE_MODEL_SOURCE=modelscope|huggingface` 可以固定模型下载源。
 
 ## 会议软件设置
 
@@ -67,7 +71,7 @@ GPU 音色包需要显卡原生支持 bf16（计算能力 ≥ 8.0，即 RTX 30 �
 | macOS | BlackHole 2ch | Teams 扬声器 (耳机+字幕) |
 | Windows | CABLE Output (VB-Audio Virtual Cable) | 你的耳机 |
 
-请使用耳机，避免翻译语音被麦克风再次收进去。
+请使用耳机，避免翻译语音被麦克风再次收进去。会议软件的降噪建议调低或关闭。控制面板“声音设备”里的“会议软件设置”有 Teams / Zoom / 腾讯会议 / 飞书的分步说明，“测试链路”可以在开会前检查整条线路。
 
 ## 工作原理
 
@@ -87,6 +91,8 @@ python3.12 -m venv .venv && .venv/bin/pip install -r requirements-mac.txt
 .venv/bin/python -m mirrorvoice cli        # 命令行风格
 .venv/bin/python -m mirrorvoice download   # 只下载模型
 ```
+
+测试：`.venv/bin/pip install -r requirements-dev.txt && .venv/bin/python -m pytest -q tests`（CI 在 macOS 和 Windows 上都会跑，失败就不发版）。Windows 真机测试清单见 [docs/windows-test-checklist.md](docs/windows-test-checklist.md)。
 
 打包：macOS `bash packaging/mac/build_dmg.sh`；Windows 由 GitHub Actions 构建（`.github/workflows/build.yml`，推送 `v*` 标签自动发布 Release）。
 

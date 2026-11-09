@@ -3,6 +3,8 @@ name: build installers
 on:
   push:
     tags: ["v*"]
+    branches: [main]      # main: tests + build only, no release
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -19,7 +21,11 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-mac.txt pyinstaller==6.22.3
+          pip install -r requirements-mac.txt -r requirements-dev.txt pyinstaller==6.22.3
+      - name: Tests (a failure stops the release)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q tests
       - name: Build DMG
         env:
           PYTHON: python
@@ -39,7 +45,11 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-windows.txt pyinstaller==6.22.3
+          pip install -r requirements-windows.txt -r requirements-dev.txt pyinstaller==6.22.3
+      - name: Tests (a failure stops the release)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q tests
       - name: Fetch llama-server + uv
         shell: pwsh
         run: ./packaging/windows/fetch_vendor.ps1
