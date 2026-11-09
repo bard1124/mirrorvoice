@@ -109,6 +109,12 @@ def _utf8_console() -> None:
 
 def main() -> None:
     _utf8_console()
+    try:
+        from .updater import cleanup_downloads
+
+        cleanup_downloads()
+    except Exception:  # noqa: BLE001 — housekeeping must never block startup
+        pass
     if len(sys.argv) == 1 or sys.argv[1] in ("gui", "cli") or sys.argv[1].startswith("-psn"):
         from .ui.app import run_gui
 

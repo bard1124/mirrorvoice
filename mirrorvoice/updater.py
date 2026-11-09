@@ -8,6 +8,8 @@ macOS:   a helper shell script waits for this process to exit, replaces the .app
          DMG, clears quarantine and relaunches.
 Windows: runs the Inno Setup installer silently; the installer relaunches the app.
 Models, voice sample, transcripts and settings live in the data folder and are untouched.
+Downloaded installers are removed after a successful macOS swap, and on every start any installer
+for this version or older (Windows cannot delete its running setup.exe) is cleaned up.
 """
 from __future__ import annotations
 
@@ -19,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -133,6 +136,29 @@ def download(rel: Release, progress: Callable[[int, int], None], cancel: threadi
     return dest
 
 
+INSTALLER_SUFFIXES = (".dmg", ".exe")
+
+
+def cleanup_downloads(stale_part_hours: float = 24) -> list[str]:
+    """Delete installers for this version or older, and abandoned partial downloads."""
+    removed: list[str] = []
+    if not UPDATES.is_dir():
+        return removed
+    now = time.time()
+    for f in UPDATES.iterdir():
+        try:
+            if f.suffix.lower() in INSTALLER_SUFFIXES and _ver(f.name) <= _ver(__version__):
+                f.unlink()
+            elif f.name.endswith(".part") and now - f.stat().st_mtime > stale_part_hours * 3600:
+                f.unlink()
+            else:
+                continue
+            removed.append(f.name)
+        except OSError:  # still open (e.g. the Windows installer is finishing): next start
+            pass
+    return removed
+
+
 def can_self_install() -> bool:
     return FROZEN and (IS_MAC or IS_WIN)
 
@@ -159,7 +185,9 @@ STAGE="$TARGET.new"
 rm -rf "$STAGE" && ditto "$SRC" "$STAGE" || { echo "copy failed"; hdiutil detach "$MNT" -quiet; exit 1; }
 hdiutil detach "$MNT" -quiet
 xattr -dr com.apple.quarantine "$STAGE" 2>/dev/null
-rm -rf "$TARGET.old" && mv "$TARGET" "$TARGET.old" && mv "$STAGE" "$TARGET" && rm -rf "$TARGET.old"
+rm -rf "$TARGET.old" && mv "$TARGET" "$TARGET.old" && mv "$STAGE" "$TARGET" && rm -rf "$TARGET.old" || { echo "swap failed"; exit 1; }
+rm -f "$DMG"   # installed: the 200 MB installer is no longer needed
+rm -rf "$(dirname "$0")"
 if [ "$5" = "norelaunch" ]; then echo "$(date) replaced (no relaunch)"; exit 0; fi
 echo "$(date) replaced; relaunching"
 open "$TARGET"
