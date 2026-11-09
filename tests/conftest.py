@@ -79,7 +79,10 @@ def pytest_unconfigure(config):
         if sys.platform == "win32":
             # os._exit still runs DLL detach handlers on Windows, where Qt/audio DLLs segfaulted (exit 139)
             import ctypes
+            from ctypes import wintypes
 
             k32 = ctypes.windll.kernel32
+            k32.GetCurrentProcess.restype = wintypes.HANDLE  # 64-bit pseudo-handle -1; the int default truncated it
+            k32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
             k32.TerminateProcess(k32.GetCurrentProcess(), _status["code"])
         os._exit(_status["code"])
