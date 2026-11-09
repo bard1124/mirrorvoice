@@ -17,6 +17,7 @@ from . import models
 from .asr import Listener, Utterance
 from .audio import Player, find_device, time_stretch
 from .config import LOG_FILE, Settings
+from . import hotkeys
 from .hotkeys import Hotkeys
 from .languages import LANGS
 from .transcript import Transcript
@@ -63,6 +64,10 @@ class Engine:
             pass
         self._log = open(LOG_FILE, "a", encoding="utf-8", buffering=1)
         self.log(f"===== 开始 {time.strftime('%Y-%m-%d')} =====")
+        try:  # main thread here; the hotkey listeners start later on worker threads
+            hotkeys.prime_layout()
+        except Exception as e:  # noqa: BLE001 — hotkeys then report themselves unavailable
+            self.log(f"读取键盘布局失败：{e}")
         threading.Thread(target=self._boot, daemon=True, name="engine-boot").start()
 
     def stop(self) -> None:

@@ -5,8 +5,40 @@ listeners simply never fire and the app keeps working in continuous mode.
 """
 from __future__ import annotations
 
+import contextlib
 import sys
+import threading
 from typing import Callable
+
+_layout_ready = False
+
+
+def prime_layout() -> None:
+    """macOS: read the keyboard layout on the main thread and hand it to pynput.
+
+    pynput reads it (TISCopyCurrentKeyboardInputSource) inside every listener thread. When the
+    current input source is an input method such as Pinyin, macOS asserts that this runs on the
+    main thread and kills the app (SIGTRAP) — "the app quits when I press Start". Call this from
+    the main thread before starting the listeners; again on each start, the layout may change.
+    """
+    global _layout_ready
+    if sys.platform != "darwin" or threading.current_thread() is not threading.main_thread():
+        return
+    from pynput._util import darwin as util
+    from pynput.keyboard import _darwin as kb
+
+    read = getattr(util, "_mirrorvoice_read_layout", util.keycode_context)
+    with read() as ctx:
+        layout = ctx
+
+    @contextlib.contextmanager
+    def cached():
+        yield layout
+
+    util._mirrorvoice_read_layout = read
+    util.keycode_context = cached  # used by get_unicode_to_keycode_map
+    kb.keycode_context = cached    # used by Listener._run in its own thread
+    _layout_ready = True
 
 
 class Hotkeys:
@@ -20,6 +52,9 @@ class Hotkeys:
         from pynput import keyboard
 
         if sys.platform == "darwin":
+            if not _layout_ready:
+                # reading it in the listener thread would crash the app (see prime_layout)
+                raise RuntimeError("键盘布局未在主线程读取")
             # Two listener threads racing on PyObjC's lazy import raised
             # KeyError('AXIsProcessTrusted'); resolve it once here first.
             try:
