@@ -73,6 +73,7 @@ def pytest_sessionfinish(session, exitstatus):
 @pytest.hookimpl(trylast=True)
 def pytest_unconfigure(config):
     if "PySide6.QtWidgets" in sys.modules:
+        print(f"[conftest] exit status {_status['code']}", file=sys.stderr)
         sys.stdout.flush()
         sys.stderr.flush()
         os._exit(_status["code"])

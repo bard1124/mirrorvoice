@@ -47,9 +47,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-windows.txt -r requirements-dev.txt pyinstaller==6.22.3
       - name: Tests (a failure stops the release)
+        shell: bash
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest -q tests
+        run: |
+          set +e
+          python -m pytest -q tests
+          code=$?
+          echo "pytest exit code: $code"
+          exit $code
       - name: Fetch llama-server + uv
         shell: pwsh
         run: ./packaging/windows/fetch_vendor.ps1
