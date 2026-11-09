@@ -1,6 +1,7 @@
 """First-run wizard: languages -> models -> virtual audio -> voice sample -> meeting app setup."""
 from __future__ import annotations
 
+import re
 import threading
 
 from PySide6.QtCore import Qt, Signal
@@ -77,6 +78,7 @@ class Wizard(QDialog):
         self.my.setCurrentIndex(self.my.findData(self.s.my_lang))
         self.their.setCurrentIndex(self.their.findData(self.s.their_lang))
         self.q = QComboBox()
+        self.q.addItem(f"极速（8 GB 内存或老电脑，翻译质量较低）：{models.summary('turbo')}", "turbo")
         self.q.addItem(f"快速（推荐）：{models.summary('fast')}", "fast")
         self.q.addItem(f"高质量（更准更像，更慢）：{models.summary('quality')}", "quality")
         self.q.setCurrentIndex(self.q.findData(self.s.quality))
@@ -162,8 +164,10 @@ class Wizard(QDialog):
         for key, pb in self.m_rows.items():
             if title.startswith(key):
                 pb.setValue(int(1000 * done / max(total, 1)))
+                src = re.search(r"来源 (\w+)", title)
                 pb.setFormat("✅ 已就绪" if done >= total else
-                             ("解压中…" if "解压" in title else f"%p%  {fmt_bytes(done)} / {fmt_bytes(total)}"))
+                             ("解压中…" if "解压" in title else f"%p%  {fmt_bytes(done)} / {fmt_bytes(total)}"
+                              + (f"  · {src.group(1)}" if src else "")))
 
     def _on_overall(self, done: int, total: int, speed: float) -> None:
         self.dl_total.setValue(int(1000 * done / max(total, 1)))

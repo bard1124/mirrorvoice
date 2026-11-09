@@ -17,23 +17,29 @@ from .languages import LANGS
 # ------------------------------------------------------------------ glossary
 
 
-def load_glossary() -> list[tuple[str, str]]:
+Term = tuple[str, str, str]  # (my wording, their wording, "misheard1|misheard2")
+
+
+def load_glossary() -> list[Term]:
+    """Rows of the glossary CSV: my_lang term, their_lang term, optional ASR mis-hearings ('|'-separated)."""
     if not GLOSSARY_FILE.exists():
         return []
     with open(GLOSSARY_FILE, encoding="utf-8-sig", newline="") as f:
-        return [(r[0].strip(), r[1].strip()) for r in csv.reader(f) if len(r) >= 2 and r[0].strip()]
+        return [(r[0].strip(), r[1].strip(), r[2].strip() if len(r) > 2 else "")
+                for r in csv.reader(f) if len(r) >= 2 and r[0].strip()]
 
 
-def save_glossary(rows: list[tuple[str, str]]) -> None:
+def save_glossary(rows: list[tuple[str, ...]]) -> None:
+    keep = [(r[0].strip(), r[1].strip(), (r[2] if len(r) > 2 else "").strip()) for r in rows]
     with open(GLOSSARY_FILE, "w", encoding="utf-8", newline="") as f:
-        csv.writer(f).writerows([r for r in rows if r[0].strip() and r[1].strip()])
+        csv.writer(f).writerows([(a, b, c) if c else (a, b) for a, b, c in keep if a and b])
 
 
-def glossary_hits(text: str, rows: list[tuple[str, str]]) -> list[tuple[str, str]]:
+def glossary_hits(text: str, rows: list[Term]) -> list[tuple[str, str]]:
     """Terms present in `text`, in either direction (glossary is written my_lang -> their_lang)."""
     low = text.lower()
     hits = []
-    for a, b in rows:
+    for a, b, *_ in rows:
         if a.lower() in low:
             hits.append((a, b))
         elif b.lower() in low:
@@ -41,10 +47,33 @@ def glossary_hits(text: str, rows: list[tuple[str, str]]) -> list[tuple[str, str
     return hits
 
 
+def _alias_pattern(alias: str) -> re.Pattern:
+    """Latin aliases match whole words only ('scientific' must not hit 'unscientifically')."""
+    esc = re.escape(alias)
+    if re.fullmatch(r"[\w\s.\-']+", alias, flags=re.ASCII):
+        esc = rf"(?<![A-Za-z0-9]){esc}(?![A-Za-z0-9])"
+    return re.compile(esc, re.IGNORECASE)
+
+
+def correct_asr(text: str, rows: list[Term], side: str) -> str:
+    """Replace known speech-recognition mistakes before translating.
+
+    side='me'   -> the mistake becomes column 1 (how I say the term)
+    side='them' -> the mistake becomes column 2 (how the other side says it)
+    """
+    for row in rows:
+        a, b, aliases = (tuple(row) + ("",))[:3]
+        target = a if side == "me" else b
+        for alias in (x.strip() for x in aliases.split("|")):
+            if alias and target and alias.lower() != target.lower():
+                text = _alias_pattern(alias).sub(target, text)
+    return text
+
+
 # ------------------------------------------------------------------ prompts
 
 
-def system_prompt(src: str, tgt: str, subtitle: bool) -> str:
+def system_prompt(src: str, tgt: str, subtitle: bool, meeting: str = "") -> str:
     s, t = LANGS[src].english, LANGS[tgt].english
     p = (f"You are a simultaneous interpreter. Translate the {s} speech transcript into natural, "
          f"concise spoken {t}. The transcript comes from speech recognition and may contain "
@@ -55,6 +84,9 @@ def system_prompt(src: str, tgt: str, subtitle: bool) -> str:
               "(e.g. 'twenty percent', 'three p.m.'), never digits. ")
     if subtitle and tgt in ("zh", "yue"):
         p += "Use Simplified Chinese. Keep names, product names and technical terms in their original form. "
+    if meeting.strip():
+        p += (f"Background of this meeting (use it to choose the right terminology, never translate it): "
+              f"{meeting.strip()[:400]}. ")
     return p + f"Output ONLY the {t} translation, no notes, no quotes."
 
 
@@ -66,6 +98,17 @@ def user_prompt(text: str, glossary: list[tuple[str, str]], continuation: bool =
         return (f"{g}The speaker continues the same sentence. Translate ONLY this new part so that it reads "
                 f"naturally right after your previous output; do not repeat what you already said: {text}")
     return f"{g}Translate ONLY this sentence: {text}"
+
+
+# Qwen3's own switch: chat_template_kwargs/enable_thinking alone was ignored by Qwen3-1.7B, which then
+# "thought out loud" in its answer (11 of 12 test sentences); with this suffix 0 of 12.
+NO_THINK = " /no_think"
+_CJK = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
+
+
+def looks_like_reasoning(out: str, tgt: str) -> bool:
+    """An English translation never contains Chinese characters; reasoning about the source does."""
+    return LANGS[tgt].english == "English" and bool(_CJK.search(out))
 
 
 def last_line(text: str) -> str:
@@ -107,8 +150,9 @@ def spoken_en(text: str) -> str:
 class Translator:
     """translate(text, src, tgt, subtitle) -> str. Create and use on ONE thread (MLX)."""
 
-    def __init__(self, model_path: Path) -> None:
+    def __init__(self, model_path: Path, meeting: str = "") -> None:
         self.glossary = load_glossary()
+        self.meeting = meeting  # free-text background of the meeting, added to the system prompt
         self.backend = _MLX(model_path) if IS_MAC else _LlamaServer(model_path)
 
     def reload_glossary(self) -> None:
@@ -118,13 +162,20 @@ class Translator:
                   context: tuple[str, str] | None = None) -> str:
         """context = (previous part's source, its translation) when `text` continues that part
         (a long sentence cut early): shown to the model as the preceding exchange."""
-        msgs = [{"role": "system", "content": system_prompt(src, tgt, subtitle)}]
+        msgs = [{"role": "system", "content": system_prompt(src, tgt, subtitle, self.meeting)}]
         if context:
             msgs += [{"role": "user", "content": user_prompt(context[0], glossary_hits(context[0], self.glossary))},
                      {"role": "assistant", "content": context[1]}]
         msgs.append({"role": "user", "content": user_prompt(text, glossary_hits(text, self.glossary),
-                                                            continuation=context is not None)})
-        return last_line(self.backend.chat(msgs))
+                                                            continuation=context is not None) + NO_THINK})
+        out = last_line(self.backend.chat(msgs))
+        if looks_like_reasoning(out, tgt):
+            # small models sometimes explain the sentence instead of translating it: one plain retry,
+            # and never speak the explanation to the other side
+            out = last_line(self.backend.chat([msgs[0], {"role": "user", "content": user_prompt(text, []) + NO_THINK}]))
+            if looks_like_reasoning(out, tgt):
+                return ""
+        return out
 
     def close(self) -> None:
         self.backend.close()

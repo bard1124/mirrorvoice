@@ -20,7 +20,7 @@ from .config import LOG_FILE, Settings
 from .hotkeys import Hotkeys
 from .languages import LANGS
 from .transcript import Transcript
-from .translate import Translator, spoken_en
+from .translate import Translator, correct_asr, spoken_en
 from .tts import make_voice
 
 Emit = Callable[..., None]  # emit(kind: str, **data)
@@ -122,7 +122,7 @@ class Engine:
             raise RuntimeError("模型未下载完整：" + "、".join(m.title for m in need) + "（请运行设置向导）")
 
         self.emit("status", text="加载翻译模型…")
-        tr = Translator(models.LLM[s.quality].path)
+        tr = Translator(models.LLM[s.quality].path, s.meeting_context)
         self._closers.append(tr.close)
 
         voice = player = None
@@ -186,6 +186,7 @@ class Engine:
                 break
             if kind == "glossary":
                 tr.reload_glossary()
+                tr.meeting = s.meeting_context
                 continue
             if kind == "voice":
                 self._swap_voice()
@@ -208,33 +209,39 @@ class Engine:
         s = self.s
         t0 = time.time()
         waited = t0 - utt.t_end  # time the sentence sat in the queue behind earlier work
+        utt.text = correct_asr(utt.text, tr.glossary, "me")
         out = tr.translate(utt.text, s.my_lang, s.their_lang, context=self._context("me", utt))
         t_tr = time.time() - t0
         if not out:
             return
         self._prev["me"] = (utt.text, out, utt.t_end)
-        latency = None
+        latency = voice_s = None
         if self._voice and not self.muted:  # muted: drop speech that was already queued
             text = spoken_en(out) if s.their_lang == "en" else out
             for chunk, sr in self._voice.stream(text, s.their_lang):
                 if latency is None:
                     latency = time.time() - utt.t_end
+                    voice_s = time.time() - t0 - t_tr
                 if not getattr(self._voice, "native_speed", False):
                     chunk = time_stretch(chunk, sr, self._voice.speed)
                 self._player.put(chunk, sr)
         self.log(f"[me] 排队 {waited:.1f}s 翻译 {t_tr:.2f}s 合成 {time.time() - t0 - t_tr:.2f}s: {out[:40]!r}")
         self.emit("me", src=utt.text, tgt=out, latency=latency or (time.time() - utt.t_end),
-                  translate_s=t_tr, passthrough=False)
+                  asr_s=utt.asr_s, queue_s=max(0.0, waited - utt.asr_s), translate_s=t_tr, voice_s=voice_s,
+                  passthrough=False)
         self._transcript.add("me", utt.text, out)
 
     def _do_them(self, tr: Translator, utt: Utterance) -> None:
         s = self.s
         src = utt.lang if utt.lang in LANGS else s.their_lang
         t0 = time.time()
+        utt.text = correct_asr(utt.text, tr.glossary, "them")
         out = tr.translate(utt.text, src, s.my_lang, subtitle=True, context=self._context("them", utt))
-        self.log(f"[them] 排队 {t0 - utt.t_end:.1f}s 翻译 {time.time() - t0:.2f}s: {out[:40]!r}")
+        t_tr = time.time() - t0
+        self.log(f"[them] 排队 {t0 - utt.t_end:.1f}s 翻译 {t_tr:.2f}s: {out[:40]!r}")
         self._prev["them"] = (utt.text, out, utt.t_end)
-        self.emit("them", src=utt.text, tgt=out, latency=time.time() - utt.t_end)
+        self.emit("them", src=utt.text, tgt=out, latency=time.time() - utt.t_end, asr_s=utt.asr_s,
+                  queue_s=max(0.0, t0 - utt.t_end - utt.asr_s), translate_s=t_tr)
         self._transcript.add("them", utt.text, out)
 
     # ------------------------------------------------------------ listener callbacks

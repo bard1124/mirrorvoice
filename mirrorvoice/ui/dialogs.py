@@ -7,7 +7,7 @@ import numpy as np
 import soundfile as sf
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
-                               QHeaderView, QLabel, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
+                               QHeaderView, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
                                QSlider, QTableWidget, QTableWidgetItem, QVBoxLayout)
 
 from ..config import Settings
@@ -17,24 +17,33 @@ from ..tts import REF_LANG, REF_TXT, REF_WAV
 
 
 class GlossaryDialog(QDialog):
-    """Fixed translations, written as  my language -> their language  (used both ways)."""
+    """Meeting background + fixed translations (my language -> their language, used both ways) and
+    the ways speech recognition tends to mishear each term (fixed before translating)."""
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, s: Settings, parent=None) -> None:
         super().__init__(parent)
+        self.s = s
         self.setWindowTitle("术语表")
-        self.resize(520, 420)
+        self.resize(720, 480)
         lay = QVBoxLayout(self)
-        lay.addWidget(QLabel("专有名词、产品名、人名的固定译法（两个方向都会用到）："))
-        self.table = QTableWidget(0, 2)
-        self.table.setHorizontalHeaderLabels(["我的说法（如：中文）", "对方语言的译法"])
+        lay.addWidget(QLabel("会议背景（可选）：一句话说明会议主题，帮助翻译选对专业用词。"))
+        self.meeting = QLineEdit(s.meeting_context)
+        self.meeting.setPlaceholderText("例如：支付系统的技术评审，会提到对账、清结算、风控规则")
+        self.meeting.setMaxLength(400)
+        lay.addWidget(self.meeting)
+        lay.addSpacing(6)
+        lay.addWidget(QLabel("专有名词、产品名、人名的固定译法（两个方向都会用到）。"
+                             "“识别常错成”填语音识别经常听错的写法，多个用 | 分隔，翻译前会自动纠正：", wordWrap=True))
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["我的说法（如：中文）", "对方语言的译法", "识别常错成（可选）"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        for a, b in load_glossary():
-            self._add(a, b)
-        self._add("", "")
+        for row in load_glossary():
+            self._add(*row)
+        self._add("", "", "")
         lay.addWidget(self.table)
         row = QHBoxLayout()
         add, rm = QPushButton("添加一行"), QPushButton("删除选中")
-        add.clicked.connect(lambda: self._add("", ""))
+        add.clicked.connect(lambda: self._add("", "", ""))
         rm.clicked.connect(lambda: [self.table.removeRow(r.row()) for r in
                                     sorted(self.table.selectionModel().selectedRows(), key=lambda i: -i.row())])
         row.addWidget(add)
@@ -46,18 +55,20 @@ class GlossaryDialog(QDialog):
         bb.rejected.connect(self.reject)
         lay.addWidget(bb)
 
-    def _add(self, a: str, b: str) -> None:
+    def _add(self, a: str, b: str, c: str = "") -> None:
         r = self.table.rowCount()
         self.table.insertRow(r)
-        self.table.setItem(r, 0, QTableWidgetItem(a))
-        self.table.setItem(r, 1, QTableWidgetItem(b))
+        for col, text in enumerate((a, b, c)):
+            self.table.setItem(r, col, QTableWidgetItem(text))
 
     def _save(self) -> None:
         rows = []
         for r in range(self.table.rowCount()):
-            a, b = self.table.item(r, 0), self.table.item(r, 1)
-            rows.append(((a.text() if a else ""), (b.text() if b else "")))
+            cells = [self.table.item(r, c) for c in range(3)]
+            rows.append(tuple(it.text() if it else "" for it in cells))
         save_glossary(rows)
+        self.s.meeting_context = self.meeting.text().strip()
+        self.s.save()
         self.accept()
 
 

@@ -58,12 +58,35 @@ def mac_restart_coreaudio() -> bool:
     return r.returncode == 0
 
 
-def mac_create_multi_output(listen_device: str) -> str:
+def _multi_helper() -> Path:
     helper = resource_dir() / "multi_output"
     if not helper.exists():
         helper = Path(__file__).resolve().parent.parent / "multi_output"
-    r = subprocess.run([str(helper), listen_device], capture_output=True, text=True)
+    return helper
+
+
+def mac_create_multi_output(listen_device: str) -> str:
+    r = subprocess.run([str(_multi_helper()), listen_device], capture_output=True, text=True)
     return (r.stdout or r.stderr).strip()
+
+
+def mac_multi_output_members() -> list[str]:
+    """Sub-devices of the meeting-speaker multi-output ([] if it does not exist or the helper is missing)."""
+    try:
+        r = subprocess.run([str(_multi_helper()), "--members"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    lines = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+    if r.returncode != 0 or any(ln.startswith(("exists:", "created:", "error:")) for ln in lines):
+        return []  # an old helper without --members
+    return lines
+
+
+def mac_rebuild_multi_output(listen_device: str) -> tuple[bool, str]:
+    """Replace the multi-output so meeting audio goes to `listen_device` + BlackHole 16ch."""
+    r = subprocess.run([str(_multi_helper()), "--rebuild", listen_device], capture_output=True, text=True,
+                       timeout=20)
+    return r.returncode == 0, (r.stdout or r.stderr).strip()
 
 
 # ------------------------------------------------------------------ Windows

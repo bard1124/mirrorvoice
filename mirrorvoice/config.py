@@ -200,7 +200,8 @@ class Settings:
     ptt_key: str = "alt_r"          # pynput key name held for push-to-talk
     mute_hotkey: str = "<ctrl>+<alt>+m"
     pause: float = 0.5              # silence that ends a sentence
-    quality: str = "fast"           # "fast" | "quality" (bigger models)
+    quality: str = "fast"           # "turbo" (smallest, weak machines) | "fast" | "quality" (bigger models)
+    meeting_context: str = ""       # free-text background of the meeting, helps the translator pick terms
     cpu_voice: str = "clone"        # Windows without CUDA voice: "clone" (Pocket TTS, English) | "standard" (Kokoro)
     gpu_voice: str = "auto"         # NVIDIA clone voice: "auto" (compute capability >= 8.0 only) | "cuda" | "cpu"
     gain: float = 1.0

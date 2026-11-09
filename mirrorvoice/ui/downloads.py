@@ -68,9 +68,9 @@ class DownloadManager(QObject):
         t0, base = time.time(), sum(done.values())
         last_emit = [0.0]
 
-        def on_progress(m: models.Model, d: int, t: int) -> None:
+        def on_progress(m: models.Model, d: int, t: int, title: str = "") -> None:
             done[m.title], sizes[m.title] = min(d, t), max(t, 1)
-            self.model_progress.emit(m.title, d, t)
+            self.model_progress.emit(title or m.title, d, t)  # title may carry （来源 …）/（解压中）
             now = time.time()
             if now - last_emit[0] > 0.3:
                 last_emit[0] = now
@@ -80,7 +80,7 @@ class DownloadManager(QObject):
 
         try:
             for m in todo:
-                models.download(m, lambda title, d, t, m=m: on_progress(m, d, t), self._cancel)
+                models.download(m, lambda title, d, t, m=m: on_progress(m, d, t, title), self._cancel)
             self.overall.emit(sum(sizes.values()), sum(sizes.values()), 0.0)
             self.running = False
             self.finished.emit("")

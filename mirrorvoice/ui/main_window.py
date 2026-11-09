@@ -15,9 +15,11 @@ from .. import device_hints as dh
 from ..audio import default_output_name, list_devices
 from ..config import IS_MAC, LOG_FILE, TRANSCRIPTS, Settings
 from ..engine import Engine
+from ..timing import LatencyStats, breakdown
 from ..hotkeys import PTT_KEYS
 from ..languages import LANGS
 from .bridge import Bridge
+from .checkup import MeetingGuideDialog, SelfTestDialog
 from .convo import ConversationWindow
 from .dialogs import GlossaryDialog, StyleDialog, VoiceDialog
 from .icons import app_icon
@@ -34,6 +36,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"镜声 {__version__}")
         self.resize(560, 820)
         self.bridge = Bridge()
+        self.lat_stats = LatencyStats()
         self.bridge.event.connect(self._on_event)
         self.engine = Engine(self.bridge.emit_event)
         self.setWindowIcon(app_icon())
@@ -134,8 +137,15 @@ class MainWindow(QMainWindow):
         tr_ = QHBoxLayout()
         tr_.addWidget(QLabel("声音设备", objectName="cardTitle"))
         tr_.addStretch()
+        self.test_btn = QPushButton("测试链路")
+        self.test_btn.setToolTip("不用开会，检查对方能否听到翻译、字幕能否出来（翻译运行时不可用）")
+        self.test_btn.clicked.connect(self._selftest)
+        guide = QPushButton("会议软件设置")
+        guide.clicked.connect(lambda: MeetingGuideDialog(self).exec())
         rb = QPushButton("刷新设备")
         rb.clicked.connect(self._load_devices)
+        tr_.addWidget(self.test_btn)
+        tr_.addWidget(guide)
         tr_.addWidget(rb)
         body.addLayout(tr_)
         f = QFormLayout()
@@ -150,6 +160,18 @@ class MainWindow(QMainWindow):
         self.dev_warn = QLabel(objectName="devWarn", wordWrap=True)  # problems with the current choice
         self.dev_warn.hide()
         body.addWidget(self.dev_warn)
+        # macOS: the meeting-speaker multi-output still points at the old headphones
+        self.multi_fix = QFrame(objectName="banner")
+        mh_ = QHBoxLayout(self.multi_fix)
+        mh_.setContentsMargins(12, 8, 8, 8)
+        self.multi_fix_text = QLabel(wordWrap=True)
+        self.multi_fix_btn = QPushButton()
+        self.multi_fix_btn.clicked.connect(self._rebuild_multi_output)
+        mh_.addWidget(self.multi_fix_text, 1)
+        mh_.addWidget(self.multi_fix_btn)
+        self.multi_fix.hide()
+        body.addWidget(self.multi_fix)
+        self._multi_target = ""
         cl.addWidget(g)
 
         g, v = card("功能")
@@ -174,10 +196,10 @@ class MainWindow(QMainWindow):
         oh = QHBoxLayout()
         oh.setSpacing(8)
         self.quality = QComboBox()
-        self.quality.addItem(f"快速（{models.llm_name('fast')}）", "fast")
-        self.quality.addItem(f"高质量（{models.llm_name('quality')}）", "quality")
-        for i, q in enumerate(("fast", "quality")):
-            self.quality.setItemData(i, models.summary(q), Qt.ItemDataRole.ToolTipRole)
+        for i, q in enumerate(models.QUALITIES):
+            self.quality.addItem(f"{models.QUALITY_LABEL[q]}（{models.llm_name(q)}）", q)
+            tip = models.summary(q) + ("\n速度约快一倍，但翻译质量明显较低，适合 8 GB 内存或老电脑" if q == "turbo" else "")
+            self.quality.setItemData(i, tip, Qt.ItemDataRole.ToolTipRole)
         self.display = QComboBox()
         self.display.addItem("图形界面", "ui")
         self.display.addItem("命令行风格", "cli")
@@ -235,6 +257,9 @@ class MainWindow(QMainWindow):
         th.addWidget(QLabel("对方", objectName="muted"))
         th.addWidget(self.lv_them, 1)
         tv.addLayout(th)
+        self.lat_label = QLabel(objectName="muted", wordWrap=True)  # rolling latency summary
+        self.lat_label.hide()
+        tv.addWidget(self.lat_label)
         self.log = QListWidget(objectName="log")
         self.log.setWordWrap(True)
         self.log.setMinimumHeight(200)
@@ -347,6 +372,37 @@ class MainWindow(QMainWindow):
         fill(self.mon, [("不监听", "")] + [(n, n) for n in dh.ordered("monitor", outs, ctx)], self.s.monitor)
         fill(self.src, [("不显示字幕", "")] + [(n, n) for n in dh.ordered("source", ins, ctx)], self.s.their_source)
         self._annotate_devices()
+        self._check_multi_output()
+
+    def _check_multi_output(self) -> None:
+        """macOS: offer to point the meeting-speaker device at the headphones in use now."""
+        if not IS_MAC or dh.kind(self.src.currentData() or "", "input") != "bh16":
+            self.multi_fix.hide()
+            return
+        from ..virtual_audio import mac_multi_output_members
+
+        target, why = dh.multi_output_fix(mac_multi_output_members(), self.mon.currentData() or "",
+                                          getattr(self, "_default_out", ""))
+        self._multi_target = target
+        if target:
+            self.multi_fix_text.setText("🎧 " + why)
+            self.multi_fix_btn.setText(f"改成“{target}”")
+        self.multi_fix.setVisible(bool(target))
+
+    def _rebuild_multi_output(self) -> None:
+        from ..virtual_audio import MULTI_OUTPUT_NAME, mac_rebuild_multi_output
+
+        target = self._multi_target
+        if not target:
+            return
+        ok, msg = mac_rebuild_multi_output(target)
+        if ok:
+            QMessageBox.information(self, "已更新会议扬声器",
+                                    f"“{MULTI_OUTPUT_NAME}”现在会把对方的声音送到“{target}”和字幕。\n\n"
+                                    "如果会议软件正在运行，请在它的设置里重新选一次扬声器。")
+        else:
+            QMessageBox.warning(self, "更新失败", msg)
+        self._load_devices()
 
     def _device_ctx(self, call_out: str, their_source: str) -> "dh.Context":
         return dh.Context(call_out or "", their_source or "", getattr(self, "_default_out", ""))
@@ -383,6 +439,8 @@ class MainWindow(QMainWindow):
     def _device_picked(self, role: str) -> None:
         """The user picked a device: explain right away if it breaks the setup."""
         self._annotate_devices()
+        if role in ("monitor", "source"):
+            self._check_multi_output()
         combo, title = next((c, t) for r, c, t in self._device_combos() if r == role)
         ctx = self._device_ctx(self.call.currentData(), self.src.currentData())
         h = dh.hint(role, combo.currentData() or "", ctx)
@@ -444,6 +502,7 @@ class MainWindow(QMainWindow):
         repolish(self.start_btn)
         self.status.setText("● 启动中…")
         self._status_state("busy")
+        self._check_multi_output()  # headphones may have changed since the panel opened
         self.engine.start(self.s)
         self.tray.refresh()
 
@@ -508,10 +567,14 @@ class MainWindow(QMainWindow):
             self.tray.refresh()
         elif kind == "me":
             tag = "我·原声" if d["passthrough"] else "我"
-            self._add(f"{tag}  {d['src']}\n→ {d['tgt']}   ({d['latency']:.1f}s)", "#1f6feb")
+            timing = f"{d['latency']:.1f}s" if d["passthrough"] else breakdown(d)
+            self._add(f"{tag}  {d['src']}\n→ {d['tgt']}   ({timing})", "#1f6feb")
+            self.lat_stats.add(d)
+            self.lat_label.setText(self.lat_stats.summary(self.s.quality))
+            self.lat_label.setVisible(bool(self.lat_label.text()))
             self.convo.add("me", d["src"], d["tgt"], d["passthrough"])
         elif kind == "them":
-            self._add(f"对方  {d['src']}\n→ {d['tgt']}   ({d['latency']:.1f}s)", "#8250df")
+            self._add(f"对方  {d['src']}\n→ {d['tgt']}   ({breakdown(d)})", "#8250df")
             self.overlay.show_text(d["tgt"], d["src"] if d["tgt"] != d["src"] else "")
             self.convo.add("them", d["src"], d["tgt"])
         elif kind == "mute":
@@ -545,8 +608,14 @@ class MainWindow(QMainWindow):
             self.log.takeItem(0)
         self.log.scrollToBottom()
 
+    def _selftest(self) -> None:
+        if self.engine.running:
+            QMessageBox.information(self, "请先停止", "测试链路需要用到同样的声音设备，请先点“停止”再测试。")
+            return
+        SelfTestDialog(self.s, self).exec()
+
     def _glossary(self) -> None:
-        if GlossaryDialog(self).exec():
+        if GlossaryDialog(self.s, self).exec():
             self.engine.reload_glossary()
 
     def _style(self) -> None:

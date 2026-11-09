@@ -189,3 +189,27 @@ def label(name: str, h: Hint) -> str:
 def ordered(role: str, names: list[str], ctx: Context) -> list[str]:
     """Recommended first, then normal, unsuited and conflicting; original order within each group."""
     return sorted(names, key=lambda n: min(hint(role, n, ctx).rank, UNSUITED))
+
+
+def multi_output_fix(members: list[str], monitor: str, default_out: str) -> tuple[str, str]:
+    """macOS: (headphones to rebuild the meeting-speaker multi-output with, why) — ('', '') when fine.
+
+    The multi-output sends meeting audio to fixed headphones + BlackHole 16ch. After switching
+    headphones (AirPods instead of the wired ones) you would no longer hear the other side.
+    `members` comes from `multi_output --members` ('missing:<uid>' for a disconnected device).
+    """
+    if not members:
+        return "", ""
+    listen = [m for m in members if "blackhole" not in m.lower()]
+    gone = [m for m in listen if m.startswith("missing:")]
+    present = [m for m in listen if not m.startswith("missing:")]
+
+    def physical(name: str) -> bool:  # headphones (or an unknown real device such as "Bose QC45"),
+        return bool(name) and kind(name, "output") in ("headphones", "other")  # never loudspeakers: echo
+
+    if physical(monitor) and not any(_same(monitor, m) for m in present):
+        now = f"“{present[0]}”" if present else "已断开的设备"
+        return monitor, (f"会议里对方的声音现在送到{now}，但你监听用的是“{monitor}”，开会时会听不到对方。")
+    if (gone or not present) and physical(default_out):
+        return default_out, "会议扬声器里的耳机已经断开，开会时会听不到对方。"
+    return "", ""

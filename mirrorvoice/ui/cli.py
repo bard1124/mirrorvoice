@@ -17,6 +17,7 @@ from .. import __version__, updater
 from ..config import PID_FILE, Settings
 from ..engine import Engine
 from ..languages import label
+from ..timing import LatencyStats, breakdown
 from .bridge import Bridge
 from .overlay import Overlay
 
@@ -32,6 +33,7 @@ def out(tag: str, msg: str, color: str = "") -> None:
 
 def run_cli(app: QApplication) -> int:
     s = Settings.load()
+    stats = LatencyStats()
     PID_FILE.write_text(str(os.getpid()))
     bridge = Bridge()
     engine = Engine(bridge.emit_event)
@@ -56,11 +58,14 @@ def run_cli(app: QApplication) -> int:
                 out("我·原声", d["src"], C["cyan"])
             else:
                 out("我", d["src"], C["cyan"])
-                out("→", f"{d['tgt']}   {C['dim']}({d['latency']:.1f}s){C['off']}", C["bold"])
+                out("→", f"{d['tgt']}   {C['dim']}({breakdown(d)}){C['off']}", C["bold"])
+                stats.add(d)
+                if len(stats.rows) % 10 == 0:
+                    out("延迟", stats.summary(s.quality), C["dim"])
         elif kind == "them":
             out("对方", d["src"], C["mag"])
             if d["tgt"] != d["src"]:
-                out("→", f"{d['tgt']}   {C['dim']}({d['latency']:.1f}s){C['off']}", C["bold"])
+                out("→", f"{d['tgt']}   {C['dim']}({breakdown(d)}){C['off']}", C["bold"])
             if overlay:
                 overlay.show_text(d["tgt"], d["src"] if d["tgt"] != d["src"] else "")
         elif kind == "mute":
