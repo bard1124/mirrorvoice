@@ -44,6 +44,7 @@ class MainWindow(QMainWindow):
         self.overlay.on_hidden = self._overlay_hidden
         self.convo = ConversationWindow(s)
         self.convo.on_closed = self._convo_closed
+        self._style_dlg = None  # the open 字幕样式 window (non-modal)
         from .downloads import DownloadManager
 
         self.dm = DownloadManager.get()
@@ -517,14 +518,13 @@ class MainWindow(QMainWindow):
             self.convo.show()
         self.s.convo_open = self.convo.isVisible()
         self.s.save()
-        self.tray.refresh()
+        self._floating_changed()
 
     def _convo_closed(self) -> None:
         if self.s.convo_open:
             self.s.convo_open = False
             self.s.save()
-        if hasattr(self, "tray"):
-            self.tray.refresh()
+        self._floating_changed()
 
     def toggle_overlay_pin(self) -> None:
         """Tray / 字幕样式: show or hide the subtitle bar right now. Shown by hand = pinned (stays
@@ -535,14 +535,20 @@ class MainWindow(QMainWindow):
             self.s.overlay_pinned = True
             self.s.save()
             self.overlay.show()
-        self.tray.refresh()
+        self._floating_changed()
 
     def _overlay_hidden(self) -> None:
         if self.s.overlay_pinned:
             self.s.overlay_pinned = False
             self.s.save()
+        self._floating_changed()
+
+    def _floating_changed(self) -> None:
+        """A floating window was shown or hidden (tray, its own ✕, 字幕样式): sync the toggles."""
         if hasattr(self, "tray"):
             self.tray.refresh()
+        if self._style_dlg is not None:
+            self._style_dlg.sync()
 
     def show_main(self) -> None:
         self.showNormal()
@@ -619,12 +625,26 @@ class MainWindow(QMainWindow):
             self.engine.reload_glossary()
 
     def _style(self) -> None:
-        self.overlay.show()
-        StyleDialog(self.s, lambda: (self.overlay.apply_style(), self.convo.apply_style()), self,
-                    toggle_bar=self.toggle_overlay_pin, toggle_convo=self.toggle_convo,
-                    bar_visible=self.overlay.isVisible).exec()
+        """Non-modal: a modal dialog blocked dragging and closing the bar / conversation window
+        while it was open."""
+        if self._style_dlg is not None:
+            self._style_dlg.raise_()
+            self._style_dlg.activateWindow()
+            return
+        self.overlay.show()  # preview
+        d = StyleDialog(self.s, lambda: (self.overlay.apply_style(), self.convo.apply_style()), self,
+                        toggle_bar=self.toggle_overlay_pin, toggle_convo=self.toggle_convo,
+                        bar_visible=self.overlay.isVisible)
+        d.setModal(False)
+        d.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        d.finished.connect(self._style_closed)
+        self._style_dlg = d
+        d.show()
+
+    def _style_closed(self, _result: int = 0) -> None:
+        self._style_dlg = None
         if not self.engine.running and not self.s.overlay_pinned:
-            self.overlay.hide()
+            self.overlay.hide()  # end of the preview
 
     def _voice(self) -> None:
         if VoiceDialog(self.s, self, on_speed=self.engine.set_voice_speed).exec():

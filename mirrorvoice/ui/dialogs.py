@@ -107,6 +107,10 @@ class StyleDialog(QDialog):
         form.addRow(bb)
         self._labels()
 
+    def sync(self) -> None:
+        """The bar or the conversation window was shown/hidden elsewhere (its own ✕, tray)."""
+        self._labels()
+
     def _labels(self) -> None:
         self.bar_btn.setText("隐藏字幕条" if self.bar_visible() else "显示字幕条（常驻屏幕）")
         self.convo_btn.setText("收起对话悬浮窗" if self.s.convo_open else "弹出对话悬浮窗")

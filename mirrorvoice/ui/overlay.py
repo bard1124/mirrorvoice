@@ -19,6 +19,7 @@ class Overlay(QWidget):
         self.s = settings
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)  # see ConversationWindow
         self.zh = QLabel(alignment=Qt.AlignmentFlag.AlignCenter, wordWrap=True)
         self.en = QLabel(alignment=Qt.AlignmentFlag.AlignCenter, wordWrap=True)
         self.zh.setStyleSheet("color: white; background: transparent;")

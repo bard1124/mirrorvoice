@@ -84,3 +84,50 @@ def test_checkup_dialogs_build(app, settings):
     assert d.now.text().startswith("❌")
     g = MeetingGuideDialog()
     assert g.findChild(QtWidgets.QTabWidget).count() == 4
+
+
+def _window(main_window, settings, monkeypatch):
+    monkeypatch.setattr(main_window, "list_devices", lambda kind: ["BlackHole 2ch", "BlackHole 16ch", "外置耳机"])
+    monkeypatch.setattr(main_window, "default_output_name", lambda: "外置耳机")
+    monkeypatch.setattr(main_window, "IS_MAC", False)
+    return main_window.MainWindow(settings)
+
+
+def test_floating_windows_stay_shown_when_the_app_is_in_the_background(app, settings, no_popups, monkeypatch):
+    """macOS hid them whenever 镜声 was not frontmost: in the meeting, and when opened from the menu-bar icon."""
+    from PySide6.QtCore import Qt
+
+    from mirrorvoice.ui import main_window
+
+    w = _window(main_window, settings, monkeypatch)
+    for f in (w.convo, w.overlay):
+        assert f.testAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)
+    w.tray.act_convo.trigger()
+    assert w.convo.isVisible() and w.tray.act_convo.isChecked() and settings.convo_open
+    w.tray.act_convo.trigger()
+    assert not w.convo.isVisible() and not w.tray.act_convo.isChecked() and not settings.convo_open
+    w.engine.stop()
+    w.close()
+
+
+def test_style_dialog_does_not_block_the_floating_windows(app, settings, no_popups, monkeypatch):
+    """A modal 字幕样式 window blocked dragging / closing the bar and the conversation window."""
+    from mirrorvoice.ui import main_window
+
+    w = _window(main_window, settings, monkeypatch)
+    w._style()
+    d = w._style_dlg
+    assert d is not None and d.isVisible() and not d.isModal()
+    assert QtWidgets.QApplication.activeModalWidget() is None
+    w._style()  # a second click brings the same window forward
+    assert w._style_dlg is d
+    d.convo_btn.click()
+    assert w.convo.isVisible() and d.convo_btn.text() == "收起对话悬浮窗"
+    w.convo.hide()  # its own ✕ while the style window is open: the button follows
+    assert d.convo_btn.text() == "弹出对话悬浮窗" and not w.tray.act_convo.isChecked()
+    w.overlay.hide()  # the bar's own ✕
+    assert d.bar_btn.text() == "显示字幕条（常驻屏幕）"
+    d.accept()
+    assert w._style_dlg is None and not w.overlay.isVisible()
+    w.engine.stop()
+    w.close()

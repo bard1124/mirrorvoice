@@ -27,6 +27,9 @@ class ConversationWindow(QWidget):
         self.s = settings
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        # macOS hides tool windows whenever the app is not frontmost — i.e. during the meeting, and
+        # right away when opened from the menu-bar icon (the app is in the background then)
+        self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)
         self.entries: deque[tuple[str, str, str, bool]] = deque(maxlen=MAX_ENTRIES)
         self.on_closed = None  # set by the control panel to keep its toggles in sync
 
