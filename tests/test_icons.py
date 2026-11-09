@@ -1,0 +1,40 @@
+"""macOS icons sit on Apple's grid (824 px tile on a 1024 canvas); the full-bleed one looked a size too big."""
+import pytest
+
+QtGui = pytest.importorskip("PySide6.QtGui")
+QtWidgets = pytest.importorskip("PySide6.QtWidgets")
+
+
+@pytest.fixture(scope="module")
+def app():
+    return QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+
+def _tile_bbox(img):
+    w = img.width()
+    xs = [x for x in range(0, w, 2) if any(img.pixelColor(x, y).alpha() > 200 for y in range(0, w, 8))]
+    ys = [y for y in range(0, w, 2) if any(img.pixelColor(x, y).alpha() > 200 for x in range(0, w, 8))]
+    return xs[0], ys[0], xs[-1], ys[-1]
+
+
+def test_macos_icon_follows_the_apple_grid(app):
+    from mirrorvoice.ui.icons import assets_dir
+
+    img = QtGui.QImage(str(assets_dir() / "icon-macos.png"))
+    assert (img.width(), img.height()) == (1024, 1024)
+    x0, y0, x1, y1 = _tile_bbox(img)
+    assert abs(x0 - 100) <= 4 and abs(y0 - 100) <= 4 and abs(x1 - 922) <= 4 and abs(y1 - 922) <= 4
+    assert img.pixelColor(512, 4).alpha() == 0  # transparent margin
+
+
+def test_dock_icon_is_the_padded_one_on_macos_only(app, monkeypatch):
+    from mirrorvoice.ui import icons
+
+    monkeypatch.setattr(icons, "_ICONS", {})
+    monkeypatch.setattr(icons, "IS_MAC", True)
+    mac = icons.app_icon().pixmap(256, 256).toImage()
+    monkeypatch.setattr(icons, "_ICONS", {})
+    monkeypatch.setattr(icons, "IS_MAC", False)
+    win = icons.app_icon().pixmap(256, 256).toImage()
+    assert mac.pixelColor(128, 2).alpha() == 0  # margin
+    assert win.pixelColor(128, 2).alpha() == 255  # Windows keeps the full-bleed tile

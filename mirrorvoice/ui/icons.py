@@ -6,10 +6,10 @@ from pathlib import Path
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 
-from ..config import FROZEN, resource_dir
+from ..config import FROZEN, IS_MAC, resource_dir
 
 STATE_COLORS = {"running": "#1a9e4b", "muted": "#d08700", "stopped": "#8a8a8a"}
-_ICON: QIcon | None = None
+_ICONS: dict[str, QIcon] = {}
 
 
 def assets_dir() -> Path:
@@ -19,18 +19,32 @@ def assets_dir() -> Path:
     return Path(__file__).resolve().parents[2] / "packaging" / "assets"
 
 
+def _load(name: str) -> QIcon:
+    if name not in _ICONS:
+        p = assets_dir() / name
+        _ICONS[name] = QIcon(str(p)) if p.exists() else QIcon()
+    return _ICONS[name]
+
+
+def brand_icon() -> QIcon:
+    """The full-bleed artwork: the logo inside the panel, the Windows taskbar and tray."""
+    return _load("icon.png")
+
+
 def app_icon() -> QIcon:
-    """The 同传 icon; empty QIcon (Qt default) if the asset is missing."""
-    global _ICON
-    if _ICON is None:
-        p = assets_dir() / "icon.png"
-        _ICON = QIcon(str(p)) if p.exists() else QIcon()
-    return _ICON
+    """Window / application icon. On macOS it becomes the Dock tile while the app runs, so it uses
+    the padded Apple-grid version (packaging/mac/make_icon.py); the full-bleed artwork looked one
+    size larger than every other icon in the Dock."""
+    if IS_MAC:
+        ic = _load("icon-macos.png")
+        if not ic.isNull():
+            return ic
+    return brand_icon()
 
 
 def tray_icon(state: str) -> QIcon:
     """App icon with a coloured dot (running / muted / stopped) in the bottom-right corner."""
-    pm = QPixmap(app_icon().pixmap(64, 64))
+    pm = QPixmap(brand_icon().pixmap(64, 64))
     if pm.isNull():
         pm = QPixmap(64, 64)
         pm.fill(Qt.GlobalColor.transparent)

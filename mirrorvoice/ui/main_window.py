@@ -22,7 +22,7 @@ from .bridge import Bridge
 from .checkup import MeetingGuideDialog, SelfTestDialog
 from .convo import ConversationWindow
 from .dialogs import GlossaryDialog, StyleDialog, VoiceDialog
-from .icons import app_icon
+from .icons import app_icon, brand_icon
 from .theme import card, repolish
 from .overlay import Overlay
 from .tray import Tray
@@ -316,7 +316,7 @@ class MainWindow(QMainWindow):
         v.setSpacing(4)
         brand = QHBoxLayout()
         logo = QLabel()
-        logo.setPixmap(app_icon().pixmap(36, 36))
+        logo.setPixmap(brand_icon().pixmap(36, 36))
         brand.addWidget(logo)
         bt = QVBoxLayout()
         bt.setSpacing(0)
