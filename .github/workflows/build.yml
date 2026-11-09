@@ -58,6 +58,8 @@ jobs:
           exit $code
       - name: Fetch llama-server + uv
         shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}  # API fallback when the release download link answers 504
         run: ./packaging/windows/fetch_vendor.ps1
       - name: PyInstaller
         run: pyinstaller --noconfirm --clean --log-level WARN --distpath dist --workpath build packaging/mirrorvoice.spec
