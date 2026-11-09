@@ -58,3 +58,21 @@ def home() -> Path:
     from mirrorvoice.config import HOME
 
     return HOME
+
+
+# Qt objects created by the UI tests (and the app-wide DownloadManager) would otherwise be torn down
+# after QApplication during interpreter shutdown, which aborted the CI runner (exit 134) although
+# every test had passed. Leave with pytest's own exit status once the report has been printed.
+_status = {"code": 0}
+
+
+def pytest_sessionfinish(session, exitstatus):
+    _status["code"] = int(exitstatus)
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_unconfigure(config):
+    if "PySide6.QtWidgets" in sys.modules:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(_status["code"])

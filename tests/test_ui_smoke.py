@@ -17,7 +17,9 @@ def app():
 def settings(home):
     from mirrorvoice.config import Settings
 
-    s = Settings(auto_check_update=False, setup_done=True)
+    # macOS device names on every OS: set the routing explicitly (Windows defaults to CABLE / loopback)
+    s = Settings(auto_check_update=False, setup_done=True, call_out="BlackHole 2ch", their_source="BlackHole 16ch",
+                 monitor="外置耳机")
     s.save()
     return s
 

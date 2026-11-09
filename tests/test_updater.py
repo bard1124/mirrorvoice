@@ -36,32 +36,35 @@ def test_cleanup_keeps_newer_and_fresh_files(home):
     assert sorted(p.name for p in up.iterdir()) == sorted([new, "fresh.dmg.part", "update.log"])
 
 
-def _release(tmp_path, tag, installer=b"installer-bytes", good_sum=True):
+def _release(http_files, tag, installer=b"installer-bytes", good_sum=True):
+    """A GitHub-like release feed served over local HTTP (file:// URLs differ per OS)."""
+    base, files, _ = http_files
     name = "MirrorVoice-9-macos-arm64.dmg" if sys.platform == "darwin" else "MirrorVoice-9-windows-x64-setup.exe"
-    (tmp_path / name).write_bytes(installer)
     digest = hashlib.sha256(installer if good_sum else b"other").hexdigest()
-    (tmp_path / "SHA256SUMS.txt").write_text(f"{digest}  {name}\n")
-    feed = {"tag_name": tag, "html_url": "https://example.invalid", "body": "notes", "assets": [
-        {"name": name, "browser_download_url": (tmp_path / name).as_uri(), "size": len(installer)},
-        {"name": "SHA256SUMS.txt", "browser_download_url": (tmp_path / "SHA256SUMS.txt").as_uri()}]}
-    (tmp_path / "feed.json").write_text(json.dumps(feed))
-    return (tmp_path / "feed.json").as_uri()
+    files[f"/{name}"] = installer
+    files["/SHA256SUMS.txt"] = f"{digest}  {name}\n".encode()
+    files["/feed.json"] = json.dumps({"tag_name": tag, "html_url": "https://example.invalid", "body": "notes",
+                                      "assets": [{"name": name, "browser_download_url": f"{base}/{name}",
+                                                  "size": len(installer)},
+                                                 {"name": "SHA256SUMS.txt",
+                                                  "browser_download_url": f"{base}/SHA256SUMS.txt"}]}).encode()
+    return f"{base}/feed.json"
 
 
 @pytest.mark.skipif(sys.platform not in ("darwin", "win32"), reason="installers exist for macOS / Windows only")
-def test_check_and_verified_download(tmp_path, monkeypatch):
-    monkeypatch.setattr(updater, "FEED", _release(tmp_path, "v" + bump(__version__)))
+def test_check_and_verified_download(http_files, monkeypatch):
+    monkeypatch.setattr(updater, "FEED", _release(http_files, "v" + bump(__version__)))
     rel = updater.check()
     assert rel and rel.version == bump(__version__) and len(rel.sha256) == 64
     path = updater.download(rel, lambda d, t: None)
     assert path.read_bytes() == b"installer-bytes"
-    monkeypatch.setattr(updater, "FEED", _release(tmp_path, "v" + __version__))
+    monkeypatch.setattr(updater, "FEED", _release(http_files, "v" + __version__))
     assert updater.check() is None  # not newer
 
 
 @pytest.mark.skipif(sys.platform not in ("darwin", "win32"), reason="installers exist for macOS / Windows only")
-def test_checksum_mismatch_is_rejected(tmp_path, monkeypatch):
-    monkeypatch.setattr(updater, "FEED", _release(tmp_path, "v" + bump(__version__), good_sum=False))
+def test_checksum_mismatch_is_rejected(http_files, monkeypatch):
+    monkeypatch.setattr(updater, "FEED", _release(http_files, "v" + bump(__version__), good_sum=False))
     rel = updater.check()
     with pytest.raises(RuntimeError, match="SHA256"):
         updater.download(rel, lambda d, t: None)
