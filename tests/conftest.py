@@ -22,6 +22,10 @@ class _RangeHandler(http.server.BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        self.server.accepts[self.path] = self.headers.get("Accept", "")
+        if self.path in self.server.fail:
+            self.send_error(504)
+            return
         data = self.server.files.get(self.path)
         if data is None:
             self.send_error(404)
@@ -47,6 +51,7 @@ def http_files():
     """A local HTTP server: returns (base_url, files dict, server) — put bytes into files['/name']."""
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _RangeHandler)
     srv.files, srv.hits, srv.ranges = {}, [], True
+    srv.fail, srv.accepts = set(), {}  # paths answered with 504; Accept header seen per path
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
     yield f"http://127.0.0.1:{srv.server_address[1]}", srv.files, srv

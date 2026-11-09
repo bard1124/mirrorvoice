@@ -43,10 +43,11 @@ def _release(http_files, tag, installer=b"installer-bytes", good_sum=True):
     digest = hashlib.sha256(installer if good_sum else b"other").hexdigest()
     files[f"/{name}"] = installer
     files["/SHA256SUMS.txt"] = f"{digest}  {name}\n".encode()
+    files["/api/assets/1"], files["/api/assets/2"] = files[f"/{name}"], files["/SHA256SUMS.txt"]
     files["/feed.json"] = json.dumps({"tag_name": tag, "html_url": "https://example.invalid", "body": "notes",
                                       "assets": [{"name": name, "browser_download_url": f"{base}/{name}",
-                                                  "size": len(installer)},
-                                                 {"name": "SHA256SUMS.txt",
+                                                  "url": f"{base}/api/assets/1", "size": len(installer)},
+                                                 {"name": "SHA256SUMS.txt", "url": f"{base}/api/assets/2",
                                                   "browser_download_url": f"{base}/SHA256SUMS.txt"}]}).encode()
     return f"{base}/feed.json"
 
@@ -68,6 +69,36 @@ def test_checksum_mismatch_is_rejected(http_files, monkeypatch):
     rel = updater.check()
     with pytest.raises(RuntimeError, match="SHA256"):
         updater.download(rel, lambda d, t: None)
+
+
+@pytest.mark.skipif(sys.platform not in ("darwin", "win32"), reason="installers exist for macOS / Windows only")
+def test_download_link_504_falls_back_to_api_endpoint(http_files, monkeypatch):
+    """Seen in the wild: github.com/…/releases/download/… answered 504 while api.github.com worked."""
+    _, files, srv = http_files
+    monkeypatch.setattr(updater, "FEED", _release(http_files, "v" + bump(__version__)))
+    srv.fail = {p for p in files if p != "/feed.json" and not p.startswith("/api/")}
+    rel = updater.check()
+    assert rel and len(rel.sha256) == 64  # SHA256SUMS.txt came from the API endpoint
+    assert updater.download(rel, lambda d, t: None).read_bytes() == b"installer-bytes"
+    assert srv.accepts["/api/assets/1"] == srv.accepts["/api/assets/2"] == "application/octet-stream"
+    assert srv.fail <= set(srv.accepts)  # the normal link was tried first
+
+
+@pytest.mark.skipif(sys.platform not in ("darwin", "win32"), reason="installers exist for macOS / Windows only")
+def test_normal_link_is_used_when_it_works(http_files, monkeypatch):
+    _, _, srv = http_files
+    monkeypatch.setattr(updater, "FEED", _release(http_files, "v" + bump(__version__)))
+    updater.download(updater.check(), lambda d, t: None)
+    assert not any(p.startswith("/api/") for p in srv.accepts)
+
+
+@pytest.mark.skipif(sys.platform not in ("darwin", "win32"), reason="installers exist for macOS / Windows only")
+def test_all_sources_failing_reports_the_download_link_error(http_files, monkeypatch):
+    _, files, srv = http_files
+    monkeypatch.setattr(updater, "FEED", _release(http_files, "v" + bump(__version__)))
+    srv.fail = {p for p in files if p != "/feed.json"}
+    with pytest.raises(Exception, match="504"):
+        updater.check()
 
 
 @pytest.mark.skipif(sys.platform != "darwin" or not shutil.which("hdiutil"), reason="macOS swap script")

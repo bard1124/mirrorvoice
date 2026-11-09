@@ -8,6 +8,8 @@ macOS:   a helper shell script waits for this process to exit, replaces the .app
          DMG, clears quarantine and relaunches.
 Windows: runs the Inno Setup installer silently; the installer relaunches the app.
 Models, voice sample, transcripts and settings live in the data folder and are untouched.
+Release files come from the normal download link (github.com/…/releases/download/…); when that
+fails (some networks get 504 there while api.github.com works) the API asset endpoint is used.
 Downloaded installers are removed after a successful macOS swap, and on every start any installer
 for this version or older (Windows cannot delete its running setup.exe) is cleaned up.
 """
@@ -46,6 +48,7 @@ class Release:
     asset_url: str
     size: int
     sha256: str  # "" if the release has no SHA256SUMS.txt
+    asset_api_url: str = ""  # API asset endpoint: fallback when the download link fails
 
 
 def _ver(v: str) -> tuple[int, ...]:
@@ -67,6 +70,34 @@ def _get(url: str, timeout: float = 15) -> bytes:
         return r.read()
 
 
+def _sources(url: str, api_url: str = "") -> list[tuple[str, dict]]:
+    """Where to fetch a release file: the download link first, then the API asset endpoint."""
+    out = [(url, {"User-Agent": UA["User-Agent"]})]
+    if api_url:
+        out.append((api_url, {"User-Agent": UA["User-Agent"], "Accept": "application/octet-stream"}))
+    return out
+
+
+def _open_first(sources: list[tuple[str, dict]], timeout: float):
+    """Response of the first source that answers; the first source's error if none does."""
+    first: Exception | None = None
+    for url, headers in sources:
+        try:
+            return urlopen(urllib.request.Request(url, headers=headers), timeout=timeout)
+        except Exception as e:  # noqa: BLE001 — HTTP 5xx/4xx, timeout, refused: try the next source
+            first = first or e
+    assert first is not None
+    raise first
+
+
+def _get_asset(asset: dict, timeout: float = 15) -> bytes:
+    url = asset["browser_download_url"]
+    if url.startswith("file://"):
+        return _get(url)
+    with _open_first(_sources(url, asset.get("url", "")), timeout) as r:
+        return r.read()
+
+
 def check() -> Release | None:
     """Newest release if it is newer than this build and has an installer for this platform."""
     data = json.loads(_get(FEED))
@@ -81,12 +112,13 @@ def check() -> Release | None:
     sha = ""
     sums = next((a for a in assets if a["name"] == "SHA256SUMS.txt"), None)
     if sums:
-        for line in _get(sums["browser_download_url"]).decode().splitlines():
+        for line in _get_asset(sums).decode().splitlines():
             parts = line.split()
             if len(parts) == 2 and parts[1].lstrip("*") == inst["name"]:
                 sha = parts[0].lower()
     return Release(tag.lstrip("v"), data.get("body", "") or "", data.get("html_url", ""),
-                   inst["name"], inst["browser_download_url"], int(inst.get("size", 0)), sha)
+                   inst["name"], inst["browser_download_url"], int(inst.get("size", 0)), sha,
+                   inst.get("url", ""))
 
 
 def check_async(cb: Callable[[Release | None, str], None]) -> None:
@@ -115,8 +147,7 @@ def download(rel: Release, progress: Callable[[int, int], None], cancel: threadi
                 done += len(chunk)
                 progress(done, total)
     else:
-        req = urllib.request.Request(rel.asset_url, headers={"User-Agent": UA["User-Agent"]})
-        with urlopen(req, timeout=60) as r, open(part, "wb") as fo:
+        with _open_first(_sources(rel.asset_url, rel.asset_api_url), 60) as r, open(part, "wb") as fo:
             total = int(r.headers.get("Content-Length") or rel.size or 0)
             done = 0
             while True:
