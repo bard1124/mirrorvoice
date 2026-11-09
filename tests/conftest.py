@@ -62,7 +62,8 @@ def home() -> Path:
 
 # Qt objects created by the UI tests (and the app-wide DownloadManager) would otherwise be torn down
 # after QApplication during interpreter shutdown, which aborted the CI runner (exit 134) although
-# every test had passed. Leave with pytest's own exit status once the report has been printed.
+# every test had passed (Windows: segfault 139 in DLL unload). Leave with pytest's own exit status once
+# the report has been printed.
 _status = {"code": 0}
 
 
@@ -73,7 +74,12 @@ def pytest_sessionfinish(session, exitstatus):
 @pytest.hookimpl(trylast=True)
 def pytest_unconfigure(config):
     if "PySide6.QtWidgets" in sys.modules:
-        print(f"[conftest] exit status {_status['code']}", file=sys.stderr)
         sys.stdout.flush()
         sys.stderr.flush()
+        if sys.platform == "win32":
+            # os._exit still runs DLL detach handlers on Windows, where Qt/audio DLLs segfaulted (exit 139)
+            import ctypes
+
+            k32 = ctypes.windll.kernel32
+            k32.TerminateProcess(k32.GetCurrentProcess(), _status["code"])
         os._exit(_status["code"])
