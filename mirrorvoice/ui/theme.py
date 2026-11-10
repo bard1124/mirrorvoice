@@ -5,7 +5,9 @@ sidebar on pale grey, white content, rounded cards, one accent colour for the pr
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QLibraryInfo, QLocale, Qt, QTranslator
+import sys
+
+from PySide6.QtCore import QLibraryInfo, QLocale, Qt, QTimer, QTranslator
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import (QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton,
                                QVBoxLayout, QWidget)
@@ -31,10 +33,14 @@ def _asset(name: str) -> str:
 CHEVRON = _asset("chevron-down.svg")
 CHECK = _asset("check-white.svg")
 
+# Only fonts that exist on this platform: a missing family made Qt search every alias at startup
+FONTS = '"PingFang SC", "Helvetica Neue"' if sys.platform == "darwin" else '"Microsoft YaHei UI", "Segoe UI"'
+
 QSS = f"""
-* {{ font-family: "PingFang SC", "Microsoft YaHei UI", "Segoe UI", "Helvetica Neue", sans-serif; font-size: 13px;
+* {{ font-family: {FONTS}; font-size: 13px;
      color: {TEXT}; }}
 QMainWindow, QDialog, QWidget#content, QMessageBox {{ background: {BG}; }}
+QLabel#toast {{ background: rgba(32,36,44,0.92); color: white; padding: 9px 16px; border-radius: 10px; }}
 QToolTip {{ background: {TEXT}; color: white; border: none; padding: 6px 8px; border-radius: 6px; }}
 
 QFrame#sidebar {{ background: {BG_SIDE}; border: none; border-right: 1px solid {LINE}; }}
@@ -195,13 +201,29 @@ class MessageDialog(QDialog):
 
 
 def _ask(kind):
-    def show(parent, title, text, buttons=_SB.Ok, default=_SB.NoButton):
+    def show(parent, title, text, buttons=None, default=_SB.NoButton):
+        if buttons is None:  # Qt's own defaults: a question is 是 / 否, the rest just 好的
+            buttons = (_SB.Yes | _SB.No) if kind == "question" else _SB.Ok
         d = MessageDialog(parent, kind, title, text, buttons, default)
         d.exec()
         if d.result_button == _SB.Cancel and not (buttons & _SB.Cancel):
             return _SB.No if buttons & _SB.No else _SB.Ok  # dismissed: map to the safe answer
         return d.result_button
     return staticmethod(show)
+
+
+def toast(parent, text: str, ms: int = 2500) -> None:
+    """A short confirmation over the top of `parent`'s window that goes away by itself."""
+    win = parent.window() if parent is not None else None
+    if win is None:
+        return
+    lb = QLabel(text, win, objectName="toast")
+    lb.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+    lb.adjustSize()
+    lb.move(max(8, (win.width() - lb.width()) // 2), 18)
+    lb.show()
+    lb.raise_()
+    QTimer.singleShot(ms, lb.deleteLater)
 
 
 def install_message_boxes() -> None:
