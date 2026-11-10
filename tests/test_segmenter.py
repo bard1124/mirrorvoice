@@ -205,3 +205,60 @@ def test_real_speech_is_cut_at_sentence_ends(tmp_path, monkeypatch):
     assert all(u.text[-1] in "。！？，,.!?" for u in out), [u.text for u in out]
     joined = "".join(u.text for u in out)
     assert "风控规则" in joined and "剩下的部分" in joined
+
+
+# ---------------------------------------------------------------- Qwen3-ASR for the words
+
+
+class _Words:
+    def __init__(self, text="更准的结果。", fail=False):
+        self.text, self.fail, self.calls = text, fail, []
+
+    def transcribe(self, seg, lang):
+        self.calls.append(lang)
+        if self.fail:
+            raise RuntimeError("metal")
+        return self.text
+
+
+def _emit_with(words, rec_lang="zh"):
+    out = []
+    seg = Segmenter("me", 0.5, out.append, lang="zh", alt="en", recognizer=_Rec(rec_lang, "森斯语音的结果"),
+                    vad=object(), words=words)
+    seg._emit(np.zeros(16000, np.float32), time.time())
+    return out
+
+
+def test_qwen_words_replace_sensevoice_text_in_the_detected_language():
+    w = _Words()
+    out = _emit_with(w, "en")
+    assert out[0].text == "更准的结果。" and out[0].lang == "en" and w.calls == ["en"]
+
+
+def test_qwen_failure_or_empty_keeps_sensevoice_text():
+    assert _emit_with(_Words(fail=True))[0].text == "森斯语音的结果"
+    assert _emit_with(_Words(text="。"))[0].text == "森斯语音的结果"
+
+
+def test_glossary_terms_become_hotwords():
+    from mirrorvoice.asr import glossary_hotwords
+
+    rows = [("万佛马", "OneForma", "万佛马|万福马"), ("对账", "reconciliation", ""), ("OneForma", "OneForma", "")]
+    assert glossary_hotwords(rows) == ["万佛马", "OneForma", "对账", "reconciliation"]
+
+
+def test_qwen_model_is_downloaded_only_when_chosen_on_macos(monkeypatch, home):
+    from mirrorvoice import models
+    from mirrorvoice.config import Settings
+
+    monkeypatch.setattr(models, "IS_MAC", True)
+    keys = lambda s: [m.key for m in models.required("fast", s)]  # noqa: E731
+    assert "asr_qwen" not in keys(Settings())
+    assert "asr_qwen" in keys(Settings(asr_local="qwen3"))
+    assert "asr_qwen" not in keys(Settings(asr_local="qwen3", asr_mode="online", asr_me=True, asr_them=True))
+    assert "asr_qwen" in keys(Settings(asr_local="qwen3", asr_mode="online", asr_me=True, asr_them=False))
+    assert models.qwen_asr_sides(Settings(asr_local="qwen3_them")) == {"them"}
+    assert models.qwen_asr_sides(Settings(asr_local="qwen3_them", subtitles=False)) == set()
+    assert models.qwen_asr_sides(Settings(asr_local="qwen3")) == {"me", "them"}
+    monkeypatch.setattr(models, "IS_MAC", False)
+    assert "asr_qwen" not in keys(Settings(asr_local="qwen3"))

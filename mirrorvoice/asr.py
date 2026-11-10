@@ -66,6 +66,39 @@ def make_vad(pause: float):
     return sherpa_onnx.VoiceActivityDetector(cfg, buffer_size_in_seconds=60)
 
 
+QWEN_LANG = {"zh": "Chinese", "en": "English", "ja": "Japanese", "ko": "Korean", "yue": "Cantonese"}
+
+
+class QwenASR:
+    """Qwen3-ASR (mlx-audio) for the words of a sentence; SenseVoice still finds cut points and the
+    language. One instance is shared by both listeners, one sentence at a time."""
+
+    def __init__(self, path) -> None:
+        from mlx_audio.stt import load
+
+        self.model = load(str(path))
+        self.lock = threading.Lock()
+        self.hotwords: list[str] = []
+        self.transcribe(np.zeros(ASR_SR // 2, np.float32), "zh")  # warm-up: the first call compiles kernels
+
+    def transcribe(self, seg: np.ndarray, lang: str) -> str:
+        with self.lock:
+            r = self.model.generate(seg.astype(np.float32), language=QWEN_LANG.get(lang),
+                                    hotwords=self.hotwords or None)
+        return (r.text or "").strip()
+
+
+def glossary_hotwords(rows) -> list[str]:
+    """Product names, people and terms from the glossary, both wordings, for the recognizer."""
+    words = []
+    for row in rows:
+        for w in row[:2]:
+            w = w.strip()
+            if w and len(w) <= 40 and w not in words:
+                words.append(w)
+    return words[:100]
+
+
 SENTENCE_END = set("。！？!?；;")
 CLAUSE_END = set("，,、：:")
 
@@ -112,8 +145,10 @@ class Segmenter:
 
     def __init__(self, name: str, pause: float, on_utt: Callable[[Utterance], None],
                  lang: str = "", alt: str = "", log: Callable[[str], None] | None = None,
-                 on_level: Callable[[str, float], None] | None = None, recognizer=None, vad=None) -> None:
+                 on_level: Callable[[str, float], None] | None = None, recognizer=None, vad=None,
+                 words: "QwenASR | None" = None) -> None:
         self.name, self.pause, self.on_utt = name, pause, on_utt
+        self.words = words  # optional better recognizer for the final text of each sentence
         self.lang, self.alt = lang, alt
         self.log = log or (lambda *_: None)
         self.on_level = on_level or (lambda *_: None)
@@ -146,6 +181,13 @@ class Segmenter:
 
     def _emit(self, seg: np.ndarray, t_end: float, d: Decoded | None = None) -> None:
         d = d or self.recognize(seg)
+        if self.words is not None and re.sub(r"[\W_]+", "", d.text):
+            try:
+                better = self.words.transcribe(seg, d.lang)
+                if re.sub(r"[\W_]+", "", better):
+                    d = Decoded(better, d.lang, d.tokens, d.times)
+            except Exception as e:  # noqa: BLE001 — keep SenseVoice's words
+                self.log(f"[{self.name}] Qwen3-ASR 失败，用 SenseVoice 结果：{e}")
         self.count += 1
         self.log(f"[{self.name}] segment {len(seg)/ASR_SR:.2f}s lang={d.lang} text={d.text!r}")
         if re.sub(r"[\W_]+", "", d.text):
@@ -261,7 +303,7 @@ class Listener:
                  gate: Callable[[], bool] | None = None,
                  log: Callable[[str], None] | None = None, alt: str = "", online_key: str = "",
                  on_partial: Callable[[str], None] | None = None,
-                 on_notice: Callable[[str], None] | None = None) -> None:
+                 on_notice: Callable[[str], None] | None = None, words: "QwenASR | None" = None) -> None:
         """language: the language expected from this source ("auto" = any); alt: the other
         side's language, accepted as detected (passthrough / same-language subtitles).
         online_key: 阿里云百炼 key → streaming online recognition (online_asr.py) instead of
@@ -274,9 +316,9 @@ class Listener:
             from .online_asr import OnlineSegmenter
 
             self.seg = OnlineSegmenter(name, pause, on_utt, online_key, lang, alt, self.log, on_level,
-                                       on_partial, on_notice, detector=Recognizer("auto"))
+                                       on_partial, on_notice, detector=Recognizer("auto"), words=words)
         else:
-            self.seg = Segmenter(name, pause, on_utt, lang, alt, self.log, on_level)
+            self.seg = Segmenter(name, pause, on_utt, lang, alt, self.log, on_level, words=words)
         self.q: queue.Queue[np.ndarray] = queue.Queue()
         self.source = source
         self.capture = Capture(source, self.q.put, self.WINDOW)

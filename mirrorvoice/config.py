@@ -212,6 +212,7 @@ class Settings:
     asr_me: bool = True             # online recognition for my speech …
     asr_them: bool = True           # … and for the other side's (live subtitles)
     asr_consent: bool = False       # the user confirmed that audio goes to the service
+    asr_local: str = "sensevoice"   # local recognition: "sensevoice" | "qwen3_them" | "qwen3" (macOS, Qwen3-ASR 1.7B)
     cpu_voice: str = "clone"        # Windows without CUDA voice: "clone" (Pocket TTS, English) | "standard" (Kokoro)
     gpu_voice: str = "auto"         # NVIDIA clone voice: "auto" (compute capability >= 8.0 only) | "cuda" | "cpu"
     gain: float = 1.0

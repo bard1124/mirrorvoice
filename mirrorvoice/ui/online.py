@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDialog, QDia
                                QWidget)
 
 from .. import keystore, models, providers
-from ..config import Settings
+from ..config import IS_MAC, Settings
 from ..online_llm import OnlineChat, TranslateError, list_models
 from ..translate import Translator
 
@@ -46,7 +46,7 @@ def status_text(s: Settings) -> str:
 def asr_status_text(s: Settings) -> str:
     """' · 识别：在线' when online recognition is on, else ''."""
     if s.asr_mode != "online":
-        return ""
+        return {"qwen3": " · 识别：Qwen3-ASR", "qwen3_them": " · 字幕识别：Qwen3-ASR"}.get(s.asr_local, "") if IS_MAC else ""
     sides = "、".join(w for w, on in (("我", s.asr_me), ("对方", s.asr_them)) if on)
     return f" · 识别：在线（{sides}）"
 
@@ -167,6 +167,19 @@ class OnlineModelDialog(QDialog):
         grp.addButton(self.asr_online)
         (self.asr_online if self.s.asr_mode == "online" else self.asr_local).setChecked(True)
         lay.addWidget(self.asr_local)
+        self.local_model = QComboBox()
+        self.local_model.addItem("SenseVoice（快，占内存少）", "sensevoice")
+        self.local_model.addItem("Qwen3-ASR 1.7B：只用于对方字幕（推荐，你的发声不变慢）", "qwen3_them")
+        self.local_model.addItem("Qwen3-ASR 1.7B：双方都用（最准，你的发声每句慢 1.5–3 秒）", "qwen3")
+        self.local_model.setToolTip("Qwen3-ASR 对英文和中英夹杂明显更准；需下载 2.4 GB，运行时多占约 2.4 GB 内存")
+        self.local_model.setCurrentIndex(max(0, self.local_model.findData(self.s.asr_local)))
+        self.local_row = QWidget()
+        lr = QHBoxLayout(self.local_row)
+        lr.setContentsMargins(22, 0, 0, 0)
+        lr.addWidget(QLabel("本机识别模型"))
+        lr.addWidget(self.local_model, 1)
+        self.local_row.setVisible(IS_MAC)  # Qwen3-ASR runs on MLX (Apple Silicon) only
+        lay.addWidget(self.local_row)
         lay.addWidget(self.asr_online)
         self.asr_box = QWidget()
         f = QFormLayout(self.asr_box)
@@ -430,6 +443,7 @@ class OnlineModelDialog(QDialog):
             if k:
                 keystore.save(p, k)
         self.s.asr_mode = "online" if asr_online else "local"
+        self.s.asr_local = self.local_model.currentData() if IS_MAC else "sensevoice"
         self.s.asr_me, self.s.asr_them = self.asr_me.isChecked(), self.asr_them.isChecked()
         self.s.llm_mode = "online" if online else "local"
         self.s.llm_provider, self.s.llm_model = pid, model

@@ -229,7 +229,9 @@ class OnlineSegmenter:
                  on_level: Callable[[str, float], None] | None = None,
                  on_partial: Callable[[str], None] | None = None,
                  on_notice: Callable[[str], None] | None = None,
-                 stream: DashScopeStream | None = None, vad=None, detector=None, url: str = URL) -> None:
+                 stream: DashScopeStream | None = None, vad=None, detector=None, url: str = URL,
+                 words=None) -> None:
+        self.words = words  # Qwen3-ASR for the local fallback, when chosen
         self.name, self.pause, self.on_utt = name, pause, on_utt
         self.lang, self.alt = lang, alt
         self.log = log or (lambda *_: None)
@@ -335,7 +337,8 @@ class OnlineSegmenter:
         if self.fails >= FAILS_TO_FALL_BACK and self.local is None:
             self.stream.close()
             self.on_notice(f"在线语音识别不可用（{e}），本次改用本机识别")
-            self.local = Segmenter(self.name, self.pause, self.on_utt, self.lang, self.alt, self.log, self.on_level)
+            self.local = Segmenter(self.name, self.pause, self.on_utt, self.lang, self.alt, self.log, self.on_level,
+                                   words=self.words)
 
     # ---------------------------------------------------------------- feeding (listener thread)
     def flush(self) -> None:

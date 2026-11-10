@@ -268,3 +268,18 @@ def test_online_recognition_needs_a_side_and_a_key(app, settings, no_popups):
     d.asr_them.setChecked(False)
     d._save()
     assert "至少选一方" in no_popups[-1][1][1]
+
+
+def test_local_recognizer_choice_is_saved(app, settings, monkeypatch):
+    from mirrorvoice.ui import online
+
+    monkeypatch.setattr(online, "IS_MAC", True)
+    d = online.OnlineModelDialog(settings)
+    d.local_model.setCurrentIndex(d.local_model.findData("qwen3"))
+    d._save()
+    assert settings.asr_local == "qwen3" and "Qwen3-ASR" in online.asr_status_text(settings)
+    monkeypatch.setattr(online, "IS_MAC", False)
+    d = online.OnlineModelDialog(settings)
+    assert d.local_row.isHidden()
+    d._save()
+    assert settings.asr_local == "sensevoice"  # Windows: SenseVoice only

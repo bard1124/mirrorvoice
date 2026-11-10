@@ -73,6 +73,7 @@ class Engine:
         self._player = self._voice = self._transcript = self._me = None
         self._ready = False
         self._interim_tr, self._interim_busy, self._interim_at, self._them_gen = None, False, 0.0, 0
+        self._words = None
         self._prev = {"me": None, "them": None}  # (source, translation, t_end) of the last part
         self._hist = {"me": deque(maxlen=self.HISTORY_N + 1), "them": deque(maxlen=self.HISTORY_N + 1)}
         # A fresh queue per session: the previous worker may still be busy (and the previous
@@ -192,11 +193,20 @@ class Engine:
         # expected language fixed (Mandarin was misheard as Cantonese / Japanese); theirs is still
         # recognised, for passthrough
         self._tr_them = tr_them
+        words, sides = None, models.qwen_asr_sides(s)
+        if sides:
+            self.emit("status", text="加载语音识别 Qwen3-ASR…")
+            from .asr import QwenASR, glossary_hotwords
+
+            words = QwenASR(models.ASR_QWEN.path)
+            words.hotwords = glossary_hotwords(tr.glossary)
+        self._words = words
         self._interim_tr = Translator(tr_them.backend.online, s.meeting_context) \
             if isinstance(tr_them.backend, FailoverChat) else None
         me = Listener("me", s.mic, s.my_lang, s.pause, self._on_me, self._on_level, self._gate, self.log,
                       alt=s.their_lang, online_key=self._asr_key(s, "me"),
-                      on_partial=lambda t: self._on_partial("me", t), on_notice=self._notice)
+                      on_partial=lambda t: self._on_partial("me", t), on_notice=self._notice,
+                      words=words if "me" in sides else None)
         me.start()
         self._closers.append(me.close)
         self._me = me
@@ -206,7 +216,8 @@ class Engine:
                 them = Listener("them", s.their_source, s.their_lang, s.pause, self._on_them,
                                 self._on_level, self._them_gate, self.log, alt=s.my_lang,
                                 online_key=self._asr_key(s, "them"),
-                                on_partial=lambda t: self._on_partial("them", t), on_notice=self._notice)
+                                on_partial=lambda t: self._on_partial("them", t), on_notice=self._notice,
+                                words=words if "them" in sides else None)
                 them.start()
                 self._closers.append(them.close)
             except Exception as e:  # noqa: BLE001 — subtitles are optional
@@ -233,6 +244,10 @@ class Engine:
                 for t in (tr, tr_them):
                     t.reload_glossary()
                     t.meeting = s.meeting_context
+                if self._words is not None:
+                    from .asr import glossary_hotwords
+
+                    self._words.hotwords = glossary_hotwords(tr.glossary)
                 continue
             if kind == "voice":
                 self._swap_voice()
@@ -251,13 +266,12 @@ class Engine:
         def local():
             if "b" not in shared:
                 # later as the online fallback: a notice, the status line already says 运行中
-                self.emit("notice" if self._ready else "status", text="加载本地翻译模型…")
+                self.emit("notice" if self._ready else "status", text="加载翻译模型…")
                 shared["b"] = local_backend(local_path)
                 self._closers.append(shared["b"].close)
             return shared["b"]
 
         if s.llm_mode != "online":
-            self.emit("status", text="加载翻译模型…")
             t = Translator(local(), s.meeting_context)
             return t, t
         self.emit("status", text="连接在线翻译…")

@@ -54,6 +54,10 @@ ASR = Model("asr", "语音识别 SenseVoice", "sherpa-onnx-sense-voice-zh-en-ja-
             approx_mb=230)
 VAD = Model("vad", "断句 Silero VAD", "silero_vad.onnx", url=f"{SHERPA}/asr-models/silero_vad.onnx",
             approx_mb=1)
+# Optional, macOS: more accurate words (English, mixed Chinese/English) than SenseVoice, which still
+# finds the cut points and the language. ~2.4 GB of memory while running, ~0.5 s more per sentence.
+ASR_QWEN = Model("asr_qwen", "语音识别 Qwen3-ASR 1.7B (MLX)", "Qwen3-ASR-1.7B-8bit",
+                 modelscope="mlx-community/Qwen3-ASR-1.7B-8bit", approx_mb=2354)
 
 if IS_MAC:
     LLM = {
@@ -121,12 +125,30 @@ def needs_local_llm(s) -> bool:
     return bool(s.subtitles and s.their_source and not s.online_their)
 
 
+def qwen_asr_sides(s) -> set[str]:
+    """Which sides ("me", "them") recognise locally with Qwen3-ASR (macOS; asr_local "qwen3" = both,
+    "qwen3_them" = the subtitles only — it adds 1.5–3 s per sentence, too slow for my own voice)."""
+    if not IS_MAC or s.asr_local not in ("qwen3", "qwen3_them"):
+        return set()
+    sides = set()
+    if s.asr_local == "qwen3" and not (s.asr_mode == "online" and s.asr_me):
+        sides.add("me")
+    if s.subtitles and s.their_source and not (s.asr_mode == "online" and s.asr_them):
+        sides.add("them")
+    return sides
+
+
+def uses_qwen_asr(s) -> bool:
+    return bool(qwen_asr_sides(s))
+
+
 def required(quality: str, s=None) -> list[Model]:
     from .config import Settings
 
     s = s or Settings.load()
     tts = {"pocket": POCKET, "kokoro": KOKORO}.get(voice_backend(s), TTS_CLONE[quality])
-    return [VAD, ASR] + ([LLM[quality]] if needs_local_llm(s) else []) + [tts]
+    return ([VAD, ASR] + ([ASR_QWEN] if uses_qwen_asr(s) else []) + ([LLM[quality]] if needs_local_llm(s) else [])
+            + [tts])
 
 
 def llm_name(quality: str) -> str:

@@ -80,6 +80,8 @@ Open "在线模型" (Online models) in the sidebar, or "use online translation" 
 - Long speech without pauses is split at a sentence end that stayed the same in two partial results in a row, instead of a hard cut every 5 s.
 - After 3 failures in a row (or an invalid key) the rest of the meeting uses local recognition.
 
+On a Mac, local recognition can use **Qwen3-ASR 1.7B** ("在线模型" → "语音识别" → local model): clearly better on English and mixed Chinese/English (a noisy mixed sentence: 36 % → 2 % errors); a 2.4 GB download, about 2.4 GB more memory while running and 1.5–3 s more per sentence, so "subtitles only" is recommended. Glossary terms are passed as hotwords.
+
 Local recognition improved too: when long speech has to be cut early, the cut moves back to the last full stop or comma and the rest joins the next sentence; Mandarin misheard as Cantonese or Japanese is recognised again in your language; the translator gets the same speaker's last three turns as context.
 
 ### Company networks / certificate errors

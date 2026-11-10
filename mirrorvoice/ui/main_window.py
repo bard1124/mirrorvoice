@@ -649,14 +649,15 @@ class MainWindow(QMainWindow):
 
         self._save()
         before = (self.s.llm_mode, self.s.llm_provider, self.s.llm_model, self.s.llm_base_url, self.s.online_their,
-                  self.s.asr_mode, self.s.asr_me, self.s.asr_them)
+                  self.s.asr_mode, self.s.asr_me, self.s.asr_them, self.s.asr_local)
         if not OnlineModelDialog(self.s, self).exec():
             return
         self._refresh_llm_label()
         if hasattr(self, "banner"):
             self._refresh_banner()
         changed = before != (self.s.llm_mode, self.s.llm_provider, self.s.llm_model, self.s.llm_base_url,
-                             self.s.online_their, self.s.asr_mode, self.s.asr_me, self.s.asr_them)
+                             self.s.online_their, self.s.asr_mode, self.s.asr_me, self.s.asr_them,
+                             self.s.asr_local)
         if changed and self.engine.running:
             self.status.setText("● 运行中 · 翻译设置已保存，点“停止”再“开始”后生效")
             self._status_state("busy")
