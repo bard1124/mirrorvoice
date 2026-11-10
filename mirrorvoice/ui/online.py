@@ -12,7 +12,8 @@ import time
 from PySide6.QtCore import QObject, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
-                               QLabel, QLineEdit, QMessageBox, QPushButton, QRadioButton, QVBoxLayout, QWidget)
+                               QLabel, QLineEdit, QMessageBox, QPushButton, QRadioButton, QTabWidget, QVBoxLayout,
+                               QWidget)
 
 from .. import keystore, models, providers
 from ..config import Settings
@@ -42,6 +43,14 @@ def status_text(s: Settings) -> str:
     return "翻译：在线 · " + providers.label(s.llm_provider, s.llm_model or providers.get(s.llm_provider).default_model)
 
 
+def asr_status_text(s: Settings) -> str:
+    """' · 识别：在线' when online recognition is on, else ''."""
+    if s.asr_mode != "online":
+        return ""
+    sides = "、".join(w for w, on in (("我", s.asr_me), ("对方", s.asr_them)) if on)
+    return f" · 识别：在线（{sides}）"
+
+
 class OnlineModelDialog(QDialog):
     def __init__(self, s: Settings, parent=None) -> None:
         super().__init__(parent)
@@ -53,7 +62,12 @@ class OnlineModelDialog(QDialog):
         self.relay = _Relay()
         self.relay.done.connect(self._done)
 
-        lay = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        self.tabs = QTabWidget()
+        outer.addWidget(self.tabs)
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        self.tabs.addTab(page, "翻译")
         lay.addWidget(QLabel("<b>翻译用哪个模型</b>"))
         self.rb_local = QRadioButton(f"本地模型（离线运行，需要下载 {models.llm_name(s.quality)}）")
         self.rb_online = QRadioButton("在线模型（填服务商的 API key，不用下载翻译模型，翻译更准）")
@@ -127,17 +141,112 @@ class OnlineModelDialog(QDialog):
         row.addWidget(self.test_out, 1)
         f.addRow("", row)
         lay.addWidget(self.box)
+        lay.addStretch()
+        self.tabs.addTab(self._asr_page(), "语音识别")
+        self.tabs.currentChanged.connect(self._fit_height)
 
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         bb.accepted.connect(self._save)
         bb.rejected.connect(self.reject)
-        lay.addWidget(bb)
+        outer.addWidget(bb)
 
         self.provider.currentIndexChanged.connect(self._provider_changed)
         self.rb_online.toggled.connect(self._mode_changed)
         self.url.textChanged.connect(self._refresh_hints)
         self._provider_changed(initial=True)
         self._mode_changed()
+
+    def _asr_page(self) -> QWidget:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.addWidget(QLabel("<b>语音识别用哪个</b>"))
+        self.asr_local = QRadioButton("本机识别（SenseVoice，离线运行）")
+        self.asr_online = QRadioButton("在线流式识别（阿里云百炼 Fun-ASR：字幕边说边出，长句按句号自动分段）")
+        grp = QButtonGroup(self)
+        grp.addButton(self.asr_local)
+        grp.addButton(self.asr_online)
+        (self.asr_online if self.s.asr_mode == "online" else self.asr_local).setChecked(True)
+        lay.addWidget(self.asr_local)
+        lay.addWidget(self.asr_online)
+        self.asr_box = QWidget()
+        f = QFormLayout(self.asr_box)
+        f.setContentsMargins(22, 6, 0, 0)
+        self.asr_key = QLineEdit()
+        self.asr_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.asr_key.textEdited.connect(lambda t: (self._typed.__setitem__("dashscope", t.strip()),
+                                                   self._refresh_asr()))
+        link = QPushButton("获取 API key", objectName="link")
+        link.setCursor(Qt.CursorShape.PointingHandCursor)
+        link.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(providers.get("dashscope").key_url)))
+        row = QHBoxLayout()
+        row.addWidget(self.asr_key, 1)
+        row.addWidget(link)
+        f.addRow("API key", row)
+        self.asr_key_hint = QLabel(objectName="muted")
+        f.addRow("", self.asr_key_hint)
+        self.asr_me = QCheckBox("我说的话", checked=self.s.asr_me)
+        self.asr_them = QCheckBox("对方说的话（字幕边说边出）", checked=self.s.asr_them)
+        row = QHBoxLayout()
+        row.addWidget(self.asr_me)
+        row.addWidget(self.asr_them)
+        row.addStretch()
+        f.addRow("用在", row)
+        f.addRow("", QLabel("只在有人说话时上传声音，按识别的音频时长计费。\n"
+                            "对方说话时字幕先显示识别出的原文，整句说完再换成译文；\n"
+                            "用在线翻译时，长句说到一半会先给出临时译文。", objectName="muted"))
+        self.asr_test = QPushButton("测试连接")
+        self.asr_test.clicked.connect(self._test_asr)
+        self.asr_out = QLabel(wordWrap=True)
+        row = QHBoxLayout()
+        row.addWidget(self.asr_test)
+        row.addWidget(self.asr_out, 1)
+        f.addRow("", row)
+        lay.addWidget(self.asr_box)
+        lay.addStretch()
+        self.asr_online.toggled.connect(self._refresh_asr)
+        self.asr_online.toggled.connect(self._fit_height)
+        self._refresh_asr()
+        return page
+
+    def _fit_height(self, *_a) -> None:
+        self.layout().activate()
+        self.resize(self.width(), self.sizeHint().height())
+
+    def _asr_key_value(self) -> str:
+        return self._typed.get("dashscope") or keystore.get("dashscope")
+
+    def _refresh_asr(self, _on: bool = False) -> None:
+        self.asr_box.setVisible(self.asr_online.isChecked())
+        saved = keystore.get("dashscope")
+        same = "与“通义千问（阿里云百炼）”翻译共用同一个 key\n"
+        self.asr_key_hint.setText(f"{same}已保存在{keystore.where()}（{keystore.mask(saved)}），留空表示不修改"
+                                  if saved else f"{same}保存在{keystore.where()}，不会写进设置文件")
+        if self._pid() == "dashscope" and self.key.text() != self._typed.get("dashscope", ""):
+            self.key.setText(self._typed.get("dashscope", ""))  # the translation tab shows the same key
+
+    def _test_asr(self) -> None:
+        key = self._asr_key_value()
+        if not key:
+            self.asr_out.setText("✗ 先填 API key")
+            return
+        self.asr_out.setText("连接中…")
+        self.asr_test.setEnabled(False)
+
+        def go():
+            from ..online_asr import DashScopeStream, StreamError
+
+            t0 = time.monotonic()
+            st = DashScopeStream(key, self.s.my_lang, lambda *a: None, lambda e: None)
+            try:
+                st.start_task()
+                st.finish_task()
+                res = ("ok", time.monotonic() - t0)
+            except StreamError as e:
+                res = ("err", str(e))
+            finally:
+                st.close()
+            self.relay.done.emit("asr", res)
+        threading.Thread(target=go, daemon=True, name="asr-test").start()
 
     # ---------------------------------------------------------------- state
     def _pid(self) -> str:
@@ -248,6 +357,11 @@ class OnlineModelDialog(QDialog):
         self._run("models", lambda: list_models(url, key))
 
     def _done(self, what: str, res) -> None:
+        if what == "asr":
+            self.asr_test.setEnabled(True)
+            kind, val = res
+            self.asr_out.setText(f"✓ 连接成功，{val:.2f} 秒" if kind == "ok" else f"✗ {val}")
+            return
         self._busy = False
         self.test_btn.setEnabled(True)
         self.fetch.setEnabled(True)
@@ -291,9 +405,32 @@ class OnlineModelDialog(QDialog):
                 if r != QMessageBox.StandardButton.Yes:
                     return
                 self.s.online_consent = True
+        asr_online = self.asr_online.isChecked()
+        if asr_online:
+            if not (self.asr_me.isChecked() or self.asr_them.isChecked()):
+                QMessageBox.warning(self, "在线语音识别", "请至少选一方（我说的话 / 对方说的话）。")
+                return
+            if not self._asr_key_value():
+                QMessageBox.warning(self, "在线语音识别", "请填写阿里云百炼的 API key。")
+                return
+            newly = (not self.s.asr_consent or (self.asr_me.isChecked() and not self.s.asr_me)
+                     or (self.asr_them.isChecked() and not self.s.asr_them) or self.s.asr_mode != "online")
+            if newly:
+                who = "、".join(w for w, on in (("你的声音", self.asr_me.isChecked()),
+                                                ("对方的声音", self.asr_them.isChecked())) if on)
+                r = QMessageBox.question(
+                    self, "开启在线语音识别",
+                    f"开启后，{who}会在有人说话时实时上传到「阿里云百炼」识别成文字（只上传说话的片段）。\n\n"
+                    "上传的是声音本身；服务商如何保存这些内容，以它的隐私政策为准。",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Yes)
+                if r != QMessageBox.StandardButton.Yes:
+                    return
+                self.s.asr_consent = True
         for p, k in self._typed.items():
             if k:
                 keystore.save(p, k)
+        self.s.asr_mode = "online" if asr_online else "local"
+        self.s.asr_me, self.s.asr_them = self.asr_me.isChecked(), self.asr_them.isChecked()
         self.s.llm_mode = "online" if online else "local"
         self.s.llm_provider, self.s.llm_model = pid, model
         self.s.llm_base_url = self.url.text().strip() if pid == "custom" else self.s.llm_base_url
@@ -302,4 +439,4 @@ class OnlineModelDialog(QDialog):
         self.accept()
         from .theme import toast
 
-        toast(self.parent(), "✓ 已保存 · " + status_text(self.s))
+        toast(self.parent(), "✓ 已保存 · " + status_text(self.s) + asr_status_text(self.s))

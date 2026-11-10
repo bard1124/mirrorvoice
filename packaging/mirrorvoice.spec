@@ -33,7 +33,8 @@ def take(pkg):
 
 
 for pkg in ("sherpa_onnx", "sounddevice", "_sounddevice_data", "num2words", "platformdirs", "certifi", "truststore",
-            "keyring"):  # keyring: OS keychain backends are found via entry points (dist-info)
+            "keyring",  # keyring: OS keychain backends are found via entry points (dist-info)
+            "websocket"):  # websocket-client: online streaming speech recognition
     take(pkg)
 # Qt's Chinese strings for standard dialog buttons (PySide6/translations is not collected by default)
 from PySide6.QtCore import QLibraryInfo  # noqa: E402

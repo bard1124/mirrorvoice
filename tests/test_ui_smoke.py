@@ -232,3 +232,39 @@ def test_saving_online_settings_closes_and_confirms(app, settings, monkeypatch):
     assert d.result() == QtWidgets.QDialog.DialogCode.Accepted
     toasts = host.findChildren(QtWidgets.QLabel, "toast")
     assert toasts and "已保存" in toasts[0].text() and "在线" in toasts[0].text()
+
+
+def test_online_recognition_tab_asks_before_uploading_audio(app, settings, monkeypatch):
+    from mirrorvoice import keystore
+    from mirrorvoice.ui import online
+
+    asked = []
+    monkeypatch.setattr(online.QMessageBox, "question",
+                        lambda *a, **k: asked.append(a[2]) or QtWidgets.QMessageBox.StandardButton.Yes)
+    d = online.OnlineModelDialog(settings)
+    d.asr_online.setChecked(True)
+    d.asr_me.setChecked(False)
+    d.asr_key.setText("sk-asr-123456789")
+    d.asr_key.textEdited.emit("sk-asr-123456789")
+    d._save()
+    assert d.result() == QtWidgets.QDialog.DialogCode.Accepted
+    assert asked and "对方的声音" in asked[-1] and "你的声音" not in asked[-1] and "上传" in asked[-1]
+    assert settings.asr_mode == "online" and settings.asr_them and not settings.asr_me and settings.asr_consent
+    keystore.forget_cache()
+    assert keystore.get("dashscope") == "sk-asr-123456789"
+    assert "识别：在线（对方）" in online.asr_status_text(settings)
+
+
+def test_online_recognition_needs_a_side_and_a_key(app, settings, no_popups):
+    from mirrorvoice import keystore
+    from mirrorvoice.ui import online
+
+    keystore.save("dashscope", "")
+    d = online.OnlineModelDialog(settings)
+    d.asr_online.setChecked(True)
+    d._save()
+    assert d.result() != QtWidgets.QDialog.DialogCode.Accepted and "API key" in no_popups[-1][1][1]
+    d.asr_me.setChecked(False)
+    d.asr_them.setChecked(False)
+    d._save()
+    assert "至少选一方" in no_popups[-1][1][1]

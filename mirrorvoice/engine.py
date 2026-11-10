@@ -55,6 +55,7 @@ class Engine:
         self._player = self._voice = self._transcript = self._me = None
         self._prev = {"me": None, "them": None}
         self._hist = {"me": deque(maxlen=4), "them": deque(maxlen=4)}
+        self._interim_tr, self._interim_busy, self._interim_at, self._them_gen = None, False, 0.0, 0
         self._ready = False
         self.ptt_down = False
         self._jobs: queue.PriorityQueue = queue.PriorityQueue()
@@ -71,6 +72,7 @@ class Engine:
         self.muted = False
         self._player = self._voice = self._transcript = self._me = None
         self._ready = False
+        self._interim_tr, self._interim_busy, self._interim_at, self._them_gen = None, False, 0.0, 0
         self._prev = {"me": None, "them": None}  # (source, translation, t_end) of the last part
         self._hist = {"me": deque(maxlen=self.HISTORY_N + 1), "them": deque(maxlen=self.HISTORY_N + 1)}
         # A fresh queue per session: the previous worker may still be busy (and the previous
@@ -189,8 +191,12 @@ class Engine:
 
         # expected language fixed (Mandarin was misheard as Cantonese / Japanese); theirs is still
         # recognised, for passthrough
+        self._tr_them = tr_them
+        self._interim_tr = Translator(tr_them.backend.online, s.meeting_context) \
+            if isinstance(tr_them.backend, FailoverChat) else None
         me = Listener("me", s.mic, s.my_lang, s.pause, self._on_me, self._on_level, self._gate, self.log,
-                      alt=s.their_lang)
+                      alt=s.their_lang, online_key=self._asr_key(s, "me"),
+                      on_partial=lambda t: self._on_partial("me", t), on_notice=self._notice)
         me.start()
         self._closers.append(me.close)
         self._me = me
@@ -198,7 +204,9 @@ class Engine:
         if s.subtitles and s.their_source:
             try:
                 them = Listener("them", s.their_source, s.their_lang, s.pause, self._on_them,
-                                self._on_level, self._them_gate, self.log, alt=s.my_lang)
+                                self._on_level, self._them_gate, self.log, alt=s.my_lang,
+                                online_key=self._asr_key(s, "them"),
+                                on_partial=lambda t: self._on_partial("them", t), on_notice=self._notice)
                 them.start()
                 self._closers.append(them.close)
             except Exception as e:  # noqa: BLE001 — subtitles are optional
@@ -404,6 +412,46 @@ class Engine:
         self._player.set_monitor(dev)
         self.emit("status", text=f"运行中 · 监听：{name or '关'}")
 
+    def _asr_key(self, s: Settings, who: str) -> str:
+        """阿里云百炼 key when this side uses online streaming recognition, else ''."""
+        if s.asr_mode != "online" or not (s.asr_me if who == "me" else s.asr_them):
+            return ""
+        from . import keystore
+
+        key = keystore.get("dashscope")
+        if not key:
+            raise RuntimeError("在线语音识别还没填阿里云百炼的 API key（左侧“在线模型”→“语音识别”里设置）")
+        return key
+
+    def _notice(self, text: str) -> None:
+        self.emit("notice", text=text)
+
+    INTERIM_EVERY_S, INTERIM_MIN_CHARS = 2.5, 12
+
+    def _on_partial(self, who: str, text: str) -> None:
+        """Online recognition: the sentence so far. Subtitles show it at once; with online
+        translation a long unfinished sentence also gets a provisional translation every few
+        seconds (on its own thread, so my speech never waits for it)."""
+        self.emit("partial", who=who, src=text, tgt="")
+        if who != "them" or self._interim_tr is None or len(text) < self.INTERIM_MIN_CHARS:
+            return
+        now = time.time()
+        if self._interim_busy or now - self._interim_at < self.INTERIM_EVERY_S:
+            return
+        self._interim_busy, self._interim_at = True, now
+        gen, s = self._them_gen, self.s
+
+        def work():
+            try:
+                out = self._interim_tr.translate(text, s.their_lang, s.my_lang, subtitle=True)
+            except TranslateError:
+                out = ""
+            finally:
+                self._interim_busy = False
+            if out and gen == self._them_gen and self.running:  # the sentence is still being spoken
+                self.emit("partial", who=who, src=text, tgt=out)
+        threading.Thread(target=work, daemon=True, name="interim").start()
+
     def _on_level(self, who: str, rms: float) -> None:
         self.emit("level", who=who, rms=rms)
 
@@ -419,6 +467,7 @@ class Engine:
         self._jobs.put((0, next(self._seq), "me", utt))
 
     def _on_them(self, utt: Utterance) -> None:
+        self._them_gen += 1  # provisional translations of this sentence are now out of date
         if utt.lang in SIMILAR.get(self.s.my_lang, {self.s.my_lang}):
             self.emit("them", src=utt.text, tgt=utt.text, latency=0.0)  # same language: show as-is
             self._transcript.add("them", utt.text, utt.text)

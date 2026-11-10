@@ -259,14 +259,24 @@ class Listener:
                  on_utt: Callable[[Utterance], None],
                  on_level: Callable[[str, float], None] | None = None,
                  gate: Callable[[], bool] | None = None,
-                 log: Callable[[str], None] | None = None, alt: str = "") -> None:
+                 log: Callable[[str], None] | None = None, alt: str = "", online_key: str = "",
+                 on_partial: Callable[[str], None] | None = None,
+                 on_notice: Callable[[str], None] | None = None) -> None:
         """language: the language expected from this source ("auto" = any); alt: the other
-        side's language, accepted as detected (passthrough / same-language subtitles)."""
+        side's language, accepted as detected (passthrough / same-language subtitles).
+        online_key: 阿里云百炼 key → streaming online recognition (online_asr.py) instead of
+        SenseVoice, with partial text through on_partial."""
         self.name, self.on_utt = name, on_utt
         self.gate = gate or (lambda: True)
         self.log = log or (lambda *_: None)
-        self.seg = Segmenter(name, pause, on_utt, "" if language == "auto" else language, alt,
-                             self.log, on_level)
+        lang = "" if language == "auto" else language
+        if online_key:
+            from .online_asr import OnlineSegmenter
+
+            self.seg = OnlineSegmenter(name, pause, on_utt, online_key, lang, alt, self.log, on_level,
+                                       on_partial, on_notice, detector=Recognizer("auto"))
+        else:
+            self.seg = Segmenter(name, pause, on_utt, lang, alt, self.log, on_level)
         self.q: queue.Queue[np.ndarray] = queue.Queue()
         self.source = source
         self.capture = Capture(source, self.q.put, self.WINDOW)

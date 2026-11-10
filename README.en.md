@@ -21,6 +21,7 @@ Runs entirely on your machine · works offline · no API keys · macOS (Apple Si
 | 💬 **Live subtitles for the other side** | Their speech is recognised and translated into an always-on-top, draggable subtitle bar (visible over full-screen meetings) |
 | ⚡ **Low latency** | About 1.5 s from the end of your sentence until they hear it (measured on an M1 Pro); your speech always jumps ahead of subtitle work. Every sentence shows how long recognition / translation / speech took, and the slowest stage is pointed out |
 | 🔒 **Local by default** | SenseVoice ASR, Qwen3 translation and Qwen3-TTS run on-device; after the first model download no network is needed |
+| 🎧 **Optional online speech recognition** | Alibaba Cloud Model Studio Fun-ASR streaming: subtitles appear while the other side is still speaking and turn into the translation when the sentence ends; long speech is split at sentence ends; audio is only sent while someone speaks, and it falls back to local recognition on failure |
 | ☁️ **Optional online translation** | Bring an API key for DeepSeek, Doubao (Volcengine Ark), Qwen (DashScope), SiliconFlow, OpenAI, OpenRouter or any OpenAI-compatible endpoint (including a local Ollama / LM Studio); no translation model to download, the key lives in the OS keychain |
 | 📖 **Glossary & meeting background** | Fixed translations for product names, people and jargon, applied in both directions; list common mis-hearings (e.g. 万佛马 → OneForma) to fix them before translating; a one-line meeting background helps pick the right terminology |
 | 🩺 **One-click routing check** | Without a meeting, checks that the other side can hear your translation, that their subtitles work, and your microphone and monitor, with fixes; step-by-step setup for Teams / Zoom / Tencent Meeting / Feishu |
@@ -69,6 +70,17 @@ Open "在线模型" (Online models) in the sidebar, or "use online translation" 
 - The API key is stored in the macOS Keychain / Windows Credential Manager, never in the settings file; `MIRRORVOICE_<PROVIDER>_API_KEY` (e.g. `MIRRORVOICE_DEEPSEEK_API_KEY`) works too. On macOS the first read after each update shows a keychain prompt; choose "Always Allow".
 - Only text is sent: what you said (the recognised text), the meeting background and the glossary terms it uses. No audio. The other side's speech is still translated locally unless you tick "translate the other side online too".
 - Tuned for live use: an 8 s timeout per sentence and at most one quick retry; after 3 failures in a row (or an invalid key) it switches to the local model for 60 s when that model is downloaded. Reasoning models (e.g. deepseek-reasoner) "think" before every sentence and are too slow for interpreting.
+
+### Online speech recognition (optional)
+
+"在线模型" → "语音识别" (Speech recognition): choose online streaming recognition, paste the Alibaba Cloud Model Studio API key (the same key as Qwen translation), choose whether it is used for your speech and/or the other side's, and press "测试连接" (Test connection).
+
+- While the other side speaks, the subtitle bar shows the words recognised so far; with online translation a long sentence also gets a provisional translation half-way, replaced by the final one when the sentence ends.
+- Audio is only uploaded while the local voice detector hears speech (billed by audio duration); the recognition task is closed after 15 s of quiet.
+- Long speech without pauses is split at a sentence end that stayed the same in two partial results in a row, instead of a hard cut every 5 s.
+- After 3 failures in a row (or an invalid key) the rest of the meeting uses local recognition.
+
+Local recognition improved too: when long speech has to be cut early, the cut moves back to the last full stop or comma and the rest joins the next sentence; Mandarin misheard as Cantonese or Japanese is recognised again in your language; the translator gets the same speaker's last three turns as context.
 
 ### Company networks / certificate errors
 

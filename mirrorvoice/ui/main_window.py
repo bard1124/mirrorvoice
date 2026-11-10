@@ -593,6 +593,9 @@ class MainWindow(QMainWindow):
             self._add(f"对方  {d['src']}\n→ {d['tgt']}   ({breakdown(d)})", "#8250df")
             self.overlay.show_text(d["tgt"], d["src"] if d["tgt"] != d["src"] else "")
             self.convo.add("them", d["src"], d["tgt"])
+        elif kind == "partial":
+            if d["who"] == "them":  # online recognition: the sentence as it is being spoken
+                self.overlay.show_partial(d["src"], d.get("tgt", ""))
         elif kind == "notice":
             self._add(f"提示  {d['text']}", "#8a8a8a")
         elif kind == "mute":
@@ -634,9 +637,9 @@ class MainWindow(QMainWindow):
         SelfTestDialog(self.s, self).exec()
 
     def _refresh_llm_label(self) -> None:
-        from .online import status_text
+        from .online import asr_status_text, status_text
 
-        self.llm_btn.setText(status_text(self.s) + "  ›")
+        self.llm_btn.setText(status_text(self.s) + asr_status_text(self.s) + "  ›")
         for i, q in enumerate(models.QUALITIES):  # sizes change: online translation downloads no LLM
             tip = models.summary(q) + ("\n速度约快一倍，但翻译质量明显较低，适合 8 GB 内存或老电脑" if q == "turbo" else "")
             self.quality.setItemData(i, tip, Qt.ItemDataRole.ToolTipRole)
@@ -645,14 +648,15 @@ class MainWindow(QMainWindow):
         from .online import OnlineModelDialog
 
         self._save()
-        before = (self.s.llm_mode, self.s.llm_provider, self.s.llm_model, self.s.llm_base_url, self.s.online_their)
+        before = (self.s.llm_mode, self.s.llm_provider, self.s.llm_model, self.s.llm_base_url, self.s.online_their,
+                  self.s.asr_mode, self.s.asr_me, self.s.asr_them)
         if not OnlineModelDialog(self.s, self).exec():
             return
         self._refresh_llm_label()
         if hasattr(self, "banner"):
             self._refresh_banner()
         changed = before != (self.s.llm_mode, self.s.llm_provider, self.s.llm_model, self.s.llm_base_url,
-                             self.s.online_their)
+                             self.s.online_their, self.s.asr_mode, self.s.asr_me, self.s.asr_them)
         if changed and self.engine.running:
             self.status.setText("● 运行中 · 翻译设置已保存，点“停止”再“开始”后生效")
             self._status_state("busy")

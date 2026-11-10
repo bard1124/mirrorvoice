@@ -73,7 +73,20 @@ class Overlay(QWidget):
         p.drawRoundedRect(self.rect(), 14, 14)
 
     def show_text(self, translated: str, original: str) -> None:
+        self._interim = ""  # a finished sentence: its provisional translation is replaced
         self.zh.setText(translated)
+        self.en.setText(original)
+        self._last = time.time()
+        self._fit()
+
+    def show_partial(self, original: str, interim: str = "") -> None:
+        """Live subtitle while the sentence is still being spoken (online recognition): the
+        recognised words so far, and a provisional translation when there is one. The final
+        translation replaces both through show_text."""
+        if interim:
+            self._interim = interim
+        top = interim or getattr(self, "_interim", "") or (original if not self.s.overlay_show_original else "…")
+        self.zh.setText(top)
         self.en.setText(original)
         self._last = time.time()
         self._fit()

@@ -208,6 +208,10 @@ class Settings:
     llm_base_url: str = ""          # only for llm_provider == "custom"
     online_their: bool = False      # also send the other side's speech (subtitles) to the online model
     online_consent: bool = False    # the user confirmed what online translation sends out
+    asr_mode: str = "local"         # speech recognition: "local" (SenseVoice) | "online" (阿里云百炼 streaming)
+    asr_me: bool = True             # online recognition for my speech …
+    asr_them: bool = True           # … and for the other side's (live subtitles)
+    asr_consent: bool = False       # the user confirmed that audio goes to the service
     cpu_voice: str = "clone"        # Windows without CUDA voice: "clone" (Pocket TTS, English) | "standard" (Kokoro)
     gpu_voice: str = "auto"         # NVIDIA clone voice: "auto" (compute capability >= 8.0 only) | "cuda" | "cpu"
     gain: float = 1.0

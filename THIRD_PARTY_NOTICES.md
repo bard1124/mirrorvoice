@@ -16,6 +16,7 @@ its own license.
 | PortAudio / python-sounddevice, soundfile, numpy, pynput, num2words, platformdirs, soundcard | MIT / BSD / LGPL-3.0 (pynput) | both |
 | [certifi](https://github.com/certifi/python-certifi) (CA bundle), [truststore](https://github.com/sethmlarson/truststore) (system certificate store) | MPL-2.0 (unmodified) / MIT | both |
 | [keyring](https://github.com/jaraco/keyring) and its jaraco.* helpers (API keys in the macOS Keychain / Windows Credential Manager) | MIT | both |
+| [websocket-client](https://github.com/websocket-client/websocket-client) (online streaming speech recognition) | Apache-2.0 | both |
 
 ## Downloaded on first run (not redistributed by this project)
 
