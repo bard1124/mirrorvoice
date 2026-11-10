@@ -11,10 +11,11 @@ import queue
 import threading
 import time
 import traceback
+from collections import deque
 from typing import Callable
 
 from . import models
-from .asr import Listener, Utterance
+from .asr import SENTENCE_END, Listener, Utterance
 from .audio import Player, find_device, time_stretch
 from .config import LOG_FILE, Settings
 from . import hotkeys
@@ -53,6 +54,7 @@ class Engine:
         # exist before the first start(): the UI may call set_voice_speed / set_monitor / reload_voice early
         self._player = self._voice = self._transcript = self._me = None
         self._prev = {"me": None, "them": None}
+        self._hist = {"me": deque(maxlen=4), "them": deque(maxlen=4)}
         self._ready = False
         self.ptt_down = False
         self._jobs: queue.PriorityQueue = queue.PriorityQueue()
@@ -70,6 +72,7 @@ class Engine:
         self._player = self._voice = self._transcript = self._me = None
         self._ready = False
         self._prev = {"me": None, "them": None}  # (source, translation, t_end) of the last part
+        self._hist = {"me": deque(maxlen=self.HISTORY_N + 1), "them": deque(maxlen=self.HISTORY_N + 1)}
         # A fresh queue per session: the previous worker may still be busy (and the previous
         # stop() left a "stop" job behind). Sharing the queue let a new worker swallow that stale
         # "stop" and exit while its listeners kept running — "nothing happens" until restart.
@@ -184,15 +187,18 @@ class Engine:
         self._transcript = transcript
         self._player, self._voice = player, voice
 
-        me = Listener("me", s.mic, "auto", s.pause, self._on_me, self._on_level, self._gate, self.log)
+        # expected language fixed (Mandarin was misheard as Cantonese / Japanese); theirs is still
+        # recognised, for passthrough
+        me = Listener("me", s.mic, s.my_lang, s.pause, self._on_me, self._on_level, self._gate, self.log,
+                      alt=s.their_lang)
         me.start()
         self._closers.append(me.close)
         self._me = me
         them = None
         if s.subtitles and s.their_source:
             try:
-                them = Listener("them", s.their_source, "auto", s.pause, self._on_them,
-                                self._on_level, self._them_gate, self.log)
+                them = Listener("them", s.their_source, s.their_lang, s.pause, self._on_them,
+                                self._on_level, self._them_gate, self.log, alt=s.my_lang)
                 them.start()
                 self._closers.append(them.close)
             except Exception as e:  # noqa: BLE001 — subtitles are optional
@@ -261,12 +267,29 @@ class Engine:
     CONTINUATION_GAP_S = 1.5  # a part starting this soon after the previous one continues it
     STALE_THEM_S = 6.0        # subtitles this far behind are skipped instead of piling up behind my speech
 
+    HISTORY_N, HISTORY_S = 3, 90.0  # earlier turns given to the translator as conversation context
+
     def _context(self, who: str, utt: Utterance) -> tuple[str, str] | None:
+        """The previous part when this one continues the same sentence: it started right after it
+        and the previous part did not end a sentence (cuts now land on punctuation)."""
         prev = self._prev.get(who)
         if not prev:
             return None
         start = utt.t_end - len(utt.audio) / 16000
-        return (prev[0], prev[1]) if start - prev[2] < self.CONTINUATION_GAP_S else None
+        if start - prev[2] >= self.CONTINUATION_GAP_S or prev[0].rstrip()[-1:] in SENTENCE_END:
+            return None
+        return prev[0], prev[1]
+
+    def _history(self, who: str, utt: Utterance, context) -> list[tuple[str, str]]:
+        start = utt.t_end - len(utt.audio) / 16000
+        rows = [(a, b) for a, b, t in self._hist[who] if start - t < self.HISTORY_S]
+        if context and rows and rows[-1] == context:
+            rows = rows[:-1]  # already given as the sentence being continued
+        return rows[-self.HISTORY_N:]
+
+    def _remember(self, who: str, src: str, tgt: str, t_end: float) -> None:
+        self._prev[who] = (src, tgt, t_end)
+        self._hist[who].append((src, tgt, t_end))
 
     def _do_me(self, tr: Translator, utt: Utterance) -> None:
         s = self.s
@@ -274,7 +297,9 @@ class Engine:
         waited = t0 - utt.t_end  # time the sentence sat in the queue behind earlier work
         utt.text = correct_asr(utt.text, tr.glossary, "me")
         try:
-            out = tr.translate(utt.text, s.my_lang, s.their_lang, context=self._context("me", utt))
+            ctx = self._context("me", utt)
+            out = tr.translate(utt.text, s.my_lang, s.their_lang, context=ctx,
+                               history=self._history("me", utt, ctx))
         except TranslateError as e:  # nothing is spoken; the sentence shows as failed
             self.log(f"[me] 在线翻译失败 {e.kind}: {e}")
             self.emit("me", src=utt.text, tgt=f"⚠ 翻译失败：{e}", latency=time.time() - utt.t_end,
@@ -284,7 +309,7 @@ class Engine:
         t_tr = time.time() - t0
         if not out:
             return
-        self._prev["me"] = (utt.text, out, utt.t_end)
+        self._remember("me", utt.text, out, utt.t_end)
         latency = voice_s = None
         if self._voice and not self.muted:  # muted: drop speech that was already queued
             text = spoken_en(out) if s.their_lang == "en" else out
@@ -309,7 +334,9 @@ class Engine:
         try:
             if t0 - utt.t_end > self.STALE_THEM_S:
                 raise TranslateError("timeout", "积压太多，已跳过这句")
-            out = tr.translate(utt.text, src, s.my_lang, subtitle=True, context=self._context("them", utt))
+            ctx = self._context("them", utt)
+            out = tr.translate(utt.text, src, s.my_lang, subtitle=True, context=ctx,
+                               history=self._history("them", utt, ctx))
         except TranslateError as e:
             self.log(f"[them] 未翻译 {e.kind}: {e}")
             self.emit("them", src=utt.text, tgt=f"⚠ {e}", latency=time.time() - utt.t_end, asr_s=utt.asr_s,
@@ -317,7 +344,7 @@ class Engine:
             return
         t_tr = time.time() - t0
         self.log(f"[them] 排队 {t0 - utt.t_end:.1f}s 翻译 {t_tr:.2f}s: {out[:40]!r}")
-        self._prev["them"] = (utt.text, out, utt.t_end)
+        self._remember("them", utt.text, out, utt.t_end)
         self.emit("them", src=utt.text, tgt=out, latency=time.time() - utt.t_end, asr_s=utt.asr_s,
                   queue_s=max(0.0, t0 - utt.t_end - utt.asr_s), translate_s=t_tr)
         self._transcript.add("them", utt.text, out)

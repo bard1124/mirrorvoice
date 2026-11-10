@@ -169,11 +169,17 @@ class Translator:
         self.glossary = load_glossary()
 
     def translate(self, text: str, src: str, tgt: str, subtitle: bool = False,
-                  context: tuple[str, str] | None = None) -> str:
+                  context: tuple[str, str] | None = None,
+                  history: list[tuple[str, str]] | tuple = ()) -> str:
         """context = (previous part's source, its translation) when `text` continues that part
-        (a long sentence cut early): shown to the model as the preceding exchange."""
+        (a long sentence cut early): shown to the model as the preceding exchange.
+        history = the same speaker's last few (source, translation) pairs, oldest first: earlier
+        turns of the conversation, so pronouns, terms and tone carry over between sentences."""
         tag = NO_THINK if getattr(self.backend, "no_think", True) else ""
         msgs = [{"role": "system", "content": system_prompt(src, tgt, subtitle, self.meeting)}]
+        for h_src, h_tgt in history:
+            msgs += [{"role": "user", "content": user_prompt(h_src, [])},
+                     {"role": "assistant", "content": h_tgt}]
         if context:
             msgs += [{"role": "user", "content": user_prompt(context[0], glossary_hits(context[0], self.glossary))},
                      {"role": "assistant", "content": context[1]}]
