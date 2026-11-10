@@ -68,7 +68,7 @@ class Wizard(QDialog):
         w = QWidget()
         f = QFormLayout(w)
         f.addRow(_title("欢迎使用镜声"))
-        f.addRow(QLabel("你说话 → 对方听到翻译后的语音（你的克隆音色）；对方说话 → 你看到翻译字幕。全部在本机运行。"))
+        f.addRow(QLabel("你说话 → 对方听到翻译后的语音（你的克隆音色）；对方说话 → 你看到翻译字幕。默认全部在本机运行，也可以填 API key 改用在线翻译。"))
         self.my = QComboBox()
         self.their = QComboBox()
         for c, lg in LANGS.items():
@@ -78,10 +78,14 @@ class Wizard(QDialog):
         self.my.setCurrentIndex(self.my.findData(self.s.my_lang))
         self.their.setCurrentIndex(self.their.findData(self.s.their_lang))
         self.q = QComboBox()
-        self.q.addItem(f"极速（8 GB 内存或老电脑，翻译质量较低）：{models.summary('turbo')}", "turbo")
-        self.q.addItem(f"快速（推荐）：{models.summary('fast')}", "fast")
-        self.q.addItem(f"高质量（更准更像，更慢）：{models.summary('quality')}", "quality")
+        for q in ("turbo", "fast", "quality"):
+            self.q.addItem("", q)
+        self._label_qualities()
         self.q.setCurrentIndex(self.q.findData(self.s.quality))
+        self.online_btn = QPushButton(objectName="link")
+        self.online_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.online_btn.clicked.connect(self._online)
+        self._label_online()
         self.disp = QComboBox()
         self.disp.addItem("图形界面", "ui")
         self.disp.addItem("命令行风格", "cli")
@@ -89,6 +93,7 @@ class Wizard(QDialog):
         f.addRow("我说", self.my)
         f.addRow("对方说", self.their)
         f.addRow("模型", self.q)
+        f.addRow("", self.online_btn)
         f.addRow("显示方式", self.disp)
 
         def save():
@@ -134,6 +139,27 @@ class Wizard(QDialog):
         self.dm.overall.connect(self._on_overall)
         self.dm.finished.connect(self._on_dl_done)
         return w
+
+    QUALITY_TEXT = {"turbo": "极速（8 GB 内存或老电脑，翻译质量较低）", "fast": "快速（推荐）",
+                    "quality": "高质量（更准更像，更慢）"}
+
+    def _label_qualities(self) -> None:
+        for i in range(self.q.count()):
+            q = self.q.itemData(i)
+            self.q.setItemText(i, f"{self.QUALITY_TEXT[q]}：{models.summary(q)}")
+
+    def _label_online(self) -> None:
+        from .online import status_text
+
+        self.online_btn.setText(status_text(self.s) + "（有 API key 可改用在线翻译，不下载翻译模型）  ›"
+                                if self.s.llm_mode != "online" else status_text(self.s) + "  ›")
+
+    def _online(self) -> None:
+        from .online import OnlineModelDialog
+
+        if OnlineModelDialog(self.s, self).exec():
+            self._label_online()
+            self._label_qualities()
 
     def _refresh_models(self) -> None:
         while self.m_box.count():

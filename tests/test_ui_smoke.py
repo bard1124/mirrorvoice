@@ -131,3 +131,104 @@ def test_style_dialog_does_not_block_the_floating_windows(app, settings, no_popu
     assert w._style_dlg is None and not w.overlay.isVisible()
     w.engine.stop()
     w.close()
+
+
+def test_online_model_dialog_saves_key_outside_settings_after_consent(app, settings, no_popups, monkeypatch):
+    from mirrorvoice import keystore
+    from mirrorvoice.config import SETTINGS_FILE
+    from mirrorvoice.ui import online
+
+    asked = []
+    monkeypatch.setattr(online.QMessageBox, "question",
+                        lambda *a, **k: asked.append(a[2]) or QtWidgets.QMessageBox.StandardButton.Yes)
+    d = online.OnlineModelDialog(settings)
+    d.rb_online.setChecked(True)
+    d.provider.setCurrentIndex(d.provider.findData("dashscope"))
+    d.key.setText("sk-ui-0123456789")
+    d.key.textEdited.emit("sk-ui-0123456789")
+    d.their.setChecked(True)
+    d._save()
+    assert d.result() == QtWidgets.QDialog.DialogCode.Accepted
+    assert asked and "对方说的话" in asked[0] and "通义" in asked[0]
+    assert settings.llm_mode == "online" and settings.llm_provider == "dashscope" and settings.llm_model == "qwen-plus"
+    assert settings.online_consent and settings.online_their
+    assert "sk-ui-0123456789" not in SETTINGS_FILE.read_text(encoding="utf-8")
+    keystore.forget_cache()
+    assert keystore.get("dashscope") == "sk-ui-0123456789"
+    assert online.status_text(settings) == "翻译：在线 · 通义千问 · qwen-plus"
+    d2 = online.OnlineModelDialog(settings)  # reopening: no second confirmation, key shown masked
+    assert "sk-…6789" in d2.key_hint.text() and d2.key.text() == ""
+    d2._save()
+    assert len(asked) == 1
+
+
+def test_online_settings_are_hidden_while_local_is_chosen(app, settings):
+    from mirrorvoice.ui import online
+
+    settings.llm_mode = "local"
+    d = online.OnlineModelDialog(settings)
+    assert d.rb_local.isChecked() and d.box.isHidden()
+    d.rb_online.setChecked(True)
+    assert not d.box.isHidden()
+    d.rb_local.setChecked(True)
+    assert d.box.isHidden()
+
+
+def test_online_dialog_explains_hosts_without_a_model_list(app, settings):
+    from mirrorvoice.online_llm import TranslateError
+    from mirrorvoice.ui import online
+
+    d = online.OnlineModelDialog(settings)
+    d._done("models", TranslateError("model", "模型不存在或地址不对（404）"))
+    assert "不提供模型列表" in d.test_out.text()
+    d.provider.setCurrentIndex(d.provider.findData("doubao"))
+    assert d.model.currentText() == "doubao-seed-2-0-mini-260428"
+    d.model.setEditText("ep-20260101-abcde")
+    assert "接入点" in d.model_hint.text()
+
+
+def test_online_dialog_refuses_to_save_without_a_key(app, settings, no_popups):
+    from mirrorvoice import keystore
+    from mirrorvoice.ui import online
+
+    keystore.save("openai", "")
+    d = online.OnlineModelDialog(settings)
+    d.rb_online.setChecked(True)
+    d.provider.setCurrentIndex(d.provider.findData("openai"))
+    d._save()
+    assert d.result() != QtWidgets.QDialog.DialogCode.Accepted and settings.llm_mode == "local"
+    assert no_popups and "API key" in no_popups[-1][1][1]
+
+
+def test_question_without_buttons_asks_yes_or_no(app, monkeypatch):
+    """The themed QMessageBox.question showed a single 好的 that never counted as 是 (consent, 命令行风格)."""
+    from mirrorvoice.ui import theme
+
+    seen = []
+
+    def fake_exec(self):
+        btns = [b for b in self.findChildren(QtWidgets.QPushButton)]
+        seen.append([b.text() for b in btns])
+        btns[0].click()
+    monkeypatch.setattr(theme.MessageDialog, "exec", fake_exec)
+    assert QtWidgets.QMessageBox.question(None, "t", "x") == QtWidgets.QMessageBox.StandardButton.Yes
+    assert seen[-1] == ["是", "否"]
+    QtWidgets.QMessageBox.information(None, "t", "x")
+    assert seen[-1] == ["好的"]
+
+
+def test_saving_online_settings_closes_and_confirms(app, settings, monkeypatch):
+    from mirrorvoice.ui import online
+
+    monkeypatch.setattr(online.QMessageBox, "question", lambda *a, **k: QtWidgets.QMessageBox.StandardButton.Yes)
+    host = QtWidgets.QWidget()
+    host.resize(600, 400)
+    d = online.OnlineModelDialog(settings, host)
+    d.rb_online.setChecked(True)
+    d.provider.setCurrentIndex(d.provider.findData("custom"))
+    d.url.setText("127.0.0.1:8765")
+    d.model.setEditText("local-qwen")
+    d._save()
+    assert d.result() == QtWidgets.QDialog.DialogCode.Accepted
+    toasts = host.findChildren(QtWidgets.QLabel, "toast")
+    assert toasts and "已保存" in toasts[0].text() and "在线" in toasts[0].text()

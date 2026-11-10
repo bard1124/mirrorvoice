@@ -67,7 +67,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(3000, lambda: self.updates.check(manual=False))
 
     # ---------------------------------------------------------------- layout
-    NAV = (("同传", None), ("术语表", "_glossary"), ("字幕样式", "_style"), ("音色", "_voice"),
+    NAV = (("同传", None), ("术语表", "_glossary"), ("字幕样式", "_style"), ("音色", "_voice"), ("在线模型", "_online"),
            ("会议记录", "_open_transcripts"), ("设置向导", "_wizard"), ("检查更新", "_check_updates"))
 
     def _build(self) -> None:
@@ -209,6 +209,15 @@ class MainWindow(QMainWindow):
         oh.addWidget(QLabel("显示方式", objectName="muted"))
         oh.addWidget(self.display, 1)
         v.addLayout(oh)
+        oh = QHBoxLayout()
+        self.llm_btn = QPushButton(objectName="link")  # 翻译：本地模型 / 翻译：在线 · DeepSeek
+        self.llm_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.llm_btn.setToolTip("用本地模型，或填 API key 改用在线模型翻译")
+        self.llm_btn.clicked.connect(self._online)
+        oh.addWidget(self.llm_btn)
+        oh.addStretch()
+        v.addLayout(oh)
+        self._refresh_llm_label()
         oh = QHBoxLayout()  # voice options on their own row so the card never forces the window wider
         oh.setSpacing(8)
         from ..config import cuda_voice_ok, has_nvidia_gpu
@@ -567,7 +576,7 @@ class MainWindow(QMainWindow):
         elif kind == "status":
             self.status.setText("● " + d["text"])
         elif kind == "ready":
-            self.status.setText(f"● 运行中 · {d['voice']}")
+            self.status.setText(f"● 运行中 · {d['voice']}" + (f" · 在线翻译 {d['llm']}" if d.get("llm") else ""))
             self._status_state("running")
             # the subtitle bar is opened by hand (托盘 / 字幕样式) and remembered; never popped up on 开始
             self.tray.refresh()
@@ -575,14 +584,17 @@ class MainWindow(QMainWindow):
             tag = "我·原声" if d["passthrough"] else "我"
             timing = f"{d['latency']:.1f}s" if d["passthrough"] else breakdown(d)
             self._add(f"{tag}  {d['src']}\n→ {d['tgt']}   ({timing})", "#1f6feb")
-            self.lat_stats.add(d)
-            self.lat_label.setText(self.lat_stats.summary(self.s.quality))
+            if not d.get("failed"):
+                self.lat_stats.add(d)
+            self.lat_label.setText(self.lat_stats.summary("online" if self.s.llm_mode == "online" else self.s.quality))
             self.lat_label.setVisible(bool(self.lat_label.text()))
             self.convo.add("me", d["src"], d["tgt"], d["passthrough"])
         elif kind == "them":
             self._add(f"对方  {d['src']}\n→ {d['tgt']}   ({breakdown(d)})", "#8250df")
             self.overlay.show_text(d["tgt"], d["src"] if d["tgt"] != d["src"] else "")
             self.convo.add("them", d["src"], d["tgt"])
+        elif kind == "notice":
+            self._add(f"提示  {d['text']}", "#8a8a8a")
         elif kind == "mute":
             self.mute_btn.blockSignals(True)
             self.mute_btn.setChecked(d["muted"])
@@ -619,6 +631,30 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "请先停止", "测试链路需要用到同样的声音设备，请先点“停止”再测试。")
             return
         SelfTestDialog(self.s, self).exec()
+
+    def _refresh_llm_label(self) -> None:
+        from .online import status_text
+
+        self.llm_btn.setText(status_text(self.s) + "  ›")
+        for i, q in enumerate(models.QUALITIES):  # sizes change: online translation downloads no LLM
+            tip = models.summary(q) + ("\n速度约快一倍，但翻译质量明显较低，适合 8 GB 内存或老电脑" if q == "turbo" else "")
+            self.quality.setItemData(i, tip, Qt.ItemDataRole.ToolTipRole)
+
+    def _online(self) -> None:
+        from .online import OnlineModelDialog
+
+        self._save()
+        before = (self.s.llm_mode, self.s.llm_provider, self.s.llm_model, self.s.llm_base_url, self.s.online_their)
+        if not OnlineModelDialog(self.s, self).exec():
+            return
+        self._refresh_llm_label()
+        if hasattr(self, "banner"):
+            self._refresh_banner()
+        changed = before != (self.s.llm_mode, self.s.llm_provider, self.s.llm_model, self.s.llm_base_url,
+                             self.s.online_their)
+        if changed and self.engine.running:
+            self.status.setText("● 运行中 · 翻译设置已保存，点“停止”再“开始”后生效")
+            self._status_state("busy")
 
     def _glossary(self) -> None:
         if GlossaryDialog(self.s, self).exec():

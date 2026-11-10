@@ -11,3 +11,4 @@ pynput==1.8.2
 platformdirs
 certifi
 truststore==0.10.5
+keyring==25.7.0

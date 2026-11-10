@@ -21,7 +21,8 @@ from . import hotkeys
 from .hotkeys import Hotkeys
 from .languages import LANGS
 from .transcript import Transcript
-from .translate import Translator, correct_asr, spoken_en
+from .online_llm import FailoverChat, OnlineChat, TranslateError
+from .translate import Translator, correct_asr, local_backend, spoken_en
 from .tts import make_voice
 
 Emit = Callable[..., None]  # emit(kind: str, **data)
@@ -37,6 +38,7 @@ class Engine:
         # exist before the first start(): the UI may call set_voice_speed / set_monitor / reload_voice early
         self._player = self._voice = self._transcript = self._me = None
         self._prev = {"me": None, "them": None}
+        self._ready = False
         self.ptt_down = False
         self._jobs: queue.PriorityQueue = queue.PriorityQueue()
         self._seq = itertools.count()
@@ -51,6 +53,7 @@ class Engine:
         self.running = True
         self.muted = False
         self._player = self._voice = self._transcript = self._me = None
+        self._ready = False
         self._prev = {"me": None, "them": None}  # (source, translation, t_end) of the last part
         # A fresh queue per session: the previous worker may still be busy (and the previous
         # stop() left a "stop" job behind). Sharing the queue let a new worker swallow that stale
@@ -122,13 +125,11 @@ class Engine:
     def _worker(self) -> None:
         s = self.s
         backend = models.voice_backend(s)
-        need = [m for m in models.required(s.quality) if not m.ready()]
+        need = [m for m in models.required(s.quality, s) if not m.ready()]
         if need:
             raise RuntimeError("模型未下载完整：" + "、".join(m.title for m in need) + "（请运行设置向导）")
 
-        self.emit("status", text="加载翻译模型…")
-        tr = Translator(models.LLM[s.quality].path, s.meeting_context)
-        self._closers.append(tr.close)
+        tr, tr_them = self._translators(s)
 
         voice = player = None
         their_tts = LANGS[s.their_lang].tts
@@ -150,7 +151,13 @@ class Engine:
             self._closers.append(player.close)
 
         self.emit("status", text="预热…")
-        tr.translate("你好", "zh", "en")
+        for t in {id(tr): tr, id(tr_them): tr_them}.values():
+            try:
+                t.translate("你好", "zh", "en")
+            except TranslateError as e:
+                if e.kind in TranslateError.PERSISTENT:
+                    raise RuntimeError(f"在线翻译不可用：{e}") from None
+                self.emit("notice", text=f"在线翻译预热失败（{e}），开始后会继续尝试")
         if voice:
             for _ in voice.stream("Hello.", s.their_lang):
                 pass
@@ -180,9 +187,10 @@ class Engine:
         except Exception as e:  # noqa: BLE001 — no permission: hotkeys just don't work
             self.emit("status", text=f"全局快捷键不可用：{e}")
 
+        self._ready = True
         self.emit("ready", mic=me.label, call=s.call_out, them=them.label if them else "",
                   voice="你的克隆音色" if (voice and voice.clone) else ("标准音色" if voice else "不出声"),
-                  transcript=str(transcript.md))
+                  transcript=str(transcript.md), llm=tr.label)
 
         jobs = self._jobs  # bind this session's queue: start() replaces the attribute
         while self.running:
@@ -190,8 +198,9 @@ class Engine:
             if kind == "stop":
                 break
             if kind == "glossary":
-                tr.reload_glossary()
-                tr.meeting = s.meeting_context
+                for t in (tr, tr_them):
+                    t.reload_glossary()
+                    t.meeting = s.meeting_context
                 continue
             if kind == "voice":
                 self._swap_voice()
@@ -199,9 +208,40 @@ class Engine:
             if kind == "me":
                 self._do_me(tr, utt)
             else:
-                self._do_them(tr, utt)
+                self._do_them(tr_them, utt)
+
+    def _translators(self, s: Settings) -> tuple[Translator, Translator]:
+        """(mine, the subtitles'). Local model only when something uses it: offline mode, the
+        subtitles when they stay local, or as the online translation's fallback (loaded on demand)."""
+        local_path = models.LLM[s.quality].path
+        shared: dict[str, object] = {}
+
+        def local():
+            if "b" not in shared:
+                # later as the online fallback: a notice, the status line already says 运行中
+                self.emit("notice" if self._ready else "status", text="加载本地翻译模型…")
+                shared["b"] = local_backend(local_path)
+                self._closers.append(shared["b"].close)
+            return shared["b"]
+
+        if s.llm_mode != "online":
+            self.emit("status", text="加载翻译模型…")
+            t = Translator(local(), s.meeting_context)
+            return t, t
+        self.emit("status", text="连接在线翻译…")
+        try:
+            online = OnlineChat.from_settings(s)
+        except TranslateError as e:
+            raise RuntimeError(f"在线翻译设置不完整：{e}（左侧“在线模型”里设置）") from None
+        fallback = local if models.LLM[s.quality].ready() else None
+        mine = Translator(FailoverChat(online, fallback, lambda m: self.emit("notice", text=m)), s.meeting_context)
+        if s.online_their or not (s.subtitles and s.their_source):
+            return mine, mine
+        self.emit("status", text="加载本地翻译模型（对方字幕）…")
+        return mine, Translator(local(), s.meeting_context)
 
     CONTINUATION_GAP_S = 1.5  # a part starting this soon after the previous one continues it
+    STALE_THEM_S = 6.0        # online subtitles this far behind are skipped instead of piling up
 
     def _context(self, who: str, utt: Utterance) -> tuple[str, str] | None:
         prev = self._prev.get(who)
@@ -215,7 +255,14 @@ class Engine:
         t0 = time.time()
         waited = t0 - utt.t_end  # time the sentence sat in the queue behind earlier work
         utt.text = correct_asr(utt.text, tr.glossary, "me")
-        out = tr.translate(utt.text, s.my_lang, s.their_lang, context=self._context("me", utt))
+        try:
+            out = tr.translate(utt.text, s.my_lang, s.their_lang, context=self._context("me", utt))
+        except TranslateError as e:  # nothing is spoken; the sentence shows as failed
+            self.log(f"[me] 在线翻译失败 {e.kind}: {e}")
+            self.emit("me", src=utt.text, tgt=f"⚠ 翻译失败：{e}", latency=time.time() - utt.t_end,
+                      asr_s=utt.asr_s, queue_s=max(0.0, waited - utt.asr_s), translate_s=time.time() - t0,
+                      voice_s=None, passthrough=False, failed=True)
+            return
         t_tr = time.time() - t0
         if not out:
             return
@@ -241,7 +288,16 @@ class Engine:
         src = utt.lang if utt.lang in LANGS else s.their_lang
         t0 = time.time()
         utt.text = correct_asr(utt.text, tr.glossary, "them")
-        out = tr.translate(utt.text, src, s.my_lang, subtitle=True, context=self._context("them", utt))
+        online = isinstance(tr.backend, FailoverChat)
+        try:
+            if online and t0 - utt.t_end > self.STALE_THEM_S:
+                raise TranslateError("timeout", "积压太多，已跳过这句")
+            out = tr.translate(utt.text, src, s.my_lang, subtitle=True, context=self._context("them", utt))
+        except TranslateError as e:
+            self.log(f"[them] 在线翻译失败 {e.kind}: {e}")
+            self.emit("them", src=utt.text, tgt=f"⚠ {e}", latency=time.time() - utt.t_end, asr_s=utt.asr_s,
+                      queue_s=max(0.0, t0 - utt.t_end - utt.asr_s), translate_s=time.time() - t0, failed=True)
+            return
         t_tr = time.time() - t0
         self.log(f"[them] 排队 {t0 - utt.t_end:.1f}s 翻译 {t_tr:.2f}s: {out[:40]!r}")
         self._prev["them"] = (utt.text, out, utt.t_end)

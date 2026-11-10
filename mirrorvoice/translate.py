@@ -1,4 +1,5 @@
-"""LLM translation: MLX (Apple Silicon) or llama.cpp's llama-server (Windows / fallback)."""
+"""LLM translation: MLX (Apple Silicon), llama.cpp's llama-server (Windows), or an online
+OpenAI-compatible API (online_llm.py) — every backend has chat(messages) -> str."""
 from __future__ import annotations
 
 import csv
@@ -147,13 +148,22 @@ def spoken_en(text: str) -> str:
 # ------------------------------------------------------------------ backends
 
 
-class Translator:
-    """translate(text, src, tgt, subtitle) -> str. Create and use on ONE thread (MLX)."""
+def local_backend(model_path: Path):
+    """The local model: MLX on macOS, llama-server elsewhere. Create and use on ONE thread (MLX)."""
+    return _MLX(model_path) if IS_MAC else _LlamaServer(model_path)
 
-    def __init__(self, model_path: Path, meeting: str = "") -> None:
+
+class Translator:
+    """translate(text, src, tgt, subtitle) -> str over a backend with chat(messages) -> str.
+
+    The local Qwen3 models get the "/no_think" tag; online backends say whether they want it
+    (backend.no_think). Online failures raise online_llm.TranslateError."""
+
+    def __init__(self, backend, meeting: str = "") -> None:
         self.glossary = load_glossary()
         self.meeting = meeting  # free-text background of the meeting, added to the system prompt
-        self.backend = _MLX(model_path) if IS_MAC else _LlamaServer(model_path)
+        self.backend = backend
+        self.label = getattr(backend, "label", "")
 
     def reload_glossary(self) -> None:
         self.glossary = load_glossary()
@@ -162,17 +172,18 @@ class Translator:
                   context: tuple[str, str] | None = None) -> str:
         """context = (previous part's source, its translation) when `text` continues that part
         (a long sentence cut early): shown to the model as the preceding exchange."""
+        tag = NO_THINK if getattr(self.backend, "no_think", True) else ""
         msgs = [{"role": "system", "content": system_prompt(src, tgt, subtitle, self.meeting)}]
         if context:
             msgs += [{"role": "user", "content": user_prompt(context[0], glossary_hits(context[0], self.glossary))},
                      {"role": "assistant", "content": context[1]}]
         msgs.append({"role": "user", "content": user_prompt(text, glossary_hits(text, self.glossary),
-                                                            continuation=context is not None) + NO_THINK})
+                                                            continuation=context is not None) + tag})
         out = last_line(self.backend.chat(msgs))
         if looks_like_reasoning(out, tgt):
             # small models sometimes explain the sentence instead of translating it: one plain retry,
             # and never speak the explanation to the other side
-            out = last_line(self.backend.chat([msgs[0], {"role": "user", "content": user_prompt(text, []) + NO_THINK}]))
+            out = last_line(self.backend.chat([msgs[0], {"role": "user", "content": user_prompt(text, []) + tag}]))
             if looks_like_reasoning(out, tgt):
                 return ""
         return out

@@ -202,6 +202,12 @@ class Settings:
     pause: float = 0.5              # silence that ends a sentence
     quality: str = "fast"           # "turbo" (smallest, weak machines) | "fast" | "quality" (bigger models)
     meeting_context: str = ""       # free-text background of the meeting, helps the translator pick terms
+    llm_mode: str = "local"         # translation: "local" (downloaded Qwen3) | "online" (API key, providers.py)
+    llm_provider: str = "deepseek"  # providers.PRESETS id
+    llm_model: str = ""             # "" = the provider's default model
+    llm_base_url: str = ""          # only for llm_provider == "custom"
+    online_their: bool = False      # also send the other side's speech (subtitles) to the online model
+    online_consent: bool = False    # the user confirmed what online translation sends out
     cpu_voice: str = "clone"        # Windows without CUDA voice: "clone" (Pocket TTS, English) | "standard" (Kokoro)
     gpu_voice: str = "auto"         # NVIDIA clone voice: "auto" (compute capability >= 8.0 only) | "cuda" | "cpu"
     gain: float = 1.0

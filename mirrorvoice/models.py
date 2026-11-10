@@ -114,9 +114,19 @@ def voice_backend(s=None) -> str:
     return "pocket" if (s.cpu_voice == "clone" and s.their_lang == "en") else "kokoro"
 
 
-def required(quality: str) -> list[Model]:
-    tts = {"pocket": POCKET, "kokoro": KOKORO}.get(voice_backend(), TTS_CLONE[quality])
-    return [VAD, ASR, LLM[quality], tts]
+def needs_local_llm(s) -> bool:
+    """Online translation for my speech, and for the subtitles too (or no subtitles): no download."""
+    if s.llm_mode != "online":
+        return True
+    return bool(s.subtitles and s.their_source and not s.online_their)
+
+
+def required(quality: str, s=None) -> list[Model]:
+    from .config import Settings
+
+    s = s or Settings.load()
+    tts = {"pocket": POCKET, "kokoro": KOKORO}.get(voice_backend(s), TTS_CLONE[quality])
+    return [VAD, ASR] + ([LLM[quality]] if needs_local_llm(s) else []) + [tts]
 
 
 def llm_name(quality: str) -> str:
@@ -127,8 +137,18 @@ def llm_name(quality: str) -> str:
 
 def summary(quality: str) -> str:
     """'翻译 Qwen3-4B · 语音识别 SenseVoice · 克隆音色 Pocket TTS · 约 2.7 GB' for this machine's backend."""
-    ms = required(quality)
+    from .config import Settings
+
+    s = Settings.load()
+    ms = required(quality, s)
     parts = [re.sub(r"\s*\(.*?\)\s*$", "", m.title) for m in ms if m.key != "vad"]
+    if s.llm_mode == "online":
+        if needs_local_llm(s):  # the subtitles stay on the local model
+            parts = [("对方字幕" + p[2:]) if m.key == LLM[quality].key else p
+                     for p, m in zip(parts, [m for m in ms if m.key != "vad"])]
+            parts.insert(0, "我说的话 在线翻译")
+        else:
+            parts.insert(0, "翻译 在线")
     return " · ".join(parts) + f" · 约 {sum(m.approx_mb for m in ms) / 1024:.1f} GB"
 
 

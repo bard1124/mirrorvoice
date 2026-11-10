@@ -57,7 +57,9 @@ class LatencyStats:
         text = f"最近 {len(self.rows)} 句平均延迟 {avg.get('latency', 0):.1f}s"
         if slow_key:
             text += f"，最慢的是{names[slow_key]}（{stages[slow_key]:.1f}s）"
-        if slow_key == "translate_s" and stages[slow_key] > 1.2 and quality in ("fast", "quality"):
+        if slow_key == "translate_s" and stages[slow_key] > 1.2 and quality == "online":
+            text += "，在线翻译较慢：可换更快的模型或服务商"
+        elif slow_key == "translate_s" and stages[slow_key] > 1.2 and quality in ("fast", "quality"):
             text += "，可把“模型”改成更快的一档"
         elif slow_key == "queue_s" and stages[slow_key] > 1.0:
             text += "，句子在排队：说话时稍作停顿，或换更快的模型"

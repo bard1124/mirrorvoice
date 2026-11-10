@@ -32,7 +32,8 @@ def take(pkg):
     hiddenimports.extend(h)
 
 
-for pkg in ("sherpa_onnx", "sounddevice", "_sounddevice_data", "num2words", "platformdirs", "certifi", "truststore"):
+for pkg in ("sherpa_onnx", "sounddevice", "_sounddevice_data", "num2words", "platformdirs", "certifi", "truststore",
+            "keyring"):  # keyring: OS keychain backends are found via entry points (dist-info)
     take(pkg)
 # Qt's Chinese strings for standard dialog buttons (PySide6/translations is not collected by default)
 from PySide6.QtCore import QLibraryInfo  # noqa: E402

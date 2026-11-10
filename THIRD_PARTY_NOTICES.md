@@ -15,6 +15,7 @@ its own license.
 | [Qt for Python (PySide6)](https://www.qt.io/qt-for-python) | LGPL-3.0 (dynamically linked, unmodified) | both |
 | PortAudio / python-sounddevice, soundfile, numpy, pynput, num2words, platformdirs, soundcard | MIT / BSD / LGPL-3.0 (pynput) | both |
 | [certifi](https://github.com/certifi/python-certifi) (CA bundle), [truststore](https://github.com/sethmlarson/truststore) (system certificate store) | MPL-2.0 (unmodified) / MIT | both |
+| [keyring](https://github.com/jaraco/keyring) and its jaraco.* helpers (API keys in the macOS Keychain / Windows Credential Manager) | MIT | both |
 
 ## Downloaded on first run (not redistributed by this project)
 

@@ -9,6 +9,7 @@ from pathlib import Path
 
 _HOME = tempfile.mkdtemp(prefix="mirrorvoice-test-")
 os.environ["MIRRORVOICE_HOME"] = _HOME
+os.environ["MIRRORVOICE_KEYSTORE"] = "file"  # never touch the real keychain from tests
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 

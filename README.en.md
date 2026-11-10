@@ -20,7 +20,8 @@ Runs entirely on your machine · works offline · no API keys · macOS (Apple Si
 | 🎙️ **Your voice, another language** | Record a 12-second sample; Qwen3-TTS zero-shot cloning speaks the translation in your voice into Teams / Zoom / Meet / Tencent Meeting |
 | 💬 **Live subtitles for the other side** | Their speech is recognised and translated into an always-on-top, draggable subtitle bar (visible over full-screen meetings) |
 | ⚡ **Low latency** | About 1.5 s from the end of your sentence until they hear it (measured on an M1 Pro); your speech always jumps ahead of subtitle work. Every sentence shows how long recognition / translation / speech took, and the slowest stage is pointed out |
-| 🔒 **Fully local** | SenseVoice ASR, Qwen3 translation and Qwen3-TTS run on-device; after the first model download no network is needed |
+| 🔒 **Local by default** | SenseVoice ASR, Qwen3 translation and Qwen3-TTS run on-device; after the first model download no network is needed |
+| ☁️ **Optional online translation** | Bring an API key for DeepSeek, Doubao (Volcengine Ark), Qwen (DashScope), SiliconFlow, OpenAI, OpenRouter or any OpenAI-compatible endpoint (including a local Ollama / LM Studio); no translation model to download, the key lives in the OS keychain |
 | 📖 **Glossary & meeting background** | Fixed translations for product names, people and jargon, applied in both directions; list common mis-hearings (e.g. 万佛马 → OneForma) to fix them before translating; a one-line meeting background helps pick the right terminology |
 | 🩺 **One-click routing check** | Without a meeting, checks that the other side can hear your translation, that their subtitles work, and your microphone and monitor, with fixes; step-by-step setup for Teams / Zoom / Tencent Meeting / Feishu |
 | 🎧 **Device guard rails** | Every audio device is labelled with what it is for and the recommended one; combinations that echo or that the other side cannot hear are flagged; on macOS the meeting speaker follows new headphones in one click |
@@ -59,6 +60,15 @@ The GPU voice pack needs native bf16 (compute capability ≥ 8.0, i.e. RTX 30 se
 With everything on (translation + cloned voice + subtitles) it uses about **5 GB** of RAM (measured on an M1 Pro); the Windows CPU path is similar. **16 GB machines run it smoothly** (use the "fast" models; "quality" needs about 3 GB more). Older CPUs translate a little slower (1–3 s per sentence).
 
 8 GB machines or older computers can pick the "turbo" tier (Qwen3-1.7B): about twice as fast (0.36 s per sentence vs 0.78 s for "fast" on an M1 Pro), but noticeably lower translation quality.
+
+### Online translation (optional)
+
+Open "在线模型" (Online models) in the sidebar, or "use online translation" in the setup wizard: pick a provider, paste an API key, pick a model; "测试" (Test) translates one sentence and shows the time it took.
+
+- With online translation the local translation model is not downloaded (saves about 1–5 GB), useful on machines with little memory or no strong GPU.
+- The API key is stored in the macOS Keychain / Windows Credential Manager, never in the settings file; `MIRRORVOICE_<PROVIDER>_API_KEY` (e.g. `MIRRORVOICE_DEEPSEEK_API_KEY`) works too. On macOS the first read after each update shows a keychain prompt; choose "Always Allow".
+- Only text is sent: what you said (the recognised text), the meeting background and the glossary terms it uses. No audio. The other side's speech is still translated locally unless you tick "translate the other side online too".
+- Tuned for live use: an 8 s timeout per sentence and at most one quick retry; after 3 failures in a row (or an invalid key) it switches to the local model for 60 s when that model is downloaded. Reasoning models (e.g. deepseek-reasoner) "think" before every sentence and are too slow for interpreting.
 
 ### Company networks / certificate errors
 

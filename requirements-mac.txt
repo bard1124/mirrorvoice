@@ -13,3 +13,4 @@ pyobjc-framework-Cocoa
 platformdirs
 certifi
 truststore==0.10.5
+keyring==25.7.0

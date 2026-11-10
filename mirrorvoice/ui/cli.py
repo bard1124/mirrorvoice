@@ -48,7 +48,8 @@ def run_cli(app: QApplication) -> int:
             out("init", d["text"], C["dim"])
         elif kind == "ready":
             out("ready", f"mic={d['mic']} → 会议={d['call']}  音色={d['voice']}"
-                + (f"  对方声音={d['them']}" if d["them"] else ""), C["green"])
+                + (f"  对方声音={d['them']}" if d["them"] else "")
+                + (f"  在线翻译={d['llm']}" if d.get("llm") else ""), C["green"])
             out("ready", f"会议记录：{d['transcript']}", C["dim"])
             out("ready", "开始说话吧", C["green"])
             if overlay:
@@ -59,15 +60,18 @@ def run_cli(app: QApplication) -> int:
             else:
                 out("我", d["src"], C["cyan"])
                 out("→", f"{d['tgt']}   {C['dim']}({breakdown(d)}){C['off']}", C["bold"])
-                stats.add(d)
-                if len(stats.rows) % 10 == 0:
-                    out("延迟", stats.summary(s.quality), C["dim"])
+                if not d.get("failed"):
+                    stats.add(d)
+                if not d.get("failed") and len(stats.rows) % 10 == 0:
+                    out("延迟", stats.summary("online" if s.llm_mode == "online" else s.quality), C["dim"])
         elif kind == "them":
             out("对方", d["src"], C["mag"])
             if d["tgt"] != d["src"]:
                 out("→", f"{d['tgt']}   {C['dim']}({breakdown(d)}){C['off']}", C["bold"])
             if overlay:
                 overlay.show_text(d["tgt"], d["src"] if d["tgt"] != d["src"] else "")
+        elif kind == "notice":
+            out("提示", d["text"], C["yellow"])
         elif kind == "mute":
             out("mute", "已静音（对方听不到翻译）" if d["muted"] else "取消静音", C["yellow"])
         elif kind == "ptt":
