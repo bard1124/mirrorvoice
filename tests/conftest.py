@@ -44,7 +44,8 @@ class _RangeHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        cut = self.server.cut.get(self.path)
+        self.wfile.write(body[:cut] if cut is not None else body)  # cut: the connection ends early
 
 
 @pytest.fixture
@@ -53,6 +54,7 @@ def http_files():
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _RangeHandler)
     srv.files, srv.hits, srv.ranges = {}, [], True
     srv.fail, srv.accepts = set(), {}  # paths answered with 504; Accept header seen per path
+    srv.cut = {}  # path -> bytes actually sent (the headers still announce the full length)
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
     yield f"http://127.0.0.1:{srv.server_address[1]}", srv.files, srv

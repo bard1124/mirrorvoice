@@ -607,6 +607,7 @@ class MainWindow(QMainWindow):
         elif kind == "ptt":
             self.status.setText("● 说话中…" if d["down"] else "● 运行中")
         elif kind == "error":
+            self._refresh_banner()  # a damaged model was removed: offer to download it again
             QMessageBox.warning(self, "出错了", d["message"] + f"\n\n详细日志：{LOG_FILE}")
         elif kind == "stopped":
             self.start_btn.setText("开始")

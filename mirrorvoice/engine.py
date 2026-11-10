@@ -30,6 +30,21 @@ Emit = Callable[..., None]  # emit(kind: str, **data)
 SIMILAR = {"zh": {"zh", "yue"}, "yue": {"yue", "zh"}}
 
 
+def check_models(required: list) -> str:
+    """'' or a message naming the damaged files of downloaded models — which are deleted, so the
+    「下载模型」banner offers to fetch just those again (a cut download used to fail every start)."""
+    found = []
+    for m in required:
+        if m.ready():
+            bad = models.remove_damaged(m)
+            if bad:
+                found.append(f"{m.title}（{'、'.join(bad)}）")
+    if not found:
+        return ""
+    return ("模型文件损坏：" + "；".join(found) + "。损坏的文件已删除，请点窗口顶部的「下载模型」补齐"
+            "（只下载这几个文件），再点「开始」。")
+
+
 class Engine:
     def __init__(self, emit: Emit) -> None:
         self.emit = emit
@@ -125,6 +140,9 @@ class Engine:
     def _worker(self) -> None:
         s = self.s
         backend = models.voice_backend(s)
+        damaged = check_models(models.required(s.quality, s))
+        if damaged:
+            raise RuntimeError(damaged)
         need = [m for m in models.required(s.quality, s) if not m.ready()]
         if need:
             raise RuntimeError("模型未下载完整：" + "、".join(m.title for m in need) + "（请运行设置向导）")
@@ -241,7 +259,7 @@ class Engine:
         return mine, Translator(local(), s.meeting_context)
 
     CONTINUATION_GAP_S = 1.5  # a part starting this soon after the previous one continues it
-    STALE_THEM_S = 6.0        # online subtitles this far behind are skipped instead of piling up
+    STALE_THEM_S = 6.0        # subtitles this far behind are skipped instead of piling up behind my speech
 
     def _context(self, who: str, utt: Utterance) -> tuple[str, str] | None:
         prev = self._prev.get(who)
@@ -288,13 +306,12 @@ class Engine:
         src = utt.lang if utt.lang in LANGS else s.their_lang
         t0 = time.time()
         utt.text = correct_asr(utt.text, tr.glossary, "them")
-        online = isinstance(tr.backend, FailoverChat)
         try:
-            if online and t0 - utt.t_end > self.STALE_THEM_S:
+            if t0 - utt.t_end > self.STALE_THEM_S:
                 raise TranslateError("timeout", "积压太多，已跳过这句")
             out = tr.translate(utt.text, src, s.my_lang, subtitle=True, context=self._context("them", utt))
         except TranslateError as e:
-            self.log(f"[them] 在线翻译失败 {e.kind}: {e}")
+            self.log(f"[them] 未翻译 {e.kind}: {e}")
             self.emit("them", src=utt.text, tgt=f"⚠ {e}", latency=time.time() - utt.t_end, asr_s=utt.asr_s,
                       queue_s=max(0.0, t0 - utt.t_end - utt.asr_s), translate_s=time.time() - t0, failed=True)
             return

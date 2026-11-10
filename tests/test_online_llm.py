@@ -304,3 +304,18 @@ def test_failed_sentence_is_shown_not_spoken(api, home):
     e._do_them(tr, Utterance("hello", "en", np.zeros(1600, np.float32), time.time() - 30, 0.1))
     kind, d = events[-1]
     assert kind == "them" and d["failed"] and "积压" in d["tgt"]
+
+
+def test_local_subtitles_far_behind_are_skipped_too(home):
+    """Local translation used to work through every queued subtitle: my sentences waited 8–11 s."""
+    from mirrorvoice.asr import Utterance
+    import numpy as np
+
+    local = _Local()
+    events = []
+    e = _engine(events)
+    e.s = Settings(their_lang="en")
+    e._transcript = None
+    e._do_them(Translator(local), Utterance("hello", "en", np.zeros(1600, np.float32), time.time() - 30, 0.1))
+    kind, d = events[-1]
+    assert kind == "them" and d["failed"] and "积压" in d["tgt"] and local.calls == 0

@@ -117,3 +117,85 @@ def test_lists_from_the_picked_source_and_falls_back_per_file(http_files, monkey
     assert (m.path / "model.bin").read_bytes() == w
     assert not (m.path / "configuration.json").exists()          # not listed on the picked hub
     assert (m.path / "extra.txt").read_bytes() == b"only on modelscope"  # 404 there -> other hub
+
+
+# ---------------------------------------------------------------- cut downloads and damaged files
+# A connection that ends early does not raise in Python's HTTP client: a cut tokenizer.json was
+# renamed into place and every start failed with "Failed to parse tokenizer.json".
+
+
+def test_cut_connection_is_not_a_finished_file_and_resumes(http_files, tmp_path):
+    base, files, srv = http_files
+    files["/tok.json"] = data = _blob(5000)
+    srv.cut["/tok.json"] = 3000
+    dest = tmp_path / "tok.json"
+    with pytest.raises(models.IncompleteDownload, match="不完整"):
+        models._fetch(f"{base}/tok.json", dest, lambda n: None, threading.Event(), size_hint=5000)
+    assert not dest.exists() and (tmp_path / "tok.json.part").stat().st_size == 3000
+    srv.cut.clear()
+    models._fetch(f"{base}/tok.json", dest, lambda n: None, threading.Event(), size_hint=5000)
+    assert dest.read_bytes() == data and srv.hits[-1] == ("/tok.json", "bytes=3000-")
+
+
+def test_cut_connection_detected_from_headers_without_a_listed_size(http_files, tmp_path):
+    base, files, srv = http_files
+    files["/vad.onnx"] = _blob(4000)
+    srv.cut["/vad.onnx"] = 100
+    with pytest.raises(models.IncompleteDownload):
+        models._fetch(f"{base}/vad.onnx", tmp_path / "vad.onnx", lambda n: None, threading.Event())
+    assert not (tmp_path / "vad.onnx").exists()
+
+
+def test_file_larger_than_listed_starts_over(http_files, tmp_path):
+    base, files, _ = http_files
+    files["/x.bin"] = _blob(1000)
+    with pytest.raises(models.IncompleteDownload):
+        models._fetch(f"{base}/x.bin", tmp_path / "x.bin", lambda n: None, threading.Event(), size_hint=900)
+    assert not (tmp_path / "x.bin.part").exists()
+
+
+def _safetensors(n_bytes: int) -> bytes:
+    import json
+
+    header = json.dumps({"w": {"dtype": "U8", "shape": [n_bytes], "data_offsets": [0, n_bytes]}}).encode()
+    return len(header).to_bytes(8, "little") + header + bytes(n_bytes)
+
+
+def test_damaged_files_are_found_offline_and_removed(home):
+    m = models.Model("llm", "测试模型3", "test-repo-3", modelscope="org/test-repo-3", approx_mb=1)
+    m.path.mkdir(parents=True)
+    good = _safetensors(64)
+    (m.path / "model.safetensors").write_bytes(good)
+    (m.path / "model-2.safetensors").write_bytes(good[:-10])  # cut
+    (m.path / "config.json").write_text('{"a": 1}')
+    (m.path / "tokenizer.json").write_text('{"model": {"vocab": {"a": 1, ')  # cut mid-way
+    (m.path / "merges.txt").write_text("a b")
+    (m.path / ".complete").touch()
+    assert m.ready()
+    assert sorted(f.name for f in models.damaged_files(m)) == ["model-2.safetensors", "tokenizer.json"]
+    assert sorted(models.remove_damaged(m)) == ["model-2.safetensors", "tokenizer.json"]
+    assert not m.ready() and (m.path / "model.safetensors").exists() and (m.path / "config.json").exists()
+    assert models.damaged_files(m) == []
+
+
+def test_start_reports_and_repairs_a_damaged_model_then_download_fills_it_in(http_files, monkeypatch, home):
+    from mirrorvoice.engine import check_models
+
+    base, files, _ = http_files
+    tok = b'{"model": {"vocab": {"a": 1}}}'
+    files["/repo/tokenizer.json"] = tok
+    files["/repo/model.safetensors"] = st = _safetensors(128)
+    monkeypatch.setattr(models, "list_files", lambda src, repo: [("tokenizer.json", len(tok)),
+                                                                 ("model.safetensors", len(st))])
+    monkeypatch.setattr(models, "file_url", lambda src, repo, path: f"{base}/repo/{path}")
+    monkeypatch.setattr(models, "pick_source", lambda repo, path: "huggingface")
+    m = models.Model("llm", "测试模型4", "test-repo-4", modelscope="org/test-repo-4", approx_mb=1)
+    m.path.mkdir(parents=True)
+    (m.path / "model.safetensors").write_bytes(st)
+    (m.path / "tokenizer.json").write_bytes(tok[:12])  # what the old downloader left behind
+    (m.path / ".complete").touch()
+    msg = check_models([m])
+    assert "测试模型4" in msg and "tokenizer.json" in msg and "下载模型" in msg
+    assert not m.ready() and check_models([m]) == ""
+    models.download(m, lambda *a: None)
+    assert m.ready() and (m.path / "tokenizer.json").read_bytes() == tok

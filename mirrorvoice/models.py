@@ -251,20 +251,53 @@ def _copy(r, f, on_bytes: Callable[[int], None], cancel: threading.Event, limit:
     return n
 
 
-def _fetch_single(url: str, dest: Path, on_bytes: Callable[[int], None], cancel: threading.Event) -> None:
+class IncompleteDownload(RuntimeError):
+    """The connection ended early. The partial file is kept: the next try resumes it."""
+
+
+def _expected_total(r, have: int) -> int:
+    """Full file size from the response headers (0 = unknown, e.g. chunked)."""
+    m = re.search(r"/(\d+)\s*$", r.headers.get("Content-Range", ""))
+    if r.status == 206 and m:
+        return int(m.group(1))
+    try:
+        n = int(r.headers.get("Content-Length") or 0)
+    except ValueError:
+        return 0
+    return n + (have if r.status == 206 else 0)
+
+
+def _fetch_single(url: str, dest: Path, on_bytes: Callable[[int], None], cancel: threading.Event,
+                  exact: int = 0) -> None:
+    """exact = the size the hub lists for this file (0 = trust the response headers).
+
+    A connection that ends early does not raise in Python's HTTP client: without this check a cut
+    tokenizer.json was renamed into place and every start failed to parse it."""
     part = dest.with_name(dest.name + ".part")
     have = part.stat().st_size if part.exists() else 0
+    if exact and have > exact:  # leftovers from another version of the file
+        part.unlink()
+        have = 0
     if have:
         on_bytes(have)
     headers = dict(UA)
-    if have:
+    if have and have != exact:
         headers["Range"] = f"bytes={have}-"
-    with urlopen(urllib.request.Request(url, headers=headers), timeout=60) as r:
-        if have and r.status != 206:  # server ignored Range: start over
-            on_bytes(-have)
-            have = 0
-        with open(part, "ab" if have else "wb") as f:
-            _copy(r, f, on_bytes, cancel)
+    if not (exact and have == exact):
+        with urlopen(urllib.request.Request(url, headers=headers), timeout=60) as r:
+            if have and r.status != 206:  # server ignored Range: start over
+                on_bytes(-have)
+                have = 0
+            expected = exact or _expected_total(r, have)
+            with open(part, "ab" if have else "wb") as f:
+                _copy(r, f, on_bytes, cancel)
+    else:
+        expected = exact
+    got = part.stat().st_size
+    if expected and got != expected:
+        if got > expected:  # cannot be resumed into the right file
+            part.unlink()
+        raise IncompleteDownload(f"{dest.name} 下载不完整（{got} / {expected} 字节），重试会接着下载")
     part.rename(dest)
 
 
@@ -316,7 +349,7 @@ def _fetch_segmented(url: str, dest: Path, total: int, on_bytes: Callable[[int],
         raise first
     sizes = [p.stat().st_size for p in parts]
     if sizes != [e - s + 1 for s, e in ranges]:
-        raise RuntimeError(f"分段下载不完整：{sizes}")
+        raise IncompleteDownload(f"{dest.name} 分段下载不完整：{sizes}，重试会接着下载")
     joined = dest.with_name(dest.name + ".part")
     with open(joined, "wb") as out:
         for p in parts:
@@ -330,7 +363,9 @@ def _fetch_segmented(url: str, dest: Path, total: int, on_bytes: Callable[[int],
 
 def _fetch(url: str, dest: Path, on_bytes: Callable[[int], None], cancel: threading.Event,
            size_hint: int = 0) -> None:
-    """Download with resume; files over SEGMENT_MIN use SEGMENTS parallel connections when possible."""
+    """Download with resume; files over SEGMENT_MIN use SEGMENTS parallel connections when possible.
+
+    size_hint is the exact size the hub lists (0 = unknown): the finished file must match it."""
     if dest.exists():
         return
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -341,10 +376,10 @@ def _fetch(url: str, dest: Path, on_bytes: Callable[[int], None], cancel: thread
             total = _range_size(url)
         except Exception:  # noqa: BLE001 — fall back to one connection
             total = 0
-        if total >= SEGMENT_MIN:
+        if total >= SEGMENT_MIN and (not size_hint or total == size_hint):
             _fetch_segmented(url, dest, total, on_bytes, cancel)
             return
-    _fetch_single(url, dest, on_bytes, cancel)
+    _fetch_single(url, dest, on_bytes, cancel, exact=size_hint)
 
 
 def download(model: Model, progress: Progress, cancel: threading.Event | None = None) -> None:
@@ -361,14 +396,14 @@ def download(model: Model, progress: Progress, cancel: threading.Event | None = 
 
     if model.url and model.url.endswith(".tar.bz2"):
         tar = MODELS / (model.dest + ".tar.bz2")
-        _fetch(model.url, tar, bump, cancel, size_hint=state["total"])
+        _fetch(model.url, tar, bump, cancel)  # size from the response headers (approx_mb is a guess)
         progress(model.title + "（解压中）", state["done"], state["total"])
         with tarfile.open(tar) as t:
             t.extractall(MODELS, filter="data")
         tar.unlink()
         (model.path / ".complete").touch()
     elif model.url:
-        _fetch(model.url, model.path, bump, cancel, size_hint=state["total"])
+        _fetch(model.url, model.path, bump, cancel)
     else:
         listed = "modelscope"
         try:
@@ -403,8 +438,48 @@ def download(model: Model, progress: Progress, cancel: threading.Event | None = 
         with ThreadPoolExecutor(max_workers=4) as pool:
             list(pool.map(one, items))
         if not single_file:
+            bad = remove_damaged(model)
+            if bad:
+                raise RuntimeError(f"{model.title} 有文件下载后校验不通过（{'、'.join(bad)}），已删除，请重试")
             (model.path / ".complete").touch()
     progress(model.title, state["total"], state["total"])
+
+
+def damaged_files(model: Model) -> list[Path]:
+    """Files of a downloaded model folder that are cut or corrupt, checked offline in ~0.1 s:
+    every .json must parse, every .safetensors must be as long as its header says."""
+    root = model.path
+    if not root.is_dir():
+        return []
+    bad = []
+    for f in sorted(root.rglob("*")):
+        if not f.is_file() or f.name.endswith(".part") or ".part" in f.suffixes:
+            continue
+        try:
+            if f.suffix == ".json":
+                with open(f, encoding="utf-8") as fh:
+                    json.load(fh)
+            elif f.suffix == ".safetensors":
+                with open(f, "rb") as fh:
+                    n = int.from_bytes(fh.read(8), "little")
+                    header = json.loads(fh.read(n))
+                ends = [v["data_offsets"][1] for k, v in header.items() if k != "__metadata__"]
+                if f.stat().st_size != 8 + n + max(ends, default=0):
+                    bad.append(f)
+        except (OSError, ValueError, KeyError, TypeError, IndexError, UnicodeDecodeError):
+            bad.append(f)
+    return bad
+
+
+def remove_damaged(model: Model) -> list[str]:
+    """Delete damaged files (and the folder's done marker, so the download fills them in again);
+    returns their names relative to the model folder."""
+    bad = damaged_files(model)
+    for f in bad:
+        f.unlink(missing_ok=True)
+    if bad:
+        (model.path / ".complete").unlink(missing_ok=True)
+    return [str(f.relative_to(model.path)) for f in bad]
 
 
 def adopt_existing(src_dir: Path) -> list[str]:
