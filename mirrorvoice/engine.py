@@ -151,6 +151,131 @@ class Engine:
         if self._log:
             self._log.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
 
+    # ------------------------------------------------------------ settings changed while running
+    def _progress(self, text: str) -> None:
+        """Loading steps: the status line while starting, a notice once running."""
+        self.emit("notice" if self._ready else "status", text=text)
+
+    def apply(self, changed: set[str]) -> None:
+        """Settings changed in the control panel while running (UI thread): take effect now.
+        "llm" = the online / local translator choice. Slow parts run on their own threads."""
+        if not self.running:
+            return
+        s = self.s
+        if changed & {"speak", "passthrough"} and (s.speak or s.passthrough):
+            try:
+                self._ensure_player()
+            except Exception as e:  # noqa: BLE001
+                self.emit("notice", text=f"打开“送进会议”设备失败：{e}")
+        if changed & {"my_lang", "their_lang"}:
+            self._set_languages()
+        if changed & {"speak", "quality", "their_lang", "cpu_voice", "gpu_voice"} and self._voice_changes():
+            self.reload_voice()
+        if "subtitles" in changed:
+            threading.Thread(target=self._apply_subtitles, daemon=True, name="subtitles").start()
+        if "ptt_key" in changed:
+            self._start_hotkeys()
+        if changed & {"quality", "llm"}:
+            self._jobs.put((0, next(self._seq), "models", None))
+
+    def _voice_changes(self) -> bool:
+        s = self.s
+        if not (s.speak and LANGS[s.their_lang].tts):
+            return self._voice is not None
+        backend = models.voice_backend(s)
+        tts_model = {"kokoro": models.KOKORO, "pocket": models.POCKET}.get(backend, models.TTS_CLONE[s.quality])
+        return self._voice is None or getattr(self, "_voice_key", None) != (backend, str(tts_model.path))
+
+    def _ensure_player(self) -> None:
+        if self._player is not None:
+            return
+        s = self.s
+        mon = None
+        if s.monitor:
+            try:
+                mon = find_device(s.monitor, "output")
+            except LookupError:
+                pass
+        self._player = Player(find_device(s.call_out, "output"), mon, s.gain)
+        self._closers.append(self._player.close)
+
+    def _set_languages(self) -> None:
+        """New language pair: listeners expect the new languages; earlier turns no longer apply."""
+        s = self.s
+        for listener, lang, alt in ((self._me, s.my_lang, s.their_lang), (self._them, s.their_lang, s.my_lang)):
+            seg = getattr(listener, "seg", None)
+            if seg is None:
+                continue
+            seg.lang, seg.alt = lang, alt
+            if hasattr(seg, "_fixed"):
+                seg._fixed = None  # built again for the new language on first need
+            stream = getattr(seg, "stream", None)
+            if stream is not None:
+                stream.lang = lang  # online recognition: the next task's language hint
+            local = getattr(seg, "local", None)
+            if local is not None:
+                local.lang, local.alt, local._fixed = lang, alt, None
+        self._prev = {"me": None, "them": None}
+        self._hist = {"me": deque(maxlen=self.HISTORY_N + 1), "them": deque(maxlen=self.HISTORY_N + 1)}
+
+    def _apply_subtitles(self) -> None:
+        s = self.s
+        try:
+            if s.subtitles and s.their_source and self._them is None:
+                self._start_them(s.their_source)
+                self.emit("notice", text="对方字幕已开启")
+            elif not s.subtitles and self._them is not None:
+                self.set_their_source("")
+                self.emit("notice", text="对方字幕已关闭")
+        except Exception as e:  # noqa: BLE001
+            self.emit("notice", text=f"开启对方字幕失败：{e}")
+
+    def _start_hotkeys(self) -> None:
+        """(Re)start the global keys — at start, and when the push-to-talk key changes (main thread:
+        the keyboard layout is read there)."""
+        old = getattr(self, "_hk", None)
+        if old is not None:
+            old.stop()
+            if old.stop in self._closers:
+                self._closers.remove(old.stop)
+        hotkeys.prime_layout()
+        s = self.s
+        hk = Hotkeys(s.ptt_key, s.mute_hotkey, self._on_ptt, lambda: self.set_muted(not self.muted))
+        try:
+            hk.start()
+            self._closers.append(hk.stop)
+            self._hk = hk
+        except Exception as e:  # noqa: BLE001 — no permission: hotkeys just don't work
+            self._hk = None
+            self.emit("notice" if self._ready else "status", text=f"全局快捷键不可用：{e}")
+
+    def _switch_translators(self, tr: Translator, tr_them: Translator) -> tuple[Translator, Translator]:
+        """Worker thread: build the translators for the new model / online choice; the old ones
+        keep working until the new ones are ready, and stay when that fails."""
+        s = self.s
+        need = [m for m in models.required(s.quality, s) if not m.ready() and m.key == "llm"]
+        if need:
+            self.emit("notice", text="翻译模型还没下载：" + "、".join(m.title for m in need)
+                      + "，先在窗口顶部下载，下载完再切换")
+            return tr, tr_them
+        try:
+            new, new_them = self._translators(s)
+            new.translate("你好", "zh", "en")
+        except Exception as e:  # noqa: BLE001
+            self.emit("notice", text=f"切换翻译模型失败，继续用原来的：{e}")
+            return tr, tr_them
+        for t in {id(tr): tr, id(tr_them): tr_them}.values():
+            if t not in (new, new_them):
+                try:
+                    t.close()
+                except Exception:  # noqa: BLE001
+                    pass
+        self._tr_them = new_them
+        self._interim_tr = Translator(new_them.backend.online, s.meeting_context) \
+            if isinstance(new_them.backend, FailoverChat) else None
+        self.emit("notice", text=f"翻译已切换为：{new.label or models.llm_name(s.quality)}")
+        return new, new_them
+
     def _start_them(self, source: str) -> Listener:
         s = self.s
         them = Listener("them", source, s.their_lang, s.pause, self._on_them, self._on_level, self._them_gate,
@@ -239,6 +364,7 @@ class Engine:
             voice = make_voice(backend, tts_model.path)
             voice.speed = s.voice_speed
             self._closers.append(voice.close)
+            self._voice_key = (backend, str(tts_model.path))
         if s.speak or s.passthrough:
             self.emit("status", text="打开音频设备…")
             mon = None
@@ -299,12 +425,7 @@ class Engine:
             except Exception as e:  # noqa: BLE001 — subtitles are optional
                 self.emit("status", text=f"对方声音来源不可用（{e}），字幕关闭")
 
-        hk = Hotkeys(s.ptt_key, s.mute_hotkey, self._on_ptt, lambda: self.set_muted(not self.muted))
-        try:
-            hk.start()
-            self._closers.append(hk.stop)
-        except Exception as e:  # noqa: BLE001 — no permission: hotkeys just don't work
-            self.emit("status", text=f"全局快捷键不可用：{e}")
+        self._start_hotkeys()
 
         self._ready = True
         self.emit("ready", mic=me.label, call=s.call_out, them=them.label if them else "",
@@ -328,6 +449,9 @@ class Engine:
             if kind == "voice":
                 self._voice_q.put(("swap", None))  # the voice thread owns every TTS object
                 continue
+            if kind == "models":
+                tr, tr_them = self._switch_translators(tr, tr_them)
+                continue
             if kind == "me":
                 self._do_me(tr, utt)
             else:
@@ -342,7 +466,7 @@ class Engine:
         def local():
             if "b" not in shared:
                 # later as the online fallback: a notice, the status line already says 运行中
-                self.emit("notice" if self._ready else "status", text="加载翻译模型…")
+                self._progress("加载翻译模型…")
                 shared["b"] = local_backend(local_path)
                 self._closers.append(shared["b"].close)
             return shared["b"]
@@ -350,7 +474,7 @@ class Engine:
         if s.llm_mode != "online":
             t = Translator(local(), s.meeting_context)
             return t, t
-        self.emit("status", text="连接在线翻译…")
+        self._progress("连接在线翻译…")
         try:
             online = OnlineChat.from_settings(s)
         except TranslateError as e:
@@ -359,7 +483,7 @@ class Engine:
         mine = Translator(FailoverChat(online, fallback, lambda m: self.emit("notice", text=m)), s.meeting_context)
         if s.online_their or not (s.subtitles and s.their_source):
             return mine, mine
-        self.emit("status", text="加载本地翻译模型（对方字幕）…")
+        self._progress("加载本地翻译模型（对方字幕）…")
         return mine, Translator(local(), s.meeting_context)
 
     CONTINUATION_GAP_S = 1.5  # a part starting this soon after the previous one continues it
@@ -584,6 +708,7 @@ class Engine:
             for _ in voice.stream("Hello.", s.their_lang):  # warm-up, as at start
                 pass
             self._voice = voice
+            self._voice_key = (backend, str(tts_model.path))
             self._closers.append(voice.close)
             self.emit("voice", voice="你的克隆音色" if voice.clone else "标准音色")
         except Exception as e:  # noqa: BLE001 — keep translating, just without speech

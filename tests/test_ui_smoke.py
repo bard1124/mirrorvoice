@@ -304,3 +304,19 @@ def test_device_change_while_running_switches_live(app, settings, no_popups, mon
     finally:
         w.engine.running = False
         w.close()
+
+
+def test_feature_change_while_running_applies_live(app, settings, no_popups, monkeypatch):
+    from mirrorvoice.ui import main_window
+
+    w = _window(main_window, settings, monkeypatch)
+    got = []
+    monkeypatch.setattr(w.engine, "apply", lambda changed: got.append(changed))
+    w.engine.running = True
+    try:
+        w.speak.setChecked(not w.speak.isChecked())
+        assert got and "speak" in got[-1]
+        assert "再“开始”后生效" not in w.status.text()
+    finally:
+        w.engine.running = False
+        w.close()

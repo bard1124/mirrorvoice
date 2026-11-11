@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import sys
 
-from PySide6.QtCore import QLibraryInfo, QLocale, Qt, QTimer, QTranslator
+from PySide6.QtCore import QEvent, QLibraryInfo, QLocale, QObject, Qt, QTimer, QTranslator
 from PySide6.QtGui import QColor, QPalette
-from PySide6.QtWidgets import (QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton,
+from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton,
                                QVBoxLayout, QWidget)
 
 ACCENT = "#E8432E"
@@ -99,12 +99,14 @@ QLabel#msgBadge[kind="warning"] {{ background: #FFF4E0; color: #B26A00; }}
 QLabel#msgBadge[kind="question"] {{ background: {ACCENT_SOFT}; color: {ACCENT}; }}
 QLabel#msgBadge[kind="critical"] {{ background: #FDECEC; color: #C62828; }}
 
-QComboBox {{ background: {BG}; border: 1px solid #DFE2E7; border-radius: 8px; padding: 5px 10px; min-height: 20px; }}
+QComboBox {{ background: {BG}; border: 1px solid #DFE2E7; border-radius: 8px; padding: 5px 10px; min-height: 20px;
+             combobox-popup: 0; }}
 QComboBox:hover {{ border-color: #C9CDD4; }}
 QComboBox:focus {{ border-color: {ACCENT}; }}
 QComboBox::drop-down {{ border: none; width: 26px; subcontrol-origin: padding; subcontrol-position: center right; }}
 QComboBox::down-arrow {{ image: url("{CHEVRON}"); width: 12px; height: 12px; }}
 QComboBox::down-arrow:on {{ top: 1px; }}
+QFrame#comboPopup {{ background: transparent; border: none; }}
 QComboBox QAbstractItemView {{ background: {BG}; border: 1px solid {LINE}; border-radius: 8px; padding: 4px;
                                selection-background-color: {ACCENT_SOFT}; selection-color: {ACCENT}; outline: 0; }}
 QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox {{ background: {BG}; border: 1px solid #DFE2E7; border-radius: 8px;
@@ -245,8 +247,32 @@ def load_translations(app: QApplication) -> None:
             _translators.append(t)
 
 
+class _ComboPopups(QObject):
+    """Drop-down lists draw their own rounded box; the window Qt wraps them in painted a square
+    frame and background around it. Make that window frameless and see-through."""
+
+    def eventFilter(self, obj, ev) -> bool:  # noqa: N802 — Qt override
+        if ev.type() == QEvent.Type.Polish and isinstance(obj, QComboBox) and not obj.property("mvPopup"):
+            obj.setProperty("mvPopup", True)
+            box = obj.view().parentWidget()  # Qt's private popup container (a QFrame)
+            if box is not None and box.isWindow():
+                flags = box.windowFlags() | Qt.WindowType.FramelessWindowHint
+                if sys.platform != "darwin":  # Windows draws a square shadow; macOS shades the visible shape
+                    flags |= Qt.WindowType.NoDropShadowWindowHint
+                box.setWindowFlags(flags)
+                box.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+                box.setObjectName("comboPopup")
+                if isinstance(box, QFrame):
+                    box.setFrameShape(QFrame.Shape.NoFrame)
+        return False
+
+
+_combo_popups = _ComboPopups()
+
+
 def apply(app: QApplication) -> None:
     app.setStyle("Fusion")
+    app.installEventFilter(_combo_popups)
     load_translations(app)
     install_message_boxes()
     pal = app.palette()

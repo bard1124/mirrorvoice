@@ -503,14 +503,15 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, f"{title}：{dh.label(combo.currentData(), dh.Hint(h.rank))}", h.warning)
 
     # settings that only take effect when the engine (re)starts
-    RESTART_KEYS = ("my_lang", "their_lang", "speak", "subtitles", "passthrough", "mode", "ptt_key", "quality")
+    # settings the running engine picks up through engine.apply() (nothing needs stop / start any more)
+    LIVE_KEYS = ("my_lang", "their_lang", "speak", "subtitles", "passthrough", "mode", "ptt_key", "quality")
     # devices switched while running (engine.set_*); the monitor was the only one before
     LIVE_DEVICES = (("mic", "set_mic", "我的麦克风"), ("call_out", "set_call_out", "送进会议"),
                     ("their_source", "set_their_source", "对方声音来源"))
 
     def _save(self) -> None:
         s = self.s
-        before = {k: getattr(s, k) for k in self.RESTART_KEYS + ("monitor", "mic", "call_out", "their_source")}
+        before = {k: getattr(s, k) for k in self.LIVE_KEYS + ("monitor", "mic", "call_out", "their_source")}
         s.my_lang, s.their_lang = self.my.currentData(), self.their.currentData()
         s.mic, s.call_out, s.monitor, s.their_source = (self.mic.currentData(), self.call.currentData(),
                                                         self.mon.currentData(), self.src.currentData())
@@ -526,9 +527,9 @@ class MainWindow(QMainWindow):
             for key, fn, title in self.LIVE_DEVICES:
                 if before[key] != getattr(s, key):
                     self._switch_device(fn, title, getattr(s, key))
-            if any(before[k] != getattr(s, k) for k in self.RESTART_KEYS):
-                self.status.setText("● 运行中 · 设置已保存，点“停止”再“开始”后生效")
-                self._status_state("busy")
+            changed = {k for k in self.LIVE_KEYS if before[k] != getattr(s, k)}
+            if changed:
+                self.engine.apply(changed)
 
     def _switch_device(self, fn: str, title: str, value: str) -> None:
         """Hot-switch one device on a worker thread (opening a device or a recognizer can take a
@@ -718,11 +719,13 @@ class MainWindow(QMainWindow):
         self._refresh_llm_label()
         if hasattr(self, "banner"):
             self._refresh_banner()
-        changed = before != (self.s.llm_mode, self.s.llm_provider, self.s.llm_model, self.s.llm_base_url,
-                             self.s.online_their, self.s.asr_mode, self.s.asr_me, self.s.asr_them,
-                             self.s.asr_local)
+        after = (self.s.llm_mode, self.s.llm_provider, self.s.llm_model, self.s.llm_base_url, self.s.online_their,
+                 self.s.asr_mode, self.s.asr_me, self.s.asr_them, self.s.asr_local)
+        if before[:5] != after[:5] and self.engine.running:
+            self.engine.apply({"llm"})  # translation switches live
+        changed = before[5:] != after[5:]  # speech recognition: on the next start
         if changed and self.engine.running:
-            self.status.setText("● 运行中 · 翻译设置已保存，点“停止”再“开始”后生效")
+            self.status.setText("● 运行中 · 识别设置已保存，点“停止”再“开始”后生效")
             self._status_state("busy")
 
     def _glossary(self) -> None:
