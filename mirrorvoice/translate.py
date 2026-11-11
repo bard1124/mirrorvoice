@@ -141,9 +141,18 @@ def token_budget(text: str) -> int:
     return min(200, 32 + 2 * len(text))
 
 
+# the switch the prompt carries, sometimes copied into the answer by small models ("… say? /no_think")
+_TAGS = re.compile(r"\s*/(?:no_)?think\b", re.I)
+
+
+def strip_tags(text: str) -> str:
+    return _TAGS.sub("", text)
+
+
 def last_line(text: str) -> str:
-    """Drop <think> blocks; if the model echoed extra lines keep only the final one."""
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
+    """Drop <think> blocks and echoed /no_think tags; if the model echoed extra lines keep only the
+    final one."""
+    text = strip_tags(re.sub(r"<think>.*?</think>", "", text, flags=re.S))
     lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
     return (lines[-1] if lines else "").strip('"“”')
 
@@ -241,7 +250,7 @@ class Translator:
         text, sent = "", on_clause is None
         for piece in pieces:
             text += piece
-            body = text.split("</think>")[-1].strip()
+            body = strip_tags(text.split("</think>")[-1]).strip()
             if off_task(body, src_text, tgt):
                 break  # stop generating: translate() retries plainly
             if on_text is not None and body and "\n" not in body and "<think>" not in body:
@@ -264,7 +273,7 @@ def first_clause(text: str, tgt: str, min_words: int = 4, src_text: str | None =
     """The finished first clause of a translation still being written ('' = not yet / not safe):
     ends at punctuation that already has more text after it, has at least min_words words (6
     characters for Chinese / Japanese / Korean), sits on the first line, and is not reasoning."""
-    body = text.split("</think>")[-1].lstrip()
+    body = strip_tags(text.split("</think>")[-1]).lstrip()
     if "\n" in body.strip():
         return ""  # several lines: last_line() will pick one, the first clause may not be in it
     for m in _CLAUSE.finditer(body):

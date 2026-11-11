@@ -202,3 +202,17 @@ def test_their_translation_shows_while_it_is_written(home):
     live = [d for k, d in events if k == "partial"]
     assert [d["tgt"] for d in live] == ["我们先讨论 …", "我们先讨论预算。 …"]  # too short at first
     assert all(d["who"] == "them" and d["src"] == "Let's discuss the budget first." for d in live)
+
+
+def test_an_echoed_no_think_tag_is_never_spoken_or_shown():
+    from mirrorvoice.translate import first_clause, last_line
+
+    assert last_line("You, can you see what I say? /no_think") == "You, can you see what I say?"
+    assert last_line("/no_think Hello there.") == "Hello there."
+    pieces = ["You,", " can you", " see what", " I say?", " /no_", "think"]
+    heard, shown = [], []
+    out = _tr(_Streaming(pieces)).translate("你能看到我说的话吗？", "zh", "en", on_clause=heard.append,
+                                           on_text=shown.append)
+    assert out == "You, can you see what I say?"
+    assert all("think" not in t for t in heard + shown)
+    assert "think" not in first_clause("/no_think Let us start the meeting now, and then", "en")
