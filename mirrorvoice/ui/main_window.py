@@ -5,11 +5,11 @@ import subprocess
 import threading
 import sys
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFormLayout, QFrame,
                                QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-                               QProgressBar, QPushButton, QRadioButton, QScrollArea, QVBoxLayout, QWidget)
+                               QProgressBar, QPushButton, QRadioButton, QScrollArea, QVBoxLayout, QWidget, QBoxLayout)
 
 from .. import __version__, models
 from .. import device_hints as dh
@@ -114,7 +114,12 @@ class MainWindow(QMainWindow):
         bl.addWidget(self.banner_btn)
         lay.addWidget(self.banner)
 
-        cl = lay  # settings cards, then the transcript takes the remaining height
+        # settings cards on the left (scrolling on their own), the conversation on the right at full
+        # height; a narrow window stacks them (_fit_layout)
+        settings = QWidget(objectName="content")
+        cl = QVBoxLayout(settings)
+        cl.setContentsMargins(0, 0, 4, 0)
+        cl.setSpacing(12)
 
         g, h0 = card("语言")
         h = QHBoxLayout()
@@ -273,20 +278,28 @@ class MainWindow(QMainWindow):
         tv.addWidget(self.lat_label)
         self.log = QListWidget(objectName="log")
         self.log.setWordWrap(True)
+        self.log.setResizeMode(QListWidget.ResizeMode.Adjust)  # rewrap rows when the column changes width
+        self.log.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.log.setMinimumHeight(200)
         tv.addWidget(self.log, 1)
-        lay.addWidget(g, 1)
+        cl.addStretch()
 
-        # the whole page scrolls vertically when the window is shorter than its content
-        scroll = QScrollArea(objectName="page")
+        scroll = QScrollArea(objectName="page")  # the settings scroll when the window is short
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setWidget(content)
-        outer.addWidget(scroll, 1)
+        scroll.setWidget(settings)
+        self._settings_scroll, self._convo_card = scroll, g
+        self._body = QBoxLayout(QBoxLayout.Direction.LeftToRight)
+        self._body.setSpacing(16)
+        self._body.addWidget(scroll, 5)
+        self._body.addWidget(g, 6)
+        lay.addLayout(self._body, 1)
+        outer.addWidget(content, 1)
         self.setCentralWidget(root)
-        self.resize(940, 960)
+        self.resize(1320, 860)
         self.setMinimumSize(760, 560)
+        self._fit_layout()
         self._center_on_screen()
 
         # load settings into widgets, save on any change
@@ -307,6 +320,37 @@ class MainWindow(QMainWindow):
         self.display.currentIndexChanged.connect(self._display_changed)
         for role, combo, _ in self._device_combos():
             combo.currentIndexChanged.connect(lambda _i, role=role: self._device_picked(role))
+
+    CONVO_MIN_W = 420  # the conversation column needs at least this; narrower windows stack the two
+
+    def resizeEvent(self, e) -> None:  # noqa: N802 — Qt override
+        super().resizeEvent(e)
+        if hasattr(self, "_body"):
+            self._fit_layout()
+
+    def showEvent(self, e) -> None:  # noqa: N802 — Qt override
+        super().showEvent(e)
+        # the settings' real width is known only once the style sheet has polished them
+        QTimer.singleShot(0, self._fit_layout)
+
+    def _fit_layout(self) -> None:
+        """Settings keep the width their controls need (never clipped); the conversation takes the
+        rest beside them, or goes below when that would leave it narrower than CONVO_MIN_W."""
+        settings = self._settings_scroll.widget()
+        need = settings.minimumSizeHint().width() + self._settings_scroll.verticalScrollBar().sizeHint().width() + 8
+        room = self.centralWidget().width() - 176 - 56 - self._body.spacing()  # sidebar, page margins
+        wide = room - need >= self.CONVO_MIN_W
+        want = QBoxLayout.Direction.LeftToRight if wide else QBoxLayout.Direction.TopToBottom
+        if self._body.direction() != want:
+            self._body.setDirection(want)
+        self._body.setStretch(0, 0 if wide else 3)
+        self._body.setStretch(1, 1 if wide else 2)
+        if wide:
+            self._settings_scroll.setFixedWidth(need)
+        else:
+            self._settings_scroll.setMinimumWidth(0)
+            self._settings_scroll.setMaximumWidth(16777215)
+        self._convo_card.setMinimumHeight(0 if wide else 260)
 
     def _center_on_screen(self) -> None:
         """Open centred on the screen under the cursor (fit the window to it first)."""
