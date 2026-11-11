@@ -307,6 +307,22 @@ def cleanup_downloads(stale_part_hours: float = 24) -> list[str]:
     return removed
 
 
+# after a patch: wait for this process, stop any other window of the app still running the old code
+# (asking it to quit is refused while it lives in the menu bar; `open` would only bring it forward),
+# then start the app again
+RELAUNCH_MAC = r"""
+while kill -0 "$1" 2>/dev/null; do sleep 0.3; done
+BIN="$2/Contents/MacOS/"
+if pgrep -f "$BIN" >/dev/null; then
+  pkill -TERM -f "$BIN"
+  for i in $(seq 1 20); do pgrep -f "$BIN" >/dev/null || break; sleep 0.5; done
+  pkill -KILL -f "$BIN"
+  sleep 0.5
+fi
+open "$2"
+"""
+
+
 def _relaunch_after_exit() -> None:
     """Start the app again once this process has quit (a patch takes effect on the next start)."""
     pid = os.getpid()
@@ -315,16 +331,17 @@ def _relaunch_after_exit() -> None:
         target = current_app_bundle()
         if target is None:
             return
-        subprocess.Popen(["/bin/sh", "-c", 'while kill -0 "$1" 2>/dev/null; do sleep 0.3; done; open "$2"',
-                          "relaunch", str(pid), str(target)], env=env,
+        subprocess.Popen(["/bin/sh", "-c", RELAUNCH_MAC, "relaunch", str(pid), str(target)], env=env,
                          start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL)
     elif IS_WIN:
-        exe = sys.executable.replace("'", "''")
+        gui = str(Path(sys.executable).with_name("MirrorVoice.exe")).replace("'", "''")  # not the CLI twin
         flags = (getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
                  | getattr(subprocess, "CREATE_NO_WINDOW", 0))
         subprocess.Popen(["powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command",
-                          f"Wait-Process -Id {pid} -ErrorAction SilentlyContinue; Start-Process -FilePath '{exe}'"],
+                          f"Wait-Process -Id {pid} -ErrorAction SilentlyContinue; "
+                          f"Get-Process MirrorVoice -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -eq '{gui}' }}"
+                          f" | Stop-Process -Force; Start-Sleep -Milliseconds 500; Start-Process -FilePath '{gui}'"],
                          creationflags=flags, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL)
 

@@ -224,3 +224,26 @@ def test_patch_download_and_install(signed_release, monkeypatch, tmp_path):
     assert json.loads((tmp_path / "app" / "active.json").read_text()) == {"version": new}
     assert json.loads((tmp_path / "app" / new / "patch.json").read_text())["runtime"] == "rt-a"
     assert not path.exists()  # the zip is gone once unpacked
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS relaunch script")
+def test_mac_relaunch_stops_other_windows_then_opens(tmp_path):
+    """A command-line patch update while the app window ran: `open` only brought the old window
+    forward, still on the old code. The relaunch script stops it first."""
+    bundle = tmp_path / "镜声.app"
+    (bundle / "Contents" / "MacOS").mkdir(parents=True)
+    fake = bundle / "Contents" / "MacOS" / "MirrorVoice"
+    fake.write_text("#!/bin/sh\nsleep 60\n")
+    fake.chmod(0o755)
+    old = subprocess.Popen([str(fake)])
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "open").write_text(f"#!/bin/sh\necho opened \"$1\" > {tmp_path / 'opened.txt'}\n")
+    (bindir / "open").chmod(0o755)
+    gone = subprocess.Popen(["true"])
+    gone.wait()
+    env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}"}
+    subprocess.run(["/bin/sh", "-c", updater.RELAUNCH_MAC, "relaunch", str(gone.pid), str(bundle)], env=env,
+                   timeout=30, check=True)
+    assert old.wait(timeout=5) is not None  # the old window was stopped
+    assert (tmp_path / "opened.txt").read_text().strip() == f"opened {bundle}"
