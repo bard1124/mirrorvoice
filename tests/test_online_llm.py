@@ -339,13 +339,16 @@ def sse(pieces, gap=0.0):
 def test_online_translation_streams_so_the_first_clause_is_spoken_early(api):
     srv, url = api
     pieces = ["Let's", " first", " discuss", " the budget,", " and", " then", " the", " release", " date."]
-    srv.script = [sse(pieces, gap=0.05)]
+    srv.script = [sse(pieces, gap=0.15)]
     tr = Translator(FailoverChat(OnlineChat("deepseek", "deepseek-chat", KEY, url)))
     t0, heard = time.monotonic(), []
     out = tr.translate("我们先讨论预算，然后是发布日期。", "zh", "en",
                        on_clause=lambda h: heard.append((h, time.monotonic() - t0)))
+    total = time.monotonic() - t0
     assert out == "Let's first discuss the budget, and then the release date."
-    assert heard[0][0] == "Let's first discuss the budget," and heard[0][1] < 0.4  # before the rest arrived
+    # before the rest arrived: 4 more pieces (0.6 s) were still on their way (relative, so a slow
+    # CI machine does not matter)
+    assert heard[0][0] == "Let's first discuss the budget," and total - heard[0][1] > 0.4
     assert srv.seen[0]["body"]["stream"] is True
 
 
