@@ -121,6 +121,9 @@ class OnlineChat:
         # Qwen3 hosted without a thinking switch (OpenRouter, Ollama…) still honours the prompt tag
         self.no_think = "qwen3" in model.lower() and not self.extra
         self.label = providers.label(pid, model)
+        # runs at the provider: no need to wait for this machine's speech synthesis (a "custom"
+        # service on this machine shares its GPU, though)
+        self.uses_gpu = any(h in base_url for h in ("127.0.0.1", "localhost", "[::1]"))
 
     @classmethod
     def from_settings(cls, s) -> "OnlineChat":
@@ -179,6 +182,10 @@ class FailoverChat:
     @property
     def using_local(self) -> bool:
         return self._local_factory is not None and time.monotonic() < self.local_until
+
+    @property
+    def uses_gpu(self) -> bool:  # only while the local model stands in
+        return self.using_local
 
     @property
     def no_think(self) -> bool:  # read by Translator before it builds the prompt

@@ -199,7 +199,7 @@ class Settings:
     mode: str = "continuous"        # "continuous" | "ptt"
     ptt_key: str = "alt_r"          # pynput key name held for push-to-talk
     mute_hotkey: str = "<ctrl>+<alt>+m"
-    pause: float = 0.5              # silence that ends a sentence
+    pause: float = 0.35             # silence that ends a sentence (0.5 before 0.8.4: 0.15 s slower)
     quality: str = "fast"           # "turbo" (smallest, weak machines) | "fast" | "quality" (bigger models)
     meeting_context: str = ""       # free-text background of the meeting, helps the translator pick terms
     llm_mode: str = "local"         # translation: "local" (downloaded Qwen3) | "online" (API key, providers.py)
@@ -241,6 +241,8 @@ class Settings:
             try:
                 raw = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
                 known = {f.name for f in fields(cls)}
+                if raw.get("pause") == 0.5:  # the old default (not settable in the window): use the new one
+                    raw.pop("pause")
                 return cls(**{k: v for k, v in raw.items() if k in known})
             except Exception:  # noqa: BLE001 — corrupt settings fall back to defaults
                 pass

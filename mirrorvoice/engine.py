@@ -524,10 +524,11 @@ class Engine:
         waited = t0 - utt.t_end  # time the sentence sat in the queue behind earlier work
         utt.text = correct_asr(utt.text, tr.glossary, "me")
         speak = self._voice is not None and not self.muted and self._player is not None
-        if speak:
+        if speak and getattr(tr.backend, "uses_gpu", True):
             # Translator and voice share the GPU: running them side by side made both slower
             # (1.58 -> 1.75 s at a normal pace). Wait for the previous sentence's synthesis; only the
-            # first clause of this one overlaps with the rest of its translation.
+            # first clause of this one overlaps with the rest of its translation. An online translator
+            # does not use this machine's GPU: it starts right away.
             self._synth_idle.wait(30)
             t0 = time.time()
             waited = t0 - utt.t_end

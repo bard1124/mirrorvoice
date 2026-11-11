@@ -142,3 +142,47 @@ def test_backlog_asks_for_a_budget_and_speeds_up(monkeypatch):
     e._pending_s = 0.0
     assert e._update_compact() is False  # caught up: back to normal
     e._voice_q.put(None)
+
+
+class _Rambling(_Streaming):
+    """The model talks about the task: generation must stop early and nothing gets spoken."""
+
+    def __init__(self, pieces, retry):
+        super().__init__(pieces)
+        self.retry, self.pulled, self.max_tokens = retry, 0, 200
+
+    def chat(self, msgs):
+        return self.retry
+
+    def stream_chat(self, msgs):
+        for p in self.pieces:
+            self.pulled += 1
+            yield p
+
+
+def test_talking_about_the_task_is_never_spoken_and_stops_early():
+    pieces = ["Okay,", " let's", " take", " this", " sentence:", " the", " user", " specified", " that"] + [" x"] * 50
+    b = _Rambling(pieces, "Let's leave it here, get some rest.")
+    got = []
+    src = "先这样吧，你们休息吧，等我下午优化一波，我们下午再试。"
+    out = _tr(b).translate(src, "zh", "en", on_clause=got.append)
+    assert got == [] and b.pulled < 10  # no "Okay, let's take this sentence:" sent to the meeting
+    assert out == "Let's leave it here, get some rest."
+    assert b.max_tokens == 32 + 2 * len(src)  # a runaway answer is capped by the source length
+    b = _Rambling(["Also, the user specified numbers."], "The user specified numbers.")
+    assert _tr(b).translate(src, "zh", "en") == ""  # still off task after the retry: dropped
+
+
+def test_task_words_are_fine_when_the_source_says_them():
+    from mirrorvoice.translate import off_task
+
+    assert not off_task("Please translate this sentence for the user.", "请把这句话翻译给用户。", "en")
+    assert off_task("Okay, let's take this sentence:", "你能听到我说话吗？", "en")
+    assert not off_task("Okay, let's get started.", "好，我们开始吧。", "en")
+
+
+def test_online_translation_does_not_wait_for_speech_synthesis(home):
+    from mirrorvoice.online_llm import OnlineChat
+
+    assert OnlineChat("deepseek", "deepseek-chat", "k", "https://api.deepseek.com").uses_gpu is False
+    assert OnlineChat("custom", "qwen3", "", "http://127.0.0.1:8765/v1").uses_gpu is True  # same machine

@@ -10,6 +10,7 @@ import socket
 import subprocess
 import time
 import urllib.request
+from collections import OrderedDict
 from pathlib import Path
 from typing import Callable, Iterator
 
@@ -117,6 +118,29 @@ def looks_like_reasoning(out: str, tgt: str) -> bool:
     return LANGS[tgt].english == "English" and bool(_CJK.search(out))
 
 
+# Words a small model uses when it talks about the task instead of doing it ("Okay, let's take this
+# sentence:", "the user specified that numbers…") — each only counts when the source has nothing
+# it could be translating (a sentence that mentions 翻译 may well come out as "translation").
+_TASK_WORDS = (
+    (re.compile(r"\bsentences?\b|句子", re.I), re.compile(r"句|sentence", re.I)),
+    (re.compile(r"\btranslat\w*|翻译|译文", re.I), re.compile(r"译|translat", re.I)),
+    (re.compile(r"\bthe user\b|用户", re.I), re.compile(r"用户|使用者|user", re.I)),
+    (re.compile(r"\btranscripts?\b", re.I), re.compile(r"转写|记录|transcript", re.I)),
+    (re.compile(r"\binstructions?\b", re.I), re.compile(r"指令|说明|指示|instruct", re.I)),
+)
+
+
+def off_task(out: str, src_text: str, tgt: str) -> bool:
+    """The output is reasoning about the sentence, not its translation: never speak or show it."""
+    return looks_like_reasoning(out, tgt) or any(o.search(out) and not s.search(src_text) for o, s in _TASK_WORDS)
+
+
+def token_budget(text: str) -> int:
+    """Generous room for the translation of `text` (a runaway model stops here instead of talking
+    for seconds): ~1 token per Chinese character / 4 Latin characters, times two, plus slack."""
+    return min(200, 32 + 2 * len(text))
+
+
 def last_line(text: str) -> str:
     """Drop <think> blocks; if the model echoed extra lines keep only the final one."""
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
@@ -194,26 +218,30 @@ class Translator:
                      {"role": "assistant", "content": context[1]}]
         msgs.append({"role": "user", "content": user_prompt(text, glossary_hits(text, self.glossary),
                                                             continuation=context is not None) + tag})
+        if hasattr(self.backend, "max_tokens"):  # local models: stop a runaway answer early
+            self.backend.max_tokens = token_budget(text)
         stream = getattr(self.backend, "stream_chat", None)
         if on_clause is not None and stream is not None:
-            out = last_line(self._streamed(stream(msgs), tgt, on_clause))
+            out = last_line(self._streamed(stream(msgs), text, tgt, on_clause))
         else:
             out = last_line(self.backend.chat(msgs))
-        if looks_like_reasoning(out, tgt):
+        if off_task(out, text, tgt):
             # small models sometimes explain the sentence instead of translating it: one plain retry,
             # and never speak the explanation to the other side
             out = last_line(self.backend.chat([msgs[0], {"role": "user", "content": user_prompt(text, []) + tag}]))
-            if looks_like_reasoning(out, tgt):
+            if off_task(out, text, tgt):
                 return ""
         return out
 
     @staticmethod
-    def _streamed(pieces: Iterator[str], tgt: str, on_clause: Callable[[str], None]) -> str:
+    def _streamed(pieces: Iterator[str], src_text: str, tgt: str, on_clause: Callable[[str], None]) -> str:
         text, sent = "", False
         for piece in pieces:
             text += piece
+            if off_task(text.split("</think>")[-1], src_text, tgt):
+                break  # stop generating: translate() retries plainly
             if not sent:
-                head = first_clause(text, tgt)
+                head = first_clause(text, tgt, src_text=src_text)
                 if head:
                     on_clause(head)
                     sent = True
@@ -226,7 +254,7 @@ class Translator:
 _CLAUSE = re.compile(r"[,.;:?!，。；：？！]")
 
 
-def first_clause(text: str, tgt: str, min_words: int = 4) -> str:
+def first_clause(text: str, tgt: str, min_words: int = 4, src_text: str | None = None) -> str:
     """The finished first clause of a translation still being written ('' = not yet / not safe):
     ends at punctuation that already has more text after it, has at least min_words words (6
     characters for Chinese / Japanese / Korean), sits on the first line, and is not reasoning."""
@@ -241,32 +269,74 @@ def first_clause(text: str, tgt: str, min_words: int = 4) -> str:
         if m.group() == "." and end < len(body) and not body[end].isspace():
             continue  # 3.5, e.g.
         size = len(head.split()) if tgt in ("en",) or " " in head else len(re.sub(r"\W", "", head)) // 1.5
-        if size >= min_words and not looks_like_reasoning(head, tgt):
+        bad = looks_like_reasoning(head, tgt) if src_text is None else off_task(head, src_text, tgt)
+        if size >= min_words and not bad:
             return head
     return ""
 
 
 class _MLX:
+    PREFIXES = 4  # system prompts kept computed: me / them, each with and without "be concise"
+
     def __init__(self, path: Path) -> None:
         from mlx_lm import load
         from mlx_lm.sample_utils import make_sampler
 
         self.model, self.tok = load(str(path))
         self.sampler = make_sampler(temp=0.0)
+        self.max_tokens = 200
+        self._prefix: OrderedDict[str, tuple[list[int], list]] = OrderedDict()
 
-    def _prompt(self, msgs: list[dict]) -> str:
-        return self.tok.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False,
+    def _prompt(self, msgs: list[dict], generation: bool = True) -> str:
+        return self.tok.apply_chat_template(msgs, add_generation_prompt=generation, tokenize=False,
                                             enable_thinking=False)
 
-    def chat(self, msgs: list[dict]) -> str:
-        from mlx_lm import generate
+    def _encode(self, prompt: str) -> list[int]:  # as mlx_lm does for a text prompt
+        bos = self.tok.bos_token
+        return self.tok.encode(prompt, add_special_tokens=bos is None or not prompt.startswith(bos))
 
-        return generate(self.model, self.tok, self._prompt(msgs), max_tokens=200, sampler=self.sampler)
+    def _with_prefix(self, msgs: list[dict]) -> tuple[list[int], list | None]:
+        """The prompt's tokens after the system message, plus a copy of the model's cache already
+        holding that system message — it is the same for every sentence, so it is computed once
+        (0.67 -> 0.39 s to the first spoken clause with Qwen3-4B)."""
+        ids = self._encode(self._prompt(msgs))
+        if not msgs or msgs[0].get("role") != "system":
+            return ids, None
+        try:
+            import copy
+
+            key = msgs[0]["content"]
+            hit = self._prefix.get(key)
+            if hit is None:
+                import mlx.core as mx
+                from mlx_lm.models.cache import make_prompt_cache
+
+                pre = self._encode(self._prompt(msgs[:1], generation=False))
+                if len(pre) >= len(ids) or ids[:len(pre)] != pre:
+                    return ids, None  # this chat template renders the system message differently
+                cache = make_prompt_cache(self.model)
+                self.model(mx.array(pre)[None], cache=cache)
+                mx.eval([c.state for c in cache])
+                hit = self._prefix[key] = (pre, cache)
+                while len(self._prefix) > self.PREFIXES:
+                    self._prefix.popitem(last=False)
+            self._prefix.move_to_end(key)
+            pre, cache = hit
+            if ids[:len(pre)] != pre:
+                return ids, None
+            return ids[len(pre):], copy.deepcopy(cache)
+        except Exception:  # noqa: BLE001 — a model without a reusable cache: just compute it all
+            return ids, None
+
+    def chat(self, msgs: list[dict]) -> str:
+        return "".join(self.stream_chat(msgs))
 
     def stream_chat(self, msgs: list[dict]) -> Iterator[str]:
         from mlx_lm import stream_generate
 
-        for r in stream_generate(self.model, self.tok, self._prompt(msgs), max_tokens=200, sampler=self.sampler):
+        ids, cache = self._with_prefix(msgs)
+        kw = {"prompt_cache": cache} if cache is not None else {}
+        for r in stream_generate(self.model, self.tok, ids, max_tokens=self.max_tokens, sampler=self.sampler, **kw):
             yield r.text
 
     def close(self) -> None:
@@ -290,6 +360,7 @@ def llama_server_candidates() -> list[Path]:
 
 class _LlamaServer:
     def __init__(self, gguf: Path) -> None:
+        self.max_tokens = 200
         errors = []
         for exe in llama_server_candidates():
             self.port = _free_port()
@@ -320,7 +391,8 @@ class _LlamaServer:
         return False
 
     def _request(self, msgs: list[dict], stream: bool) -> urllib.request.Request:
-        body = json.dumps({"messages": msgs, "temperature": 0, "max_tokens": 200, "stream": stream,
+        body = json.dumps({"messages": msgs, "temperature": 0, "max_tokens": self.max_tokens, "stream": stream,
+                           "cache_prompt": True,  # reuse the system prompt already computed
                            "chat_template_kwargs": {"enable_thinking": False}}).encode()
         return urllib.request.Request(f"http://127.0.0.1:{self.port}/v1/chat/completions", data=body,
                                       headers={"Content-Type": "application/json"})
