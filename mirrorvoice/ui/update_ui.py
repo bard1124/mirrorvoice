@@ -32,13 +32,21 @@ class UpdateController:
         self.bridge.update.connect(self._on_checked)
         self.bridge.progress.connect(self._on_progress)
         self._manual = False
+        self._checking = False  # a check is on its way: more clicks join it (one answer, one window)
         self._dlg: QProgressDialog | None = None
 
     def check(self, manual: bool) -> None:
-        self._manual = manual
+        if self._dlg is not None and self._dlg.isVisible():
+            self._dlg.raise_()  # already downloading the update
+            return
+        if self._checking:
+            self._manual = self._manual or manual
+            return
+        self._checking, self._manual = True, manual
         updater.check_async(lambda rel, err: self.bridge.update.emit(rel, err))
 
     def _on_checked(self, rel, err: str) -> None:
+        self._checking = False
         if rel is None:
             if self._manual:
                 if err:

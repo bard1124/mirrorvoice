@@ -375,3 +375,22 @@ def test_owl_girl_dozes_when_stopped_cheers_on_start_and_reacts_to_voices(app, s
         assert (img.width(), img.height()) == (100, 120)
     finally:
         w.close()
+
+
+def test_clicking_check_for_updates_twice_asks_once(app, settings, no_popups, monkeypatch):
+    from mirrorvoice import updater
+    from mirrorvoice.ui import update_ui
+
+    calls = []
+    monkeypatch.setattr(updater, "check_async", lambda cb: calls.append(cb))
+    shown = []
+    monkeypatch.setattr(update_ui.QMessageBox, "information", lambda *a, **k: shown.append(a[2]))
+    c = update_ui.UpdateController(None, settings, lambda: None)
+    c.check(manual=False)
+    c.check(manual=True)
+    c.check(manual=True)
+    assert len(calls) == 1  # one check on its way
+    c._on_checked(None, "")
+    assert len(shown) == 1 and "已是最新版本" in shown[0]  # one answer, and the manual click is honoured
+    c.check(manual=True)
+    assert len(calls) == 2  # a new click after the answer checks again
