@@ -196,6 +196,7 @@ class Settings:
     speak: bool = True              # voice my translation into the call
     subtitles: bool = True          # translate the other side into on-screen subtitles
     passthrough: bool = True        # if I already speak their language, send my real voice
+    stream: bool = False            # 边说边译 (experimental): translate finished clauses mid-sentence
     mode: str = "continuous"        # "continuous" | "ptt"
     ptt_key: str = "alt_r"          # pynput key name held for push-to-talk
     mute_hotkey: str = "<ctrl>+<alt>+m"

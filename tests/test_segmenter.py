@@ -262,3 +262,62 @@ def test_qwen_model_is_downloaded_only_when_chosen_on_macos(monkeypatch, home):
     assert models.qwen_asr_sides(Settings(asr_local="qwen3")) == {"me", "them"}
     monkeypatch.setattr(models, "IS_MAC", False)
     assert "asr_qwen" not in keys(Settings(asr_local="qwen3"))
+
+
+# ---------------------------------------------------------------- 边说边译 (simultaneous mode)
+
+
+def test_live_cuts_need_speech_after_the_punctuation_and_enough_words():
+    from mirrorvoice.asr import live_cuts
+
+    toks = list("嗯，今天我们讨论预算，然后")
+    times = [0.1 * i + 0.2 for i in range(len(toks))]
+    d = Decoded("", "zh", toks, times)
+    assert live_cuts(d, 2.0) == [(1.2, "嗯，今天我们讨论预算，")]  # "嗯，" is too short and too early
+    assert live_cuts(d, 1.3) == []  # nothing heard after the comma yet
+    en = Decoded("", "en", ["▁so", "▁we", "▁ship", "▁it", ",", "▁then"], [0.3, 0.6, 0.9, 1.1, 1.2, 1.6])
+    assert live_cuts(en, 2.0) == [(1.2, "soweshipit,")]
+
+
+class _Growing:
+    """Recognizer for speech still going on: only the words already spoken are heard."""
+
+    TEXT, STEP = "今天我们先讨论预算，然后再看时间安排", 0.15
+
+    def decode(self, seg):
+        sec = len(seg) / 16000
+        start = round(float(seg[0]) * 100) if len(seg) else 0  # the first sample says where it begins
+        toks, times = [], []
+        for i, ch in enumerate(self.TEXT[start:]):
+            t = 0.2 + i * self.STEP
+            if t < sec - 0.05:
+                toks.append(ch)
+                times.append(t)
+        return Decoded("".join(toks), "zh", toks, times)
+
+
+def test_stream_mode_sends_the_first_clause_while_the_speaker_goes_on():
+    out, vad = [], _Vad()
+    audio = np.zeros(16000 * 4, np.float32)
+    first_clause_len = len("今天我们先讨论预算，")
+    audio[int(1.59 * 16000):] = first_clause_len / 100  # after the cut the decoder starts at "然后"
+    seg = Segmenter("me", 0.5, out.append, lang="zh", alt="en", recognizer=_Growing(), vad=vad, stream=True)
+    vad.speech = True
+    for i in range(0, int(3.0 * 16000), 512):
+        seg.feed(audio[i:i + 512])
+    assert len(out) == 1 and out[0].text.startswith("今天我们先讨论预算")  # sent before the sentence ended
+    # cut just after the comma (heard at 1.55 s); the sentence goes on from there
+    assert abs(len(out[0].audio) / 16000 - 1.6) < 0.02 and seg.cut_to == seg.live_from == len(out[0].audio)
+    vad.speech = False
+    vad.ready.append((int(0.4 * 16000), int(2.6 * 16000)))  # the VAD closes the whole sentence
+    seg.feed(np.zeros(512, np.float32))
+    assert out[1].text.startswith("然后") and seg.live_from == -1  # only the rest, then reset
+
+
+def test_stream_mode_off_waits_for_the_end_of_the_sentence():
+    out, vad = [], _Vad()
+    seg = Segmenter("me", 0.5, out.append, lang="zh", alt="en", recognizer=_Growing(), vad=vad)
+    vad.speech = True
+    for _ in range(0, int(3.0 * 16000), 512):
+        seg.feed(np.zeros(512, np.float32))
+    assert out == []

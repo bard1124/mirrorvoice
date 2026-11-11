@@ -213,3 +213,15 @@ def test_switch_translators_keeps_old_when_model_missing(monkeypatch, home):
     old, old_them = object(), object()
     assert e._switch_translators(old, old_them) == (old, old_them)
     assert "还没下载" in events[-1][1]["text"]
+
+
+def test_apply_stream_switches_both_listeners(home):
+    from mirrorvoice.asr import Segmenter
+
+    events = []
+    e = _running(events, stream=True)
+    me = Segmenter("me", 0.5, lambda u: None, recognizer=object(), vad=object())
+    them = type("L", (), {"seg": Segmenter("them", 0.5, lambda u: None, recognizer=object(), vad=object())})()
+    e._me, e._them = type("L", (), {"seg": me})(), them
+    e.apply({"stream"})
+    assert me.stream and them.seg.stream and ("notice", {"text": "边说边译已开启"}) in events

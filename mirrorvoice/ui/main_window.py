@@ -186,7 +186,10 @@ class MainWindow(QMainWindow):
         self.speak = QCheckBox("用我的声音说出翻译（送进会议）")
         self.subs = QCheckBox("对方说话显示翻译字幕")
         self.passthru = QCheckBox("我直接说对方的语言时，透传原声不翻译")
-        for w in (self.speak, self.subs, self.passthru):
+        self.stream = QCheckBox("边说边译（实验）：一句话说到逗号就先翻译，长句更快开口")
+        self.stream.setToolTip("说话途中每 0.4 秒识别一次，稳定的分句先送去翻译。长句子明显更快，"
+                               "但译文会碎一些，已经念出的部分不能改。全部在本机完成。")
+        for w in (self.speak, self.subs, self.passthru, self.stream):
             v.addWidget(w)
         mh = QHBoxLayout()
         self.cont, self.ptt = QRadioButton("持续翻译"), QRadioButton("按住说话")
@@ -310,13 +313,14 @@ class MainWindow(QMainWindow):
         self.speak.setChecked(s.speak)
         self.subs.setChecked(s.subtitles)
         self.passthru.setChecked(s.passthrough)
+        self.stream.setChecked(s.stream)
         (self.ptt if s.mode == "ptt" else self.cont).setChecked(True)
         self.ptt_key.setCurrentIndex(max(0, self.ptt_key.findData(s.ptt_key)))
         self.quality.setCurrentIndex(self.quality.findData(s.quality))
         self.display.setCurrentIndex(self.display.findData(s.display))
         for w in (self.my, self.their, self.ptt_key, self.quality, self.display, self.mic, self.call, self.mon, self.src):
             w.currentIndexChanged.connect(self._save)
-        for w in (self.speak, self.subs, self.passthru, self.cont, self.ptt):
+        for w in (self.speak, self.subs, self.passthru, self.stream, self.cont, self.ptt):
             w.toggled.connect(self._save)
         self.display.currentIndexChanged.connect(self._display_changed)
         for role, combo, _ in self._device_combos():
@@ -505,7 +509,8 @@ class MainWindow(QMainWindow):
 
     # settings that only take effect when the engine (re)starts
     # settings the running engine picks up through engine.apply() (nothing needs stop / start any more)
-    LIVE_KEYS = ("my_lang", "their_lang", "speak", "subtitles", "passthrough", "mode", "ptt_key", "quality")
+    LIVE_KEYS = ("my_lang", "their_lang", "speak", "subtitles", "passthrough", "stream", "mode", "ptt_key",
+                 "quality")
     # devices switched while running (engine.set_*); the monitor was the only one before
     LIVE_DEVICES = (("mic", "set_mic", "我的麦克风"), ("call_out", "set_call_out", "送进会议"),
                     ("their_source", "set_their_source", "对方声音来源"))
@@ -517,6 +522,7 @@ class MainWindow(QMainWindow):
         s.mic, s.call_out, s.monitor, s.their_source = (self.mic.currentData(), self.call.currentData(),
                                                         self.mon.currentData(), self.src.currentData())
         s.speak, s.subtitles, s.passthrough = self.speak.isChecked(), self.subs.isChecked(), self.passthru.isChecked()
+        s.stream = self.stream.isChecked()
         s.mode = "ptt" if self.ptt.isChecked() else "continuous"
         s.ptt_key, s.quality, s.display = self.ptt_key.currentData(), self.quality.currentData(), self.display.currentData()
         s.save()

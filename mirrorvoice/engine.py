@@ -169,6 +169,8 @@ class Engine:
                 self.emit("notice", text=f"打开“送进会议”设备失败：{e}")
         if changed & {"my_lang", "their_lang"}:
             self._set_languages()
+        if "stream" in changed:
+            self._set_stream()
         if changed & {"speak", "quality", "their_lang", "cpu_voice", "gpu_voice"} and self._voice_changes():
             self.reload_voice()
         if "subtitles" in changed:
@@ -217,6 +219,16 @@ class Engine:
                 local.lang, local.alt, local._fixed = lang, alt, None
         self._prev = {"me": None, "them": None}
         self._hist = {"me": deque(maxlen=self.HISTORY_N + 1), "them": deque(maxlen=self.HISTORY_N + 1)}
+
+    def _set_stream(self) -> None:
+        """边说边译 on / off for both listeners (local recognition; online recognition commits its
+        own sentences)."""
+        for listener in (self._me, self._them):
+            seg = getattr(listener, "seg", None)
+            for target in (seg, getattr(seg, "local", None)):
+                if target is not None and hasattr(target, "live_from"):
+                    target.stream = self.s.stream
+        self.emit("notice", text="边说边译已开启" if self.s.stream else "边说边译已关闭")
 
     def _apply_subtitles(self) -> None:
         s = self.s
@@ -281,7 +293,7 @@ class Engine:
         them = Listener("them", source, s.their_lang, s.pause, self._on_them, self._on_level, self._them_gate,
                         self.log, alt=s.my_lang, online_key=self._asr_key(s, "them"),
                         on_partial=lambda t: self._on_partial("them", t), on_notice=self._notice,
-                        words=self._words if "them" in self._qwen_sides else None)
+                        words=self._words if "them" in self._qwen_sides else None, stream=s.stream)
         them.start()
         self._closers.append(them.close)
         self._them = them
@@ -413,7 +425,7 @@ class Engine:
         me = Listener("me", s.mic, s.my_lang, s.pause, self._on_me, self._on_level, self._gate, self.log,
                       alt=s.their_lang, online_key=self._asr_key(s, "me"),
                       on_partial=lambda t: self._on_partial("me", t), on_notice=self._notice,
-                      words=words if "me" in sides else None)
+                      words=words if "me" in sides else None, stream=s.stream)
         me.start()
         self._closers.append(me.close)
         self._me = me

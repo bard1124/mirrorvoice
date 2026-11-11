@@ -114,6 +114,24 @@ def punctuation_cut(d: Decoded, duration: float, min_head: float = 2.0, min_tail
     return best[True] or best[False]
 
 
+def live_cuts(d: Decoded, duration: float, min_head: float = 1.0, min_tail: float = 0.25,
+              min_chars: int = 4) -> list[tuple[float, str]]:
+    """While someone is still talking: every (seconds, text-so-far) ending at punctuation that
+    already has speech after it (so the recognizer did not just put it at the end of what it
+    heard), with enough words before it to translate on their own."""
+    out: list[tuple[float, str]] = []
+    for i, (tok, t) in enumerate(zip(d.tokens, d.times)):
+        tok = tok.strip()
+        if not tok or tok[-1] not in SENTENCE_END | CLAUSE_END or not min_head <= t <= duration - min_tail:
+            continue
+        head = "".join(d.tokens[:i + 1]).replace("\u2581", " ").strip()
+        words = re.sub(r"[\W_]+", " ", head).split()
+        cjk = len(re.findall(r"[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]", head))
+        if cjk >= min_chars or (not cjk and len(words) >= max(3, min_chars - 1)):
+            out.append((t, re.sub(r"\s+", "", head)))
+    return out
+
+
 class Segmenter:
     """VAD -> sentence segments -> SenseVoice, fed with 16 kHz blocks; on_utt(Utterance) per sentence.
 
@@ -129,6 +147,12 @@ class Segmenter:
     the speaker stops). The engine passes the previous part as context so the translation stays
     coherent.
 
+    Simultaneous mode (stream=True, 边说边译): while the speaker is still talking the sentence so
+    far is decoded every LIVE_STEP_S; a clause that ends in punctuation, has speech after it and
+    reads the same in two decodes in a row goes out at once, and the sentence carries on from there
+    (the engine passes it as context, like an early cut). Long sentences start being translated
+    after their first clause instead of at their end.
+
     Language: decoded in "auto" first. A result in neither the expected language nor the other
     side's (Mandarin heard as Cantonese / Japanese) is decoded again in the expected language;
     the other side's language is kept, so passthrough still sees it.
@@ -142,12 +166,15 @@ class Segmenter:
     NOISE_MULT = 2.0              # … or within 2x of the noise floor (quiet microphones: the floor
                                   #   can sit above a quarter of the speech level)
     HIST_S = 30
+    LIVE_STEP_S, LIVE_MIN_S = 0.4, 1.4  # simultaneous mode: decode the sentence so far this often
 
     def __init__(self, name: str, pause: float, on_utt: Callable[[Utterance], None],
                  lang: str = "", alt: str = "", log: Callable[[str], None] | None = None,
                  on_level: Callable[[str, float], None] | None = None, recognizer=None, vad=None,
-                 words: "QwenASR | None" = None) -> None:
+                 words: "QwenASR | None" = None, stream: bool = False) -> None:
         self.name, self.pause, self.on_utt = name, pause, on_utt
+        self.stream = stream  # 边说边译: send finished clauses while the sentence goes on
+        self.live_from, self.live_next, self.live_prev = -1, 0, ""
         self.words = words  # optional better recognizer for the final text of each sentence
         self.lang, self.alt = lang, alt
         self.log = log or (lambda *_: None)
@@ -239,8 +266,37 @@ class Segmenter:
         if time.time() - self.lvl_t > 0.1:
             self.on_level(self.name, (self.lvl_sq / max(self.lvl_n, 1)) ** 0.5)
             self.lvl_t, self.lvl_sq, self.lvl_n = time.time(), 0.0, 0
+        if self.stream and open_gate:
+            self._live()
         self._pop()
         self._send_lone_tail()
+
+    def _live(self) -> None:
+        """Simultaneous mode: send the finished clauses of the sentence still being spoken."""
+        if self.speech_from < 0 or not self.vad.is_speech_detected():
+            return
+        if self.live_from < 0:  # a new stretch of speech (the VAD noticed it a little late)
+            start = self.carry[0] if self.carry else self.speech_from - self.pre - int(0.25 * ASR_SR)
+            self.live_from = max(start, self.hist_start, self.cut_to)
+            self.live_next, self.live_prev = self.fed + int(self.LIVE_STEP_S * ASR_SR), ""
+        if self.fed < self.live_next:
+            return
+        self.live_next = self.fed + int(self.LIVE_STEP_S * ASR_SR)
+        seg = self.hist[self._abs(self.live_from):self._abs(self.fed)]
+        if len(seg) < self.LIVE_MIN_S * ASR_SR:
+            return
+        cuts = live_cuts(self.recognize(seg), len(seg) / ASR_SR)
+        same = next((c for c in cuts if self.live_prev and c[1] == self.live_prev), None)
+        if same is None:  # wait until a clause reads the same in two decodes in a row
+            self.live_prev = cuts[-1][1] if cuts else ""
+            return
+        t = same[0]
+        at = self.live_from + int((t + 0.05) * ASR_SR)
+        self.log(f"[{self.name}] 边说边译：先送出前 {t:.2f}s")
+        self._emit(self.hist[self._abs(self.live_from):self._abs(at)], time.time())
+        self.carry = None  # it began the clause just sent
+        self.cut_to = self.live_from = at
+        self.live_prev = ""
 
     def _pop(self) -> None:
         vad = self.vad
@@ -253,6 +309,7 @@ class Segmenter:
             elif a < self.cut_to <= start + n:
                 a = self.cut_to  # the lead-in would repeat the last words of the cut segment
             self.carry, self.cut_to = None, -1
+            self.live_from, self.live_prev = -1, ""  # the sentence is over
             b = min(start + n + self.post, self.fed)
             seg = self.hist[self._abs(a):self._abs(b)] if b > a else np.zeros(0, np.float32)
             t_end = time.time()
@@ -303,7 +360,8 @@ class Listener:
                  gate: Callable[[], bool] | None = None,
                  log: Callable[[str], None] | None = None, alt: str = "", online_key: str = "",
                  on_partial: Callable[[str], None] | None = None,
-                 on_notice: Callable[[str], None] | None = None, words: "QwenASR | None" = None) -> None:
+                 on_notice: Callable[[str], None] | None = None, words: "QwenASR | None" = None,
+                 stream: bool = False) -> None:
         """language: the language expected from this source ("auto" = any); alt: the other
         side's language, accepted as detected (passthrough / same-language subtitles).
         online_key: 阿里云百炼 key → streaming online recognition (online_asr.py) instead of
@@ -318,7 +376,7 @@ class Listener:
             self.seg = OnlineSegmenter(name, pause, on_utt, online_key, lang, alt, self.log, on_level,
                                        on_partial, on_notice, detector=Recognizer("auto"), words=words)
         else:
-            self.seg = Segmenter(name, pause, on_utt, lang, alt, self.log, on_level, words=words)
+            self.seg = Segmenter(name, pause, on_utt, lang, alt, self.log, on_level, words=words, stream=stream)
         self.q: queue.Queue[np.ndarray] = queue.Queue()
         self.source = source
         self.capture = Capture(source, self.q.put, self.WINDOW)
