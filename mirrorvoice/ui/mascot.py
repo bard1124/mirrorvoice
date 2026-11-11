@@ -160,26 +160,34 @@ class Mascot(QWidget):
 
 # ---------------------------------------------------------------------------- the update routine
 UPDATE_POSES = ("lift", "cross", "curl", "link", "rise", "land")
-INTRO = (("lift", 0.8), ("cross", 0.8), ("curl", 0.8))  # then "link" for as long as the update takes
-LINK_MIN_S = 1.0
-UPDATE_FADE_S = 0.3
-OUTRO = (("rise", 0.9), ("land", 1.1))
+INTRO = (("lift", 1.1), ("cross", 1.0), ("curl", 1.0))  # then "link" for as long as the update takes
+LINK_MIN_S = 1.2
+OUTRO = (("rise", 1.1), ("land", 1.3))
+TRANS_S = 0.6        # each pose blends in from the one before over this long
+UPDATE_FPS = 60
 HOVER = 0.07         # how high she floats, of the widget height
+BOB_PX, BOB_S = 3.0, 2.4    # the up-and-down drift while floating
+SWAY_DEG, SWAY_S = 1.6, 3.6  # and a slow sway
 FEET = (0.46, 0.975)  # under her boots, in the frames (x, y)
 PORT = (0.702, 0.535)  # the cable port on her neck in the "link" frame (x, y)
+# where her face is in each frame (x, y): poses blend with the faces kept together, so the face
+# glides from one spot to the next instead of showing twice
+FACES = {"lift": (0.445, 0.324), "cross": (0.443, 0.325), "curl": (0.405, 0.360),
+         "link": (0.381, 0.343), "rise": (0.435, 0.301), "land": (0.443, 0.293)}
+CURLED = ("curl", "link")
 GLOW = (110, 232, 240)
 
 
 def _ease(x: float) -> float:
     x = min(1.0, max(0.0, x))
-    return x * x * (3 - 2 * x)
+    return x * x * x * (x * (6 * x - 15) + 10)  # starts and ends with no jerk
 
 
 class UpdateMascot(QWidget):
     """While an update comes in she floats up, folds her arms, curls up and plugs a cable into the
     back of her neck; once it is installed (finish()) she rises, unfolds and lands with her eyes
-    open. The frames come from packaging/assets/mascot/update; floating, the glow under her boots
-    and at the cable port are drawn here."""
+    open. The frames come from packaging/assets/mascot/update; the blending between them, the
+    floating and swaying, and the glow under her boots and at the cable port are drawn here."""
 
     def __init__(self, width: int = 132, height: int = 170, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -191,8 +199,9 @@ class UpdateMascot(QWidget):
         self._t0 = self.clock()
         self._done: float | None = None  # when she starts rising
         self._timer = QTimer(self)
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.timeout.connect(self.update)
-        self._timer.start(1000 // FPS)
+        self._timer.start(1000 // UPDATE_FPS)
 
     def finish(self) -> float:
         """The update is in. Returns the seconds until she has landed (she first finishes curling
@@ -240,14 +249,15 @@ class UpdateMascot(QWidget):
         return self.at()[0]
 
     def showEvent(self, e) -> None:
-        self._timer.start(1000 // FPS)
+        self._timer.start(1000 // UPDATE_FPS)
         super().showEvent(e)
 
     def hideEvent(self, e) -> None:
         self._timer.stop()
         super().hideEvent(e)
 
-    def _target(self, pm: QPixmap) -> QRectF:
+    def _target(self) -> QRectF:
+        pm = self.frames["lift"]  # all frames share one canvas
         room = self.height() * (1 - HOVER)
         s = min(self.width() / pm.width(), room / pm.height())
         w, h = pm.width() * s, pm.height() * s
@@ -257,26 +267,36 @@ class UpdateMascot(QWidget):
         now = self.clock()
         pose, prev, since, hover = self.at(now)
         t = now - self._t0
-        pm = self.frames[pose]
-        r = self._target(pm)
-        lift = self.height() * HOVER * (1 - hover) + hover * 2.0 * math.sin(t * 2 * math.pi / 1.8)
-        r.translate(0, lift)  # 0 = up in the air, HOVER of the height = on the ground
+        r = self._target()
+        e = _ease(since / TRANS_S) if prev != pose else 1.0  # how far the blend from prev has come
+        # the face glides from where it was in prev to where it is now; both frames move along
+        (fx0, fy0), (fx1, fy1) = FACES[prev], FACES[pose]
+        dx, dy = (fx1 - fx0) * r.width(), (fy1 - fy0) * r.height()
+        r_prev, r_now = r.translated(e * dx, e * dy), r.translated(-(1 - e) * dx, -(1 - e) * dy)
+
         p = QPainter(self)
         p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
+        show = min(1.0, t / 0.3)  # fade in with the window
+        down = self.height() * HOVER * (1 - hover) + hover * BOB_PX * math.sin(t * 2 * math.pi / BOB_S)
+        p.translate(r.center().x(), r.center().y() + down)
+        p.rotate(hover * SWAY_DEG * math.sin(t * 2 * math.pi / SWAY_S))
+        p.translate(-r.center().x(), -r.center().y())
+
         pulse = 0.5 + 0.5 * math.sin(t * 2 * math.pi / 1.1)
-        curled = pose in ("curl", "link")
+        curled = (1 - e) * (prev in CURLED) + e * (pose in CURLED)
         self._glow(p, QPointF(r.left() + FEET[0] * r.width(), r.top() + FEET[1] * r.height()),
-                   r.width() * 0.26, hover * (0.5 if curled else 1.0) * (0.65 + 0.35 * pulse), squash=0.22)
-        fade = min(1.0, since / UPDATE_FADE_S) if prev != pose else 1.0
-        if fade < 1.0:  # both stay mostly opaque mid-way, so she does not look see-through
-            p.setOpacity(1.0 - fade * fade)
-            p.drawPixmap(r, self.frames[prev], QRectF(self.frames[prev].rect()))
-        p.setOpacity(1.0 - (1.0 - fade) ** 2)
-        p.drawPixmap(r, pm, QRectF(pm.rect()))
+                   r.width() * 0.26, show * hover * (1 - 0.5 * curled) * (0.65 + 0.35 * pulse), squash=0.22)
+        if e < 1.0:  # a soft flare behind her while she changes pose
+            self._glow(p, QPointF(r.center().x(), r.top() + 0.45 * r.height()), r.width() * 0.48,
+                       show * 0.38 * math.sin(math.pi * e), squash=1.15)
+            p.setOpacity(show * (1.0 - e * e))
+            p.drawPixmap(r_prev, self.frames[prev], QRectF(self.frames[prev].rect()))
+        p.setOpacity(show * (1.0 - (1.0 - e) ** 2))
+        p.drawPixmap(r_now, self.frames[pose], QRectF(self.frames[pose].rect()))
         p.setOpacity(1.0)
         if pose == "link":
-            self._glow(p, QPointF(r.left() + PORT[0] * r.width(), r.top() + PORT[1] * r.height()),
-                       r.width() * 0.09, min(1.0, since / 0.4) * (0.4 + 0.6 * pulse))
+            self._glow(p, QPointF(r_now.left() + PORT[0] * r.width(), r_now.top() + PORT[1] * r.height()),
+                       r.width() * 0.09, e * (0.4 + 0.6 * pulse))
         p.end()
 
     @staticmethod

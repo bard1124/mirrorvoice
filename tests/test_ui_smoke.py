@@ -407,29 +407,52 @@ def test_update_routine_floats_up_curls_and_plugs_in_then_lands_when_the_update_
     assert all(not px.isNull() for px in m.frames.values())
     m.clock = lambda: now[0]
     m._t0 = 100.0
+    intro = [0.0]
+    for _, d in mascot.INTRO:
+        intro.append(intro[-1] + d)
     seen = []
-    for t in [0.0, 0.4, 0.9, 1.7, 2.5, 3.0, 60.0]:
+    for t in [0.0, intro[1] - 0.1, intro[1] + 0.1, intro[2] + 0.1, intro[3] + 0.1, intro[3] + 5, 60.0]:
         pose, _, _, hover = m.at(100.0 + t)
         seen.append(pose)
         if t == 0.0:
             assert hover == 0.0  # still on the ground
-        if t >= 1.7:
+        if t >= intro[1]:
             assert hover == 1.0  # up in the air
     assert seen == ["lift", "lift", "cross", "curl", "link", "link", "link"]  # plugged in for as long as it takes
     now[0] = 101.0  # a quick download: she still curls up and plugs in first
+    outro = sum(d for _, d in mascot.OUTRO)
     wait = m.finish()
-    assert wait == pytest.approx(2.4 + mascot.LINK_MIN_S + 2.0 - 1.0)
+    assert wait == pytest.approx(intro[3] + mascot.LINK_MIN_S + outro - 1.0)
     assert m.finish() == pytest.approx(wait)  # asking again does not move the landing
     end = m.finish_time()
-    assert m.at(end - 2.0 - 0.01)[0] == "link" and m.at(end - 1.5)[0] == "rise" and m.at(end - 0.5)[0] == "land"
-    assert m.at(end - 0.5)[3] < 1.0 and m.at(end + 5)[3] == 0.0  # back on the ground, eyes open
-    assert m.at(end + 5)[0] == "land" and not m.landed()
+    rise, land = (d for _, d in mascot.OUTRO)
+    assert m.at(end - outro - 0.01)[0] == "link" and m.at(end - land - 0.1)[0] == "rise"
+    assert m.at(end - 0.1)[0] == "land" and m.at(end - land / 2)[3] < 1.0
+    assert m.at(end + 5)[:2] == ("land", "rise") and m.at(end + 5)[3] == 0.0  # back on the ground, eyes open
+    assert not m.landed()
     now[0] = end
     assert m.landed()
-    for t in (0.3, 3.0, end - 100.0 - 1.0):  # rising, plugged in (cable glow), landing
+    for t in (0.3, intro[1] + 0.2, intro[3] + 2.0, end - 100.0 - land + 0.2):  # lifting, blending, plugged in, landing
         now[0] = 100.0 + t
         img = m.grab().toImage()
         assert (img.width(), img.height()) == (132, 170)
+
+
+def test_update_frames_have_their_faces_where_the_blending_expects_them():
+    np = pytest.importorskip("numpy")
+    image = pytest.importorskip("PIL.Image")
+    from mirrorvoice.ui import mascot
+    from mirrorvoice.ui.icons import assets_dir
+
+    for n, (fx, fy) in mascot.FACES.items():
+        a = np.asarray(image.open(assets_dir() / "mascot" / "update" / f"{n}.png").convert("RGBA")).astype(float)
+        r, g, b, al = (a[..., i] for i in range(4))
+        ys = np.mgrid[0:a.shape[0], 0:a.shape[1]][0]
+        top, bottom = np.where(al > 20)[0][[0, -1]]
+        skin = (al > 230) & (r > 215) & (g > 170) & (g < 225) & (b > 140) & (b < 205) & (r - b > 25) \
+            & (ys < top + 0.6 * (bottom - top))
+        y, x = np.where(skin)
+        assert abs(x.mean() / a.shape[1] - fx) < 0.01 and abs(y.mean() / a.shape[0] - fy) < 0.01, n
 
 
 def test_update_progress_installs_then_lets_her_land_before_quitting(app, settings, no_popups, monkeypatch, tmp_path):
@@ -448,7 +471,10 @@ def test_update_progress_installs_then_lets_her_land_before_quitting(app, settin
     assert c._dlg.bar.value() == 500
     c._on_progress(-1, 0)
     assert before == [1] and installed == [(c._path, rel)]
-    assert len(timers) == 1 and timers[0] >= 1000 * (2.4 + 1.0 + 2.0)  # she curls up, plugs in, rises and lands
+    from mirrorvoice.ui import mascot
+
+    least = sum(d for _, d in mascot.INTRO) + mascot.LINK_MIN_S + sum(d for _, d in mascot.OUTRO)
+    assert len(timers) == 1 and timers[0] >= 1000 * least  # she curls up, plugs in, rises and lands
     c._dlg.reject()
     assert not c._dlg.canceled.is_set()  # installing: no cancelling now
 
