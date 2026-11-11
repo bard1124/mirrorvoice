@@ -63,6 +63,10 @@ def _cmd_download(_args) -> None:
     print("done")
 
 
+def _mb(n: int) -> str:
+    return f"{n / 1048576:.1f} MB" if n < 100 << 20 else f"{n >> 20} MB"
+
+
 def _cmd_update(_args) -> None:
     from . import __version__, updater
 
@@ -73,14 +77,15 @@ def _cmd_update(_args) -> None:
     if rel is None:
         print(f"已是最新版本 v{__version__}")
         return
-    print(f"发现新版本 v{rel.version}（当前 v{__version__}），开始下载 {rel.asset_name}")
+    kind = "补丁" if rel.kind == "patch" else "安装包"
+    print(f"发现新版本 v{rel.version}（当前 v{__version__}），开始下载{kind} {rel.asset_name}（{_mb(rel.size)}）")
     last = [-10]
 
     def p(done, total):
         pct = int(100 * done / max(total, 1))
         if pct >= last[0] + 10 or done == total:
             last[0] = pct
-            print(f"  {pct}%  {done >> 20}/{total >> 20} MB", flush=True)
+            print(f"  {pct}%  {_mb(done)}/{_mb(total)}", flush=True)
     try:
         path = updater.download(rel, p)
     except updater.UpdateBusy as e:
@@ -88,7 +93,7 @@ def _cmd_update(_args) -> None:
     if not updater.can_self_install():
         print(f"已下载到 {path}（从源码运行，请手动安装）")
         return
-    updater.install(path)
+    updater.install(path, rel)
     print("正在安装，完成后会自动重新打开镜声")
 
 
@@ -118,6 +123,12 @@ def main() -> None:
         cleanup_downloads()
     except Exception:  # noqa: BLE001 — housekeeping must never block startup
         pass
+    try:
+        from . import patches
+
+        patches.cleanup()
+    except Exception:  # noqa: BLE001
+        pass
     if len(sys.argv) == 1 or sys.argv[1] in ("gui", "cli") or sys.argv[1].startswith("-psn"):
         from .ui.app import run_gui
 
@@ -131,6 +142,9 @@ def main() -> None:
     sub.add_parser("download").set_defaults(fn=_cmd_download)
     sub.add_parser("update").set_defaults(fn=_cmd_update)
     a = p.parse_args()
+    from .patches import confirm_boot
+
+    confirm_boot()  # a command-line start that got this far started fine
     a.fn(a)
 
 

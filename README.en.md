@@ -33,7 +33,7 @@ Runs entirely on your machine · works offline · no API keys · macOS (Apple Si
 | 🪟 **Floating windows & tray** | Two-way conversation window (both sides' original + translation, always on top, drag / resize), pinnable subtitle bar; tray / menu-bar icon and macOS Dock menu with Start/Stop, Pause/Resume, Quit |
 | 🖥️ **Two front ends** | Graphical control panel (default) or a terminal-style view with coloured logs (type `m` mute / `u` update / `q` quit / `ui` switch back) |
 | 🧭 **First-run wizard** | Downloads models (ModelScope or HuggingFace, whichever is faster; big files over several connections; resumable), installs the virtual audio cable, records your voice, explains the meeting-app setup |
-| 🔄 **One-click update** | Checks GitHub for a newer release on startup (skipped offline); downloads, verifies SHA256, swaps in place and relaunches; models and settings are kept. In terminal mode type `u` |
+| 🔄 **One-click update** | Checks GitHub for a newer release on startup (skipped offline); downloads, verifies SHA256, swaps in place and relaunches; models and settings are kept. Releases that only change MirrorVoice's own code arrive as a **patch** (about 2 MB, signed, rolled back automatically if it fails to start); the full installer is needed only when dependencies change. In terminal mode type `u` |
 
 ## Install
 

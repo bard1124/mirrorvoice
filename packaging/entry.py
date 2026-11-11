@@ -1,8 +1,9 @@
-"""Frozen-app entry point (PyInstaller)."""
+"""Frozen-app entry point (PyInstaller): start the app, from a downloaded code patch when there is
+a good one for this bundle (packaging/patchboot.py)."""
 import multiprocessing
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
-    from mirrorvoice.__main__ import main
+    import patchboot
 
-    main()
+    patchboot.boot()

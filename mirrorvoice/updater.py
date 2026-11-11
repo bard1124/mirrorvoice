@@ -12,6 +12,13 @@ Release files come from the normal download link (github.com/…/releases/downlo
 fails (some networks get 504 there while api.github.com works) the API asset endpoint is used.
 Downloaded installers are removed after a successful macOS swap, and on every start any installer
 for this version or older (Windows cannot delete its running setup.exe) is cleaned up.
+
+Code patches: a release also carries update.json (signed: update.json.sig, Ed25519) naming the
+runtime each platform's installer was built on and a small patch zip with just the app layer
+(mirrorvoice package + images, a few MB instead of a 230 MB installer). When this bundle has the
+same runtime, check() offers the patch; install() unpacks it into the data folder
+(mirrorvoice.patches) and relaunches — the bundle itself is not touched. Anything else (another
+runtime, no or a bad signature, a patch that failed here before) gets the full installer.
 """
 from __future__ import annotations
 
@@ -30,7 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from . import __version__
+from . import __version__, ed25519, patches
 from .config import FROZEN, HOME, IS_MAC, IS_WIN
 from .net import urlopen
 
@@ -38,6 +45,9 @@ REPO = "bard1124/mirrorvoice"
 FEED = os.environ.get("MIRRORVOICE_UPDATE_FEED", f"https://api.github.com/repos/{REPO}/releases/latest")
 UPDATES = HOME / "updates"
 UA = {"User-Agent": f"MirrorVoice/{__version__} (updater)", "Accept": "application/vnd.github+json"}
+MANIFEST = "update.json"
+# Ed25519 key that signs update.json in the release workflow (secret PATCH_SIGNING_KEY)
+PUBLIC_KEY = bytes.fromhex("118f8a36e11b4dfe2aea177f85bc575b7d7b1632b8fe4016fbdd3dde50dfefa4")
 
 
 @dataclass
@@ -50,6 +60,9 @@ class Release:
     size: int
     sha256: str  # "" if the release has no SHA256SUMS.txt
     asset_api_url: str = ""  # API asset endpoint: fallback when the download link fails
+    kind: str = "full"  # "full" installer | "patch" (app layer only)
+    runtime: str = ""  # patch: the runtime it was made for
+    full_size: int = 0  # patch: the installer's size, to show what was saved
 
 
 def _ver(v: str) -> tuple[int, ...]:
@@ -99,8 +112,53 @@ def _get_asset(asset: dict, timeout: float = 15) -> bytes:
         return r.read()
 
 
+def platform_tag() -> str:
+    return "macos-arm64" if IS_MAC else "windows-x64" if IS_WIN else ""
+
+
+def manifest(assets: list[dict]) -> dict | None:
+    """The release's update.json when its signature checks out, else None."""
+    man = next((a for a in assets if a["name"] == MANIFEST), None)
+    sig = next((a for a in assets if a["name"] == MANIFEST + ".sig"), None)
+    if not man or not sig:
+        return None
+    body = _get_asset(man)
+    try:
+        signature = bytes.fromhex(_get_asset(sig).decode().strip())
+    except ValueError:
+        return None
+    if not ed25519.verify(PUBLIC_KEY, body, signature):
+        return None
+    try:
+        return json.loads(body)
+    except ValueError:
+        return None
+
+
+def _patch_offer(data: dict, version: str, full: dict) -> Release | None:
+    """The release's code patch when it fits this bundle's runtime."""
+    runtime = patches.bundle_info().get("runtime", "")
+    if not runtime or version in patches.bad_versions():
+        return None
+    assets = data.get("assets", [])
+    m = manifest(assets)
+    if not m or m.get("version") != version:
+        return None
+    plat = (m.get("platforms") or {}).get(platform_tag()) or {}
+    patch = m.get("patch") or {}
+    if plat.get("runtime") != runtime or not patch.get("name") or len(patch.get("sha256", "")) != 64:
+        return None
+    a = next((x for x in assets if x["name"] == patch["name"]), None)
+    if not a:
+        return None
+    return Release(version, data.get("body", "") or "", data.get("html_url", ""), a["name"],
+                   a["browser_download_url"], int(patch.get("size") or a.get("size", 0)), patch["sha256"].lower(),
+                   a.get("url", ""), kind="patch", runtime=runtime, full_size=int(full.get("size", 0)))
+
+
 def check() -> Release | None:
-    """Newest release if it is newer than this build and has an installer for this platform."""
+    """Newest release if it is newer than this build: its code patch when that fits this bundle,
+    else its installer for this platform."""
     data = json.loads(_get(FEED))
     tag = data.get("tag_name", "")
     if _ver(tag) <= _ver(__version__):
@@ -110,6 +168,12 @@ def check() -> Release | None:
     inst = next((a for a in assets if pat.search(a["name"])), None)
     if not inst:
         return None
+    try:
+        rel = _patch_offer(data, tag.lstrip("v"), inst)
+    except Exception:  # noqa: BLE001 — any trouble with the patch: offer the installer
+        rel = None
+    if rel:
+        return rel
     sha = ""
     sums = next((a for a in assets if a["name"] == "SHA256SUMS.txt"), None)
     if sums:
@@ -220,7 +284,7 @@ def _download(rel: Release, dest: Path, progress: Callable[[int, int], None], ca
     return dest
 
 
-INSTALLER_SUFFIXES = (".dmg", ".exe")
+INSTALLER_SUFFIXES = (".dmg", ".exe", ".zip")
 
 
 def cleanup_downloads(stale_part_hours: float = 24) -> list[str]:
@@ -241,6 +305,28 @@ def cleanup_downloads(stale_part_hours: float = 24) -> list[str]:
         except OSError:  # still open (e.g. the Windows installer is finishing): next start
             pass
     return removed
+
+
+def _relaunch_after_exit() -> None:
+    """Start the app again once this process has quit (a patch takes effect on the next start)."""
+    pid = os.getpid()
+    env = {k: v for k, v in os.environ.items() if k != patches.ENV}  # the new start decides for itself
+    if IS_MAC:
+        target = current_app_bundle()
+        if target is None:
+            return
+        subprocess.Popen(["/bin/sh", "-c", 'while kill -0 "$1" 2>/dev/null; do sleep 0.3; done; open "$2"',
+                          "relaunch", str(pid), str(target)], env=env,
+                         start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+    elif IS_WIN:
+        exe = sys.executable.replace("'", "''")
+        flags = (getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                 | getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        subprocess.Popen(["powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command",
+                          f"Wait-Process -Id {pid} -ErrorAction SilentlyContinue; Start-Process -FilePath '{exe}'"],
+                         creationflags=flags, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
 
 
 def can_self_install() -> bool:
@@ -287,11 +373,21 @@ open "$TARGET"
 """
 
 
-def install(installer: Path) -> None:
+def install(installer: Path, rel: Release | None = None) -> None:
     """Start the hand-over; the caller must quit the app right after this returns."""
     if not can_self_install():
         raise RuntimeError("从源码运行时不能自动安装，请用 git pull 更新")
     log = UPDATES / "update.log"
+    if installer.suffix.lower() == ".zip":  # code patch: unpack it, start again (the bundle stays)
+        version = rel.version if rel else ".".join(map(str, _ver(installer.name)))
+        runtime = rel.runtime if rel and rel.runtime else patches.bundle_info().get("runtime", "")
+        patches.install(installer, version, runtime)
+        installer.unlink(missing_ok=True)
+        with open(log, "a", encoding="utf-8") as f:
+            f.write(f"{time.strftime('%c')} patch {version} unpacked for runtime {runtime}\n")
+        if not os.environ.get("MIRRORVOICE_UPDATE_NO_RELAUNCH"):
+            _relaunch_after_exit()
+        return
     if IS_MAC:
         target = current_app_bundle()
         if target is None:

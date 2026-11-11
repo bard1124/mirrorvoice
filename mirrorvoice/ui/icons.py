@@ -13,9 +13,11 @@ _ICONS: dict[str, QIcon] = {}
 
 
 def assets_dir() -> Path:
-    """packaging/assets in a source checkout; bundled next to the executable when frozen."""
+    """packaging/assets in a source checkout; when frozen, the images next to this package — the
+    ones of a code patch when one is running (<patch>/assets), else the bundled ones."""
     if FROZEN:
-        return resource_dir() / "assets"
+        beside = Path(__file__).resolve().parents[2] / "assets"
+        return beside if beside.is_dir() else resource_dir() / "assets"
     return Path(__file__).resolve().parents[2] / "packaging" / "assets"
 
 

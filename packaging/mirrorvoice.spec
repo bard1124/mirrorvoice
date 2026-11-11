@@ -2,6 +2,7 @@
 #   macOS:   pyinstaller packaging/mirrorvoice.spec   -> dist/镜声.app
 #   Windows: pyinstaller packaging/mirrorvoice.spec   -> dist/MirrorVoice/{MirrorVoice.exe,MirrorVoiceCLI.exe}
 # Models are NOT bundled; the first-run wizard downloads them.
+import json
 import sys
 from pathlib import Path
 
@@ -9,19 +10,27 @@ from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_sub
 
 ROOT = Path(SPECPATH).parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "packaging"))
 from mirrorvoice import __version__ as VERSION  # noqa: E402
+import runtime_files  # noqa: E402
 IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
 VENDOR = ROOT / "packaging" / "vendor"
 
-datas = [(str(ROOT / "mirrorvoice" / "tts_server.py"), "mirrorvoice"),
-         (str(ROOT / "packaging" / "assets" / "icon.png"), "assets"),  # window / tray icon at runtime
-         (str(ROOT / "packaging" / "assets" / "icon-macos.png"), "assets"),  # macOS Dock icon (Apple grid)
-         (str(ROOT / "packaging" / "assets" / "chevron-down.svg"), "assets"),  # combo box arrow (stylesheet)
-         (str(ROOT / "packaging" / "assets" / "menubar-template.png"), "assets"),  # macOS menu-bar icon
-         (str(ROOT / "packaging" / "assets" / "check-white.svg"), "assets"),  # menu check mark (stylesheet)
-         (str(ROOT / "packaging" / "assets" / "mascot"), "assets/mascot"),  # the owl in the control panel
+# The runtime's name: a code patch is only used by a bundle with the same runtime (patchboot.py).
+PLATFORM = "macos-arm64" if IS_MAC else "windows-x64"
+RUNTIME = runtime_files.runtime_id(PLATFORM)
+_rt = ROOT / "build" / "runtime.json"
+_rt.parent.mkdir(exist_ok=True)
+_rt.write_text(json.dumps({"version": VERSION, "runtime": RUNTIME, "platform": PLATFORM}))
+(ROOT / "dist").mkdir(exist_ok=True)  # for the release job: which runtime this build is
+(ROOT / "dist" / f"runtime-{PLATFORM}.json").write_text(_rt.read_text())
+
+datas = [(str(ROOT / "mirrorvoice" / "tts_server.py"), "mirrorvoice"), (str(_rt), "."),
          (str(ROOT / "LICENSE"), "."), (str(ROOT / "THIRD_PARTY_NOTICES.md"), ".")]
+for _name in runtime_files.ASSETS:  # images the app reads (also shipped in code patches)
+    _p = ROOT / "packaging" / "assets" / _name
+    datas.append((str(_p), f"assets/{_name}" if _p.is_dir() else "assets"))
 binaries = []
 hiddenimports = []
 
@@ -69,7 +78,8 @@ excludes = ["torch", "torchaudio", "torchvision", "modelscope", "datasets", "pan
             "IPython", "notebook", "pytest", "tkinter", "PySide6.QtWebEngineCore", "PySide6.Qt3DCore",
             "PySide6.QtQuick", "PySide6.QtQml", "PySide6.QtMultimedia", "PySide6.QtPdf"]
 
-a = Analysis([str(ROOT / "packaging" / "entry.py")], pathex=[str(ROOT)], binaries=binaries, datas=datas,
+a = Analysis([str(ROOT / "packaging" / "entry.py")], pathex=[str(ROOT), str(ROOT / "packaging")], binaries=binaries,
+             datas=datas,
              hiddenimports=hiddenimports, excludes=excludes, noarchive=False)
 pyz = PYZ(a.pure)
 

@@ -41,8 +41,12 @@ def run_gui(argv: list[str] | None = None) -> int:
     from .icons import app_icon
     from . import theme
 
+    from ..patches import confirm_boot
+
     if mode == "cli":  # we ARE the terminal front end
         from .cli import run_cli
+
+        confirm_boot()
 
         app = QApplication(argv)
         theme.apply(app)
@@ -59,6 +63,7 @@ def run_gui(argv: list[str] | None = None) -> int:
             stop_cli(pid)
         else:
             open_cli_terminal()
+        confirm_boot()
         return 0
 
     app = QApplication(argv)
@@ -70,6 +75,9 @@ def run_gui(argv: list[str] | None = None) -> int:
 
     win = MainWindow(s)
     win.show()
+    from PySide6.QtCore import QTimer
+
+    QTimer.singleShot(3000, confirm_boot)  # a code patch that got the window up and running is good
     _taskbar_window_identity(win)
     if not s.setup_done:
         Wizard(s, win).exec()

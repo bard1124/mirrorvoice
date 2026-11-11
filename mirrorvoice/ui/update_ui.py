@@ -13,6 +13,18 @@ from ..config import Settings
 from .bridge import Bridge
 
 
+def mb(n: int) -> str:
+    return f"{n / 1048576:.1f} MB" if n < 100 << 20 else f"{n >> 20} MB"
+
+
+def size_line(rel: updater.Release) -> str:
+    """What will be downloaded: a small code patch, or the whole installer."""
+    if rel.kind == "patch":
+        saved = f"，不用下载 {mb(rel.full_size)} 的完整安装包" if rel.full_size else ""
+        return f"补丁更新：只需下载 {mb(rel.size)}{saved}，装好后自动重启。"
+    return f"完整安装包：{mb(rel.size)}。"
+
+
 class UpdateController:
     def __init__(self, parent: QWidget, s: Settings, before_install: Callable[[], None]) -> None:
         self.parent, self.s, self.before_install = parent, s, before_install
@@ -45,6 +57,7 @@ class UpdateController:
         lay = QVBoxLayout(d)
         lay.addWidget(QLabel(f"<b>镜声 {rel.version}</b> 可以更新了（当前 {__version__}）。"
                              "模型、音色、会议记录和设置都会保留。"))
+        lay.addWidget(QLabel(size_line(rel)))
         notes = QTextBrowser(openExternalLinks=True)
         notes.setMarkdown(rel.notes or "（无更新说明）")
         lay.addWidget(notes)
@@ -64,7 +77,7 @@ class UpdateController:
         d.exec()
 
     def _start(self, rel: updater.Release) -> None:
-        self._dlg = QProgressDialog(f"正在下载 {rel.asset_name} …", "取消", 0, 1000, self.parent)
+        self._dlg = QProgressDialog(f"正在下载 {rel.asset_name}（{mb(rel.size)}）…", "取消", 0, 1000, self.parent)
         self._dlg.setWindowTitle("更新镜声")
         self._dlg.setWindowModality(Qt.WindowModality.WindowModal)
         self._dlg.setMinimumDuration(0)
@@ -90,7 +103,7 @@ class UpdateController:
             return
         if done >= 0:
             self._dlg.setValue(int(1000 * done / max(total, 1)))
-            self._dlg.setLabelText(f"正在下载 {self._rel.asset_name}  {done >> 20}/{total >> 20} MB")
+            self._dlg.setLabelText(f"正在下载 {self._rel.asset_name}  {mb(done)} / {mb(total)}")
             return
         self._dlg.close()
         if done == -2:
@@ -101,7 +114,7 @@ class UpdateController:
             return
         try:
             self.before_install()
-            updater.install(self._path)
+            updater.install(self._path, self._rel)
         except Exception as e:  # noqa: BLE001
             QMessageBox.warning(self.parent, "更新失败", str(e))
             return
