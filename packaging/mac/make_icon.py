@@ -2,7 +2,8 @@
 
 macOS icons follow Apple's grid: the rounded tile is 824 x 824 centred on a 1024 canvas with a soft
 shadow below it. A full-bleed tile shows one size larger than every other icon in the Dock and
-Launchpad. Writes packaging/assets/icon-macos.png (runtime Dock icon) and icon.icns.
+Launchpad. Writes packaging/assets/icon-macos.png (runtime Dock icon), icon.icns and the Windows
+icon.ico (Pillow).
 
     .venv/bin/python packaging/mac/make_icon.py
 """
@@ -59,6 +60,13 @@ def write_icns(img: QImage, dest: Path) -> None:
     shutil.rmtree(tmp)
 
 
+def write_ico(src: Path, dest: Path) -> None:
+    """Windows: the full-bleed artwork at every size Explorer and the taskbar ask for (Pillow)."""
+    from PIL import Image
+
+    Image.open(src).convert("RGBA").save(dest, sizes=[(n, n) for n in (16, 24, 32, 48, 64, 128, 256)])
+
+
 def main() -> None:
     QApplication.instance() or QApplication(sys.argv[:1])
     src = QImage(str(ASSETS / "icon.png"))
@@ -67,7 +75,8 @@ def main() -> None:
     img = padded(src)
     img.save(str(ASSETS / "icon-macos.png"))
     write_icns(img, ASSETS / "icon.icns")
-    print("wrote", ASSETS / "icon-macos.png", "and", ASSETS / "icon.icns")
+    write_ico(ASSETS / "icon.png", ASSETS / "icon.ico")
+    print("wrote", ASSETS / "icon-macos.png", ASSETS / "icon.icns", "and", ASSETS / "icon.ico")
 
 
 if __name__ == "__main__":
