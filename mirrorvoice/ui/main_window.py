@@ -23,7 +23,8 @@ from .bridge import Bridge
 from .checkup import MeetingGuideDialog, SelfTestDialog
 from .convo import ConversationWindow
 from .dialogs import GlossaryDialog, StyleDialog, VoiceDialog
-from .icons import app_icon, brand_icon
+from .icons import app_icon
+from .mascot import Mascot
 from .theme import card, repolish
 from .overlay import Overlay
 from .tray import Tray
@@ -368,18 +369,14 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(side)
         v.setContentsMargins(14, 18, 14, 14)
         v.setSpacing(4)
-        brand = QHBoxLayout()
-        logo = QLabel()
-        logo.setPixmap(brand_icon().pixmap(36, 36))
-        brand.addWidget(logo)
-        bt = QVBoxLayout()
-        bt.setSpacing(0)
-        bt.addWidget(QLabel("镜声", objectName="brand"))
-        bt.addWidget(QLabel(f"MirrorVoice · v{__version__}", objectName="brandSub"))
-        brand.addLayout(bt)
-        brand.addStretch()
-        v.addLayout(brand)
-        v.addSpacing(18)
+        # the owl: asleep while stopped, puts its headphones on while translating
+        self.mascot = Mascot(96)
+        v.addWidget(self.mascot, 0, Qt.AlignmentFlag.AlignHCenter)
+        for text, name in (("镜声", "brand"), (f"MirrorVoice · v{__version__}", "brandSub")):
+            lbl = QLabel(text, objectName=name)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+            v.addWidget(lbl)
+        v.addSpacing(14)
         self.nav_main = None
         for text, fn in self.NAV:
             b = QPushButton(text, objectName="nav")
@@ -401,6 +398,10 @@ class MainWindow(QMainWindow):
         """'stopped' | 'busy' | 'running' — colours the status pill via the stylesheet."""
         self.status.setProperty("state", state)
         repolish(self.status)
+        if hasattr(self, "mascot"):
+            if state == "busy" and self.engine.running and self.mascot.state == "running":
+                state = "running"  # a notice while translating: the headphones stay on
+            self.mascot.set_state(state)
 
     def _load_devices(self) -> None:
         def fill(combo: QComboBox, items: list[tuple[str, str]], cur: str) -> None:
@@ -637,6 +638,7 @@ class MainWindow(QMainWindow):
     def _on_event(self, kind: str, d: dict) -> None:
         if kind == "level":
             (self.lv_me if d["who"] == "me" else self.lv_them).setValue(min(100, int(d["rms"] * 600)))
+            self.mascot.set_level(d["rms"])
         elif kind == "status":
             self.status.setText("● " + d["text"])
         elif kind == "ready":
@@ -665,6 +667,7 @@ class MainWindow(QMainWindow):
         elif kind == "notice":
             self._add(f"提示  {d['text']}", "#8a8a8a")
         elif kind == "mute":
+            self.mascot.set_muted(d["muted"])
             self.mute_btn.blockSignals(True)
             self.mute_btn.setChecked(d["muted"])
             self.mute_btn.blockSignals(False)

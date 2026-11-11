@@ -20,6 +20,7 @@ datas = [(str(ROOT / "mirrorvoice" / "tts_server.py"), "mirrorvoice"),
          (str(ROOT / "packaging" / "assets" / "chevron-down.svg"), "assets"),  # combo box arrow (stylesheet)
          (str(ROOT / "packaging" / "assets" / "menubar-template.png"), "assets"),  # macOS menu-bar icon
          (str(ROOT / "packaging" / "assets" / "check-white.svg"), "assets"),  # menu check mark (stylesheet)
+         (str(ROOT / "packaging" / "assets" / "mascot"), "assets/mascot"),  # the owl in the control panel
          (str(ROOT / "LICENSE"), "."), (str(ROOT / "THIRD_PARTY_NOTICES.md"), ".")]
 binaries = []
 hiddenimports = []

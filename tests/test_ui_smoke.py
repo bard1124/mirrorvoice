@@ -338,3 +338,34 @@ def test_their_live_translation_row_is_replaced_by_the_final_one(app, settings, 
         assert w.log.count() == n + 2 and "→ 大家好   (" in w.log.item(n).text()
     finally:
         w.close()
+
+
+def test_owl_puts_headphones_on_while_running_and_sleeps_when_stopped(app, settings, no_popups, monkeypatch):
+    import time
+
+    from mirrorvoice.ui import main_window
+    from mirrorvoice.ui.icons import assets_dir
+
+    for n in ("body", "lids", "headset"):
+        assert (assets_dir() / "mascot" / f"{n}.png").exists()
+    w = _window(main_window, settings, monkeypatch)
+    m = w.mascot
+    try:
+        assert m.state == "stopped" and m.asleep() and m._headset_pos() == 0
+        assert all(not px.isNull() for px in m.layers.values())
+        w._status_state("busy")  # starting: awake, headphones not on yet
+        assert not m.asleep() and m._on_to == 0
+        w._status_state("running")
+        time.sleep(0.7)
+        assert abs(m._headset_pos() - 1.0) < 1e-6
+        w.engine.running = True
+        w._status_state("busy")  # a notice while translating keeps them on
+        assert m.state == "running"
+        w.engine.running = False
+        w._status_state("stopped")
+        time.sleep(0.5)
+        assert m.asleep() and m._headset_pos() == 0
+        img = m.grab().toImage()
+        assert img.width() == 96 and not img.isNull()
+    finally:
+        w.close()
