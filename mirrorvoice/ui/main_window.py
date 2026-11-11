@@ -369,8 +369,8 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(side)
         v.setContentsMargins(14, 18, 14, 14)
         v.setSpacing(4)
-        # the owl: asleep while stopped, puts its headphones on while translating
-        self.mascot = Mascot(96)
+        # the owl girl: dozes while stopped, cheers on start, types / waves while people talk
+        self.mascot = Mascot(100, 120)
         v.addWidget(self.mascot, 0, Qt.AlignmentFlag.AlignHCenter)
         for text, name in (("镜声", "brand"), (f"MirrorVoice · v{__version__}", "brandSub")):
             lbl = QLabel(text, objectName=name)
@@ -638,7 +638,7 @@ class MainWindow(QMainWindow):
     def _on_event(self, kind: str, d: dict) -> None:
         if kind == "level":
             (self.lv_me if d["who"] == "me" else self.lv_them).setValue(min(100, int(d["rms"] * 600)))
-            self.mascot.set_level(d["rms"])
+            self.mascot.set_level(d["rms"], d["who"])
         elif kind == "status":
             self.status.setText("● " + d["text"])
         elif kind == "ready":

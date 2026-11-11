@@ -1,9 +1,9 @@
-"""The owl at the top of the control panel: asleep while stopped, puts its headphones on when
-translation starts, takes them off and dozes off again when it stops.
+"""The owl girl at the top of the control panel. She dozes while translation is stopped, wakes up
+and cheers when it starts, then stands by with the headset on: types on her laptop while the
+other side talks, waves while I talk, blinks now and then.
 
-Three layers drawn from packaging/assets/mascot (made from the app icon's artwork): the owl without
-headphones, its closed eyes, and the headphones. Everything else (breathing, blinking, the
-headphones dropping on / lifting off, the light, "z z z") is animated here.
+Six pose pictures from packaging/assets/mascot (packaging/art/make_girl.py lines them up); the
+breathing, the little hop and cross-fade between poses, blinking and "z z z" are animated here.
 """
 from __future__ import annotations
 
@@ -12,74 +12,93 @@ import random
 import time
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QPainter, QPixmap, QRadialGradient
+from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
 from PySide6.QtWidgets import QWidget
 
 from .icons import assets_dir
 
+POSES = ("hello", "smile", "wave", "laptop", "sleepy", "cheer")
 FPS = 30
-PUT_ON_S, TAKE_OFF_S = 0.6, 0.45
-LED = (0.869, 0.403)  # the headphones' light, as a fraction of the layer size
-
-
-def _ease_out_back(x: float) -> float:
-    c = 1.4
-    return 1 + (c + 1) * (x - 1) ** 3 + c * (x - 1) ** 2
+FADE_S = 0.22      # cross-fade between poses
+CHEER_S = 1.4      # the cheer when translation has started
+VOICE_HOLD_S = 2.0  # keep the talking / typing pose this long after the voice stops
+VOICE_LEVEL = 0.02  # speech level that counts as someone talking
 
 
 class Mascot(QWidget):
-    def __init__(self, size: int = 84, parent: QWidget | None = None) -> None:
+    def __init__(self, width: int = 100, height: int = 120, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setFixedSize(size, size)
+        self.setFixedSize(width, height)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         d = assets_dir() / "mascot"
-        self.layers = {n: QPixmap(str(d / f"{n}.png")) for n in ("body", "lids", "headset")}
+        self.poses = {n: QPixmap(str(d / f"{n}.png")) for n in POSES}
         self.state = "stopped"  # stopped | busy | running
         self.muted = False
-        self._on = 0.0  # 0 = headphones off … 1 = on
-        self._on_from, self._on_to, self._on_t0 = 0.0, 0.0, 0.0
-        self._t0 = time.monotonic()
-        self._blink_at = self._t0 + 2.0
+        now = time.monotonic()
+        self._t0 = now
+        self._pose, self._prev, self._changed = "sleepy", "sleepy", now - 10
+        self._cheer_until = 0.0
+        self._voice = {"me": 0.0, "them": 0.0}  # when each side last spoke
+        self._blink_at = now + 3.0
         self._level = 0.0
         self._timer = QTimer(self)
-        self._timer.timeout.connect(self.update)
+        self._timer.timeout.connect(self._tick)
         self._timer.start(1000 // FPS)
         self._tip()
 
     # ---------------------------------------------------------------- state
     def set_state(self, state: str) -> None:
-        """'stopped' | 'busy' (starting: awake, no headphones yet) | 'running'."""
+        """'stopped' | 'busy' (starting) | 'running'."""
         if state == self.state:
             return
+        if state == "running":
+            self._cheer_until = time.monotonic() + CHEER_S
         self.state = state
-        self._move_headset(1.0 if state == "running" else 0.0)
-        self._blink_at = time.monotonic() + 0.15  # wakes up with a blink
         self._tip()
+        self._tick()
 
     def set_muted(self, muted: bool) -> None:
         self.muted = muted
         self._tip()
 
-    def set_level(self, rms: float) -> None:
-        """Speech level (0 … ~0.3): the owl bobs along while someone talks."""
+    def set_level(self, rms: float, who: str = "me") -> None:
+        """Speech level of my microphone or of the other side (0 … ~0.3)."""
         self._level = max(self._level, min(1.0, rms * 6))
+        if rms >= VOICE_LEVEL and who in self._voice:
+            self._voice[who] = time.monotonic()
 
-    def _move_headset(self, to: float) -> None:
-        self._on_from, self._on_to, self._on_t0 = self._headset_pos(), to, time.monotonic()
+    def asleep(self) -> bool:
+        return self.state == "stopped"
 
-    def _headset_pos(self) -> float:
-        dur = PUT_ON_S if self._on_to > self._on_from else TAKE_OFF_S
-        x = min(1.0, (time.monotonic() - self._on_t0) / dur) if dur else 1.0
-        if self._on_to > self._on_from:
-            return self._on_from + (self._on_to - self._on_from) * _ease_out_back(x)
-        return self._on_from + (self._on_to - self._on_from) * (x * x)
+    def pose(self) -> str:
+        """The pose the state calls for right now."""
+        now = time.monotonic()
+        if self.state == "stopped":
+            return "sleepy"
+        if self.state == "busy":
+            return "smile"  # waking up
+        if now < self._cheer_until:
+            return "cheer"
+        if not self.muted:
+            if now - self._voice["them"] < VOICE_HOLD_S:
+                return "laptop"  # writing down the other side's words
+            if now - self._voice["me"] < VOICE_HOLD_S:
+                return "wave"
+        if now >= self._blink_at:
+            if now - self._blink_at < 0.16:
+                return "smile"  # a blink
+            self._blink_at = now + random.uniform(2.5, 6.0)
+        return "hello"
+
+    def _tick(self) -> None:
+        p = self.pose()
+        if p != self._pose:
+            self._prev, self._pose, self._changed = self._pose, p, time.monotonic()
+        self.update()
 
     def _tip(self) -> None:
         self.setToolTip({"running": "运行中，正在帮你翻译" + ("（已静音）" if self.muted else ""),
                          "busy": "正在启动…"}.get(self.state, "已停止，点“开始”叫醒我"))
-
-    def asleep(self) -> bool:
-        return self.state == "stopped"
 
     # ---------------------------------------------------------------- drawing
     def showEvent(self, e) -> None:
@@ -90,63 +109,48 @@ class Mascot(QWidget):
         self._timer.stop()  # nothing to animate while the window is hidden
         super().hideEvent(e)
 
+    def _target(self, pm: QPixmap) -> QRectF:
+        s = min(self.width() / pm.width(), self.height() / pm.height())
+        w, h = pm.width() * s, pm.height() * s
+        return QRectF((self.width() - w) / 2, self.height() - h, w, h)
+
     def paintEvent(self, _e) -> None:
         now = time.monotonic()
         t = now - self._t0
-        on = self._headset_pos()
         p = QPainter(self)
         p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
-        side = min(self.width(), self.height())
-        owl = side * 0.86  # room above for the headphones dropping in and the "z"s
-        x0, y0 = (self.width() - owl) / 2, self.height() - owl
-        # breathing (slow and deep asleep), plus a little bob with speech
         self._level *= 0.85
         if self.asleep():
-            k = 0.028 * math.sin(t * 2 * math.pi / 4.2)
+            k = 0.022 * math.sin(t * 2 * math.pi / 4.2)
         else:
-            k = 0.012 * math.sin(t * 2 * math.pi / 2.6) + 0.03 * self._level
-        p.save()
-        p.translate(x0 + owl / 2, y0 + owl)  # scale from the feet
-        p.scale(1 - k * 0.4, 1 + k)
-        p.translate(-owl / 2, -owl)
-        r = QRectF(0, 0, owl, owl)
-        p.drawPixmap(r, self.layers["body"], QRectF(self.layers["body"].rect()))
-        blinking = now >= self._blink_at
-        if blinking and now - self._blink_at > 0.13:
-            self._blink_at = now + random.uniform(2.5, 5.5)
-            blinking = False
-        if self.asleep() or blinking:
-            p.drawPixmap(r, self.layers["lids"], QRectF(self.layers["lids"].rect()))
-        if on > 0.01:
-            p.setOpacity(min(1.0, on * 1.6))
-            dy = -(1 - on) * owl * 0.45
-            p.drawPixmap(r.translated(0, dy), self.layers["headset"], QRectF(self.layers["headset"].rect()))
-            if self.state == "running" and not self.muted and on > 0.9:  # the light glows
-                glow = 0.55 + 0.45 * math.sin(t * 2 * math.pi / 1.6)
-                c = QPointF(LED[0] * owl, LED[1] * owl + dy)
-                g = QRadialGradient(c, owl * 0.07)
-                g.setColorAt(0, QColor(255, 190, 80, int(200 * glow)))
-                g.setColorAt(1, QColor(255, 150, 40, 0))
-                p.setOpacity(1.0)
-                p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(g)
-                p.drawEllipse(c, owl * 0.07, owl * 0.07)
-        p.restore()
-        if self.asleep() and on < 0.05:
-            self._zzz(p, t, side)
+            k = 0.010 * math.sin(t * 2 * math.pi / 2.6) + 0.025 * self._level
+        since = now - self._changed
+        hop = 0.0 if self._pose == "smile" else 4.0 * max(0.0, math.sin(min(1.0, since / 0.3) * math.pi))
+        fade = min(1.0, since / FADE_S)
+        p.translate(self.width() / 2, self.height() - hop)
+        p.scale(1 - k * 0.4, 1 + k)  # breathing, from the feet
+        p.translate(-self.width() / 2, -self.height())
+        if fade < 1.0 and self._prev in self.poses:
+            pm = self.poses[self._prev]
+            p.setOpacity(1.0 - fade)
+            p.drawPixmap(self._target(pm), pm, QRectF(pm.rect()))
+        pm = self.poses[self._pose]
+        p.setOpacity(fade)
+        p.drawPixmap(self._target(pm), pm, QRectF(pm.rect()))
+        p.resetTransform()
+        p.setOpacity(1.0)
+        if self.asleep():
+            self._zzz(p, t)
         p.end()
 
-    def _zzz(self, p: QPainter, t: float, side: float) -> None:
-        """Three z's rising from the top right, one after another."""
-        p.setPen(Qt.PenStyle.NoPen)
+    def _zzz(self, p: QPainter, t: float) -> None:
+        """Three z's rising beside her head, one after another."""
+        w, h = self.width(), self.height()
         for i in range(3):
             ph = ((t / 2.7) + i / 3) % 1.0
             f = QFont()
             f.setBold(True)
-            f.setPixelSize(max(7, int(side * (0.11 + 0.07 * ph))))
+            f.setPixelSize(max(7, int(h * (0.08 + 0.06 * ph))))
             p.setFont(f)
-            alpha = int(220 * math.sin(math.pi * ph))
-            p.setPen(QColor(130, 112, 190, alpha))
-            x = side * (0.74 + 0.14 * ph)
-            y = side * (0.36 - 0.18 * ph)  # baseline: the biggest "z" still fits under the top edge
-            p.drawText(QPointF(x, y), "z")
+            p.setPen(QColor(130, 112, 190, int(220 * math.sin(math.pi * ph))))
+            p.drawText(QPointF(w * (0.74 + 0.14 * ph), h * (0.30 - 0.18 * ph)), "z")
