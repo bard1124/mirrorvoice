@@ -41,6 +41,7 @@ def _release(http_files, tag, installer=b"installer-bytes", good_sum=True):
     base, files, _ = http_files
     name = "MirrorVoice-9-macos-arm64.dmg" if sys.platform == "darwin" else "MirrorVoice-9-windows-x64-setup.exe"
     digest = hashlib.sha256(installer if good_sum else b"other").hexdigest()
+    (updater.UPDATES / name).unlink(missing_ok=True)  # a finished download from another test would be reused
     files[f"/{name}"] = installer
     files["/SHA256SUMS.txt"] = f"{digest}  {name}\n".encode()
     files["/api/assets/1"], files["/api/assets/2"] = files[f"/{name}"], files["/SHA256SUMS.txt"]
@@ -120,3 +121,43 @@ def test_mac_swap_script_replaces_bundle_and_removes_dmg(tmp_path):
                     str(target.parent), str(tmp_path / "update.log"), "norelaunch"], check=True, timeout=120)
     assert (target / "marker").read_text() == "new"
     assert not dmg.exists() and not script_dir.exists()
+
+
+@pytest.mark.skipif(sys.platform not in ("darwin", "win32"), reason="installers exist for macOS / Windows only")
+def test_only_one_download_at_a_time(http_files, monkeypatch, home):
+    """The app opened again during a slow command-line update downloaded into the same .part file;
+    the loser failed with "No such file … .part -> .dmg"."""
+    monkeypatch.setattr(updater, "FEED", _release(http_files, "v" + bump(__version__)))
+    rel = updater.check()
+    with updater._download_lock():
+        with pytest.raises(updater.UpdateBusy, match="正在下载"):
+            updater.download(rel, lambda d, t: None)
+    path = updater.download(rel, lambda d, t: None)  # the lock is free again
+    _, files, srv = http_files
+    hits = len(srv.hits)
+    assert updater.download(rel, lambda d, t: None) == path and len(srv.hits) == hits  # already there: reused
+
+
+@pytest.mark.skipif(sys.platform != "darwin" or not shutil.which("hdiutil"), reason="macOS swap script")
+def test_mac_swap_script_stops_other_running_windows_first(tmp_path):
+    payload, target = tmp_path / "payload" / "镜声.app" / "Contents", tmp_path / "Apps" / "镜声.app" / "Contents"
+    (payload / "MacOS").mkdir(parents=True)
+    (target / "MacOS").mkdir(parents=True)
+    (payload / "marker").write_text("new")
+    (target / "marker").write_text("old")
+    shutil.copy("/bin/sleep", target / "MacOS" / "MirrorVoice")
+    other = subprocess.Popen([str(target / "MacOS" / "MirrorVoice"), "60"])  # a window opened by hand
+    dmg = tmp_path / "MirrorVoice-9.9.9-macos-arm64.dmg"
+    subprocess.run(["hdiutil", "create", "-volname", "t", "-srcfolder", str(tmp_path / "payload"), "-ov",
+                    "-format", "UDZO", str(dmg)], check=True, capture_output=True)
+    script_dir = tmp_path / "script"
+    script_dir.mkdir()
+    (script_dir / "update.sh").write_text(updater.MAC_SCRIPT)
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    subprocess.run(["/bin/bash", str(script_dir / "update.sh"), str(dead.pid), str(dmg), str(target.parent),
+                    str(tmp_path / "update.log"), "norelaunch"], check=True, timeout=120,
+                   env={**os.environ, "MIRRORVOICE_TEST_NO_OSASCRIPT": "1"})
+    assert other.wait(timeout=10) != 0  # stopped before the swap
+    assert (target / "marker").read_text() == "new"
+    assert "other instances running" in (tmp_path / "update.log").read_text()

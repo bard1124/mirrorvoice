@@ -77,8 +77,11 @@ class UpdateController:
                 path = updater.download(rel, lambda d, t: self.bridge.progress.emit(d, t), cancel)
                 self.bridge.progress.emit(-1, 0)
                 self._path = path
+            except updater.UpdateBusy as e:  # another window is downloading it: not a failure
+                self._err, self._busy = str(e), True
+                self.bridge.progress.emit(-2, 0)
             except Exception as e:  # noqa: BLE001
-                self._err = str(e)
+                self._err, self._busy = str(e), False
                 self.bridge.progress.emit(-2, 0)
         threading.Thread(target=work, daemon=True, name="update-download").start()
 
@@ -91,7 +94,9 @@ class UpdateController:
             return
         self._dlg.close()
         if done == -2:
-            if "取消" not in getattr(self, "_err", ""):
+            if getattr(self, "_busy", False):
+                QMessageBox.information(self.parent, "正在更新", self._err)
+            elif "取消" not in getattr(self, "_err", ""):
                 QMessageBox.warning(self.parent, "更新失败", self._err)
             return
         try:

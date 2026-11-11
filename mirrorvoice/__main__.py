@@ -81,7 +81,10 @@ def _cmd_update(_args) -> None:
         if pct >= last[0] + 10 or done == total:
             last[0] = pct
             print(f"  {pct}%  {done >> 20}/{total >> 20} MB", flush=True)
-    path = updater.download(rel, p)
+    try:
+        path = updater.download(rel, p)
+    except updater.UpdateBusy as e:
+        sys.exit(str(e))
     if not updater.can_self_install():
         print(f"已下载到 {path}（从源码运行，请手动安装）")
         return

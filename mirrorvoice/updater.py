@@ -15,6 +15,7 @@ for this version or older (Windows cannot delete its running setup.exe) is clean
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -131,9 +132,61 @@ def check_async(cb: Callable[[Release | None, str], None]) -> None:
     threading.Thread(target=work, daemon=True, name="update-check").start()
 
 
-def download(rel: Release, progress: Callable[[int, int], None], cancel: threading.Event | None = None) -> Path:
+class UpdateBusy(RuntimeError):
+    """Another MirrorVoice process is downloading the update right now."""
+
+
+@contextlib.contextmanager
+def _download_lock():
+    """One download at a time across processes. Two (the app opened again during a slow command-line
+    update) wrote the same .part file; the loser failed with "No such file … .part -> .dmg"."""
     UPDATES.mkdir(parents=True, exist_ok=True)
-    dest = UPDATES / rel.asset_name
+    f = open(UPDATES / "download.lock", "a+")
+    try:
+        if IS_WIN:
+            import msvcrt
+
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        raise UpdateBusy("另一个镜声窗口正在下载这个更新，下载完会自动安装并重新打开镜声，请稍候。") from None
+    try:
+        yield
+    finally:
+        try:
+            if IS_WIN:
+                import msvcrt
+
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+        f.close()  # closing releases flock on macOS
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(1 << 20):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def download(rel: Release, progress: Callable[[int, int], None], cancel: threading.Event | None = None) -> Path:
+    with _download_lock():
+        dest = UPDATES / rel.asset_name
+        if dest.exists() and rel.sha256 and _sha256(dest) == rel.sha256:
+            progress(dest.stat().st_size, dest.stat().st_size)  # finished by an earlier run
+            return dest
+        return _download(rel, dest, progress, cancel)
+
+
+def _download(rel: Release, dest: Path, progress: Callable[[int, int], None], cancel: threading.Event | None) -> Path:
     part = dest.with_name(dest.name + ".part")
     h = hashlib.sha256()
     if rel.asset_url.startswith("file://"):
@@ -209,6 +262,15 @@ PID="$1"; DMG="$2"; TARGET="$3"; LOG="$4"
 exec >>"$LOG" 2>&1
 echo "$(date) update start pid=$PID target=$TARGET"
 for i in $(seq 1 120); do kill -0 "$PID" 2>/dev/null || break; sleep 0.5; done
+# Any other window of the app still running would keep the old code in memory after the swap
+# (and `open` would only bring it to the front): ask it to quit, then stop it.
+BIN="$TARGET/Contents/MacOS/"
+if pgrep -f "$BIN" >/dev/null; then
+  echo "$(date) other instances running: asking them to quit"
+  [ -z "$MIRRORVOICE_TEST_NO_OSASCRIPT" ] && osascript -e 'tell application id "io.github.mirrorvoice" to quit' >/dev/null 2>&1
+  for i in $(seq 1 40); do pgrep -f "$BIN" >/dev/null || break; sleep 0.5; done
+  if pgrep -f "$BIN" >/dev/null; then echo "still running (a dialog open?): stopping"; pkill -TERM -f "$BIN"; sleep 2; pkill -KILL -f "$BIN"; fi
+fi
 MNT=$(hdiutil attach -nobrowse -readonly "$DMG" | awk -F'\t' '/\/Volumes\//{print $NF}' | tail -1)
 SRC=$(ls -d "$MNT"/*.app | head -1)
 if [ -z "$SRC" ]; then echo "no .app in dmg"; hdiutil detach "$MNT" -quiet; exit 1; fi
