@@ -76,7 +76,9 @@ class MLXCloneVoice:
         audio, sr, self.ref_text = _ref()
         self.ref_audio = mx.array(resample(audio, sr, self.model.sample_rate))
 
-    def stream(self, text: str, lang: str, interval: float = 0.8) -> Iterator[tuple[np.ndarray, int]]:
+    # 0.4 s chunks: the first sound ~0.2 s sooner than 0.8 s (0.54 vs 0.74 s on an M1 Pro); 0.2 s
+    # gained nothing more and made the whole sentence slower
+    def stream(self, text: str, lang: str, interval: float = 0.4) -> Iterator[tuple[np.ndarray, int]]:
         for r in self.model.generate(text=text, ref_audio=self.ref_audio, ref_text=self.ref_text,
                                      lang_code=LANGS[lang].tts or "auto", stream=True,
                                      streaming_interval=interval):

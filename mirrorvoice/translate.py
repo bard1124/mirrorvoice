@@ -11,6 +11,7 @@ import subprocess
 import time
 import urllib.request
 from pathlib import Path
+from typing import Callable, Iterator
 
 from .config import GLOSSARY_FILE, IS_MAC, IS_WIN, resource_dir, kill_with_parent
 from .languages import LANGS
@@ -74,7 +75,7 @@ def correct_asr(text: str, rows: list[Term], side: str) -> str:
 # ------------------------------------------------------------------ prompts
 
 
-def system_prompt(src: str, tgt: str, subtitle: bool, meeting: str = "") -> str:
+def system_prompt(src: str, tgt: str, subtitle: bool, meeting: str = "", concise: int = 0) -> str:
     s, t = LANGS[src].english, LANGS[tgt].english
     p = (f"You are a simultaneous interpreter. Translate the {s} speech transcript into natural, "
          f"concise spoken {t}. The transcript comes from speech recognition and may contain "
@@ -85,6 +86,10 @@ def system_prompt(src: str, tgt: str, subtitle: bool, meeting: str = "") -> str:
               "(e.g. 'twenty percent', 'three p.m.'), never digits. ")
     if subtitle and tgt in ("zh", "yue"):
         p += "Use Simplified Chinese. Keep names, product names and technical terms in their original form. "
+    if concise:  # speech is piling up: the gist in about the time the speaker took ("be brief" alone did nothing)
+        unit = "words" if tgt not in ("zh", "yue", "ja") else "characters"
+        p += (f"Speech is falling behind: give the essential meaning in at most {concise} {unit}; "
+              "drop hedges, fillers, repetitions and details the listener can do without. ")
     if meeting.strip():
         p += (f"Background of this meeting (use it to choose the right terminology, never translate it): "
               f"{meeting.strip()[:400]}. ")
@@ -170,13 +175,17 @@ class Translator:
 
     def translate(self, text: str, src: str, tgt: str, subtitle: bool = False,
                   context: tuple[str, str] | None = None,
-                  history: list[tuple[str, str]] | tuple = ()) -> str:
+                  history: list[tuple[str, str]] | tuple = (), concise: int = 0,
+                  on_clause: Callable[[str], None] | None = None) -> str:
         """context = (previous part's source, its translation) when `text` continues that part
         (a long sentence cut early): shown to the model as the preceding exchange.
         history = the same speaker's last few (source, translation) pairs, oldest first: earlier
-        turns of the conversation, so pronouns, terms and tone carry over between sentences."""
+        turns of the conversation, so pronouns, terms and tone carry over between sentences.
+        concise = a length budget (words, or characters for zh/ja) when speech is backing up. on_clause(text) is called once with
+        the first clause while the model is still writing, when the backend streams — so speech
+        can start before the sentence is translated; the return value is always the whole text."""
         tag = NO_THINK if getattr(self.backend, "no_think", True) else ""
-        msgs = [{"role": "system", "content": system_prompt(src, tgt, subtitle, self.meeting)}]
+        msgs = [{"role": "system", "content": system_prompt(src, tgt, subtitle, self.meeting, concise)}]
         for h_src, h_tgt in history:
             msgs += [{"role": "user", "content": user_prompt(h_src, [])},
                      {"role": "assistant", "content": h_tgt}]
@@ -185,7 +194,11 @@ class Translator:
                      {"role": "assistant", "content": context[1]}]
         msgs.append({"role": "user", "content": user_prompt(text, glossary_hits(text, self.glossary),
                                                             continuation=context is not None) + tag})
-        out = last_line(self.backend.chat(msgs))
+        stream = getattr(self.backend, "stream_chat", None)
+        if on_clause is not None and stream is not None:
+            out = last_line(self._streamed(stream(msgs), tgt, on_clause))
+        else:
+            out = last_line(self.backend.chat(msgs))
         if looks_like_reasoning(out, tgt):
             # small models sometimes explain the sentence instead of translating it: one plain retry,
             # and never speak the explanation to the other side
@@ -194,8 +207,43 @@ class Translator:
                 return ""
         return out
 
+    @staticmethod
+    def _streamed(pieces: Iterator[str], tgt: str, on_clause: Callable[[str], None]) -> str:
+        text, sent = "", False
+        for piece in pieces:
+            text += piece
+            if not sent:
+                head = first_clause(text, tgt)
+                if head:
+                    on_clause(head)
+                    sent = True
+        return text
+
     def close(self) -> None:
         self.backend.close()
+
+
+_CLAUSE = re.compile(r"[,.;:?!，。；：？！]")
+
+
+def first_clause(text: str, tgt: str, min_words: int = 4) -> str:
+    """The finished first clause of a translation still being written ('' = not yet / not safe):
+    ends at punctuation that already has more text after it, has at least min_words words (6
+    characters for Chinese / Japanese / Korean), sits on the first line, and is not reasoning."""
+    body = text.split("</think>")[-1].lstrip()
+    if "\n" in body.strip():
+        return ""  # several lines: last_line() will pick one, the first clause may not be in it
+    for m in _CLAUSE.finditer(body):
+        end = m.end()
+        if end >= len(body.rstrip()):
+            return ""  # punctuation at the very end: wait to see whether the sentence goes on
+        head = body[:end].strip()
+        if m.group() == "." and end < len(body) and not body[end].isspace():
+            continue  # 3.5, e.g.
+        size = len(head.split()) if tgt in ("en",) or " " in head else len(re.sub(r"\W", "", head)) // 1.5
+        if size >= min_words and not looks_like_reasoning(head, tgt):
+            return head
+    return ""
 
 
 class _MLX:
@@ -206,12 +254,20 @@ class _MLX:
         self.model, self.tok = load(str(path))
         self.sampler = make_sampler(temp=0.0)
 
+    def _prompt(self, msgs: list[dict]) -> str:
+        return self.tok.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False,
+                                            enable_thinking=False)
+
     def chat(self, msgs: list[dict]) -> str:
         from mlx_lm import generate
 
-        prompt = self.tok.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False,
-                                              enable_thinking=False)
-        return generate(self.model, self.tok, prompt, max_tokens=200, sampler=self.sampler)
+        return generate(self.model, self.tok, self._prompt(msgs), max_tokens=200, sampler=self.sampler)
+
+    def stream_chat(self, msgs: list[dict]) -> Iterator[str]:
+        from mlx_lm import stream_generate
+
+        for r in stream_generate(self.model, self.tok, self._prompt(msgs), max_tokens=200, sampler=self.sampler):
+            yield r.text
 
     def close(self) -> None:
         pass
@@ -263,13 +319,32 @@ class _LlamaServer:
                 time.sleep(0.5)
         return False
 
-    def chat(self, msgs: list[dict]) -> str:
-        body = json.dumps({"messages": msgs, "temperature": 0, "max_tokens": 200,
+    def _request(self, msgs: list[dict], stream: bool) -> urllib.request.Request:
+        body = json.dumps({"messages": msgs, "temperature": 0, "max_tokens": 200, "stream": stream,
                            "chat_template_kwargs": {"enable_thinking": False}}).encode()
-        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/v1/chat/completions", data=body,
-                                     headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=60) as r:
+        return urllib.request.Request(f"http://127.0.0.1:{self.port}/v1/chat/completions", data=body,
+                                      headers={"Content-Type": "application/json"})
+
+    def chat(self, msgs: list[dict]) -> str:
+        with urllib.request.urlopen(self._request(msgs, False), timeout=60) as r:
             return json.load(r)["choices"][0]["message"]["content"]
+
+    def stream_chat(self, msgs: list[dict]) -> Iterator[str]:
+        """Server-sent events: data: {"choices":[{"delta":{"content":"…"}}]} … data: [DONE]"""
+        with urllib.request.urlopen(self._request(msgs, True), timeout=60) as r:
+            for raw in r:
+                line = raw.decode("utf-8", "ignore").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    return
+                try:
+                    delta = json.loads(data)["choices"][0].get("delta", {}).get("content")
+                except (ValueError, KeyError, IndexError):
+                    continue
+                if delta:
+                    yield delta
 
     def close(self) -> None:
         if getattr(self, "proc", None) and self.proc.poll() is None:

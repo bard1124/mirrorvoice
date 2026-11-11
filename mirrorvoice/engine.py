@@ -10,8 +10,10 @@ import itertools
 import queue
 import threading
 import time
+import re
 import traceback
 from collections import deque
+from dataclasses import dataclass, field
 from typing import Callable
 
 from . import models
@@ -29,6 +31,26 @@ from .tts import make_voice
 Emit = Callable[..., None]  # emit(kind: str, **data)
 
 SIMILAR = {"zh": {"zh", "yue"}, "yue": {"yue", "zh"}}
+
+
+@dataclass
+class _Speech:
+    """One sentence of mine on its way to the voice thread: text pieces arrive in `parts` (the
+    first clause while the translator is still writing, then the rest; None = done)."""
+    utt: Utterance
+    waited: float
+    t0: float                       # translation started
+    parts: queue.Queue = field(default_factory=queue.Queue)
+    t_first_text: float = 0.0       # when the first piece to speak was known
+    out: str = ""                   # the whole translation ("" = nothing to report)
+    t_tr: float = 0.0
+
+
+def speech_seconds(text: str) -> float:
+    """Rough spoken length: ~2.6 English words or ~4.5 CJK characters per second."""
+    words = len(text.split())
+    cjk = len(re.findall(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]", text))
+    return cjk / 4.5 + max(words - cjk, 0) / 2.6
 
 
 def check_models(required: list) -> str:
@@ -55,6 +77,10 @@ class Engine:
         self._player = self._voice = self._transcript = self._me = None
         self._prev = {"me": None, "them": None}
         self._hist = {"me": deque(maxlen=4), "them": deque(maxlen=4)}
+        self._voice_q: queue.Queue = queue.Queue()
+        self._play_until, self._pending_s, self._compact = 0.0, 0.0, False
+        self._synth_idle = threading.Event()
+        self._synth_idle.set()
         self._interim_tr, self._interim_busy, self._interim_at, self._them_gen = None, False, 0.0, 0
         self._ready = False
         self.ptt_down = False
@@ -80,6 +106,10 @@ class Engine:
         # stop() left a "stop" job behind). Sharing the queue let a new worker swallow that stale
         # "stop" and exit while its listeners kept running — "nothing happens" until restart.
         self._jobs = queue.PriorityQueue()
+        self._voice_q: queue.Queue = queue.Queue()  # my translated speech, played in order by the voice thread
+        self._play_until, self._pending_s, self._compact = 0.0, 0.0, False
+        self._synth_idle = threading.Event()
+        self._synth_idle.set()
         self._seq = itertools.count()
         try:  # keep earlier sessions for diagnosis; start over when the file gets big
             if LOG_FILE.exists() and LOG_FILE.stat().st_size > 2_000_000:
@@ -189,6 +219,11 @@ class Engine:
         transcript = Transcript(s.my_lang, s.their_lang)
         self._transcript = transcript
         self._player, self._voice = player, voice
+        # Speech is synthesised on its own thread: the translator no longer waits ~4 s for each
+        # sentence's voice before taking the next one (or the other side's subtitles).
+        vq = self._voice_q
+        threading.Thread(target=self._voicer, args=(vq,), daemon=True, name="engine-voice").start()
+        self._closers.append(lambda: vq.put(None))
 
         # expected language fixed (Mandarin was misheard as Cantonese / Japanese); theirs is still
         # recognised, for passthrough
@@ -250,7 +285,7 @@ class Engine:
                     self._words.hotwords = glossary_hotwords(tr.glossary)
                 continue
             if kind == "voice":
-                self._swap_voice()
+                self._voice_q.put(("swap", None))  # the voice thread owns every TTS object
                 continue
             if kind == "me":
                 self._do_me(tr, utt)
@@ -302,12 +337,17 @@ class Engine:
             return None
         return prev[0], prev[1]
 
-    def _history(self, who: str, utt: Utterance, context) -> list[tuple[str, str]]:
+    LOCAL_HISTORY_N = 1  # local models: each earlier turn costs ~0.13 s of prompt (3 turns: +0.39 s)
+
+    def _history(self, who: str, utt: Utterance, context, tr: Translator | None = None) -> list[tuple[str, str]]:
         start = utt.t_end - len(utt.audio) / 16000
         rows = [(a, b) for a, b, t in self._hist[who] if start - t < self.HISTORY_S]
         if context and rows and rows[-1] == context:
             rows = rows[:-1]  # already given as the sentence being continued
-        return rows[-self.HISTORY_N:]
+        n = self.HISTORY_N
+        if tr is not None and not isinstance(tr.backend, FailoverChat):
+            n = self.LOCAL_HISTORY_N
+        return rows[-n:] if n else []
 
     def _remember(self, who: str, src: str, tgt: str, t_end: float) -> None:
         self._prev[who] = (src, tgt, t_end)
@@ -318,11 +358,33 @@ class Engine:
         t0 = time.time()
         waited = t0 - utt.t_end  # time the sentence sat in the queue behind earlier work
         utt.text = correct_asr(utt.text, tr.glossary, "me")
+        speak = self._voice is not None and not self.muted and self._player is not None
+        if speak:
+            # Translator and voice share the GPU: running them side by side made both slower
+            # (1.58 -> 1.75 s at a normal pace). Wait for the previous sentence's synthesis; only the
+            # first clause of this one overlaps with the rest of its translation.
+            self._synth_idle.wait(30)
+            t0 = time.time()
+            waited = t0 - utt.t_end
+        job = _Speech(utt, waited, t0)
+        compact = self._update_compact()
+        budget = 0
+        if compact:  # roughly as long as I took to say it, so the backlog shrinks instead of growing
+            said = len(utt.audio) / 16000
+            budget = max(4, round(said * (2.4 if s.their_lang not in ("zh", "yue", "ja") else 4.0)))
+        if speak:
+            self._voice_q.put(("speak", job))
+        first: dict[str, str] = {}
+
+        def on_clause(text: str) -> None:  # the first clause, while the rest is still being written
+            first["text"], job.t_first_text = text, time.time()
+            job.parts.put(text)
         try:
             ctx = self._context("me", utt)
-            out = tr.translate(utt.text, s.my_lang, s.their_lang, context=ctx,
-                               history=self._history("me", utt, ctx))
-        except TranslateError as e:  # nothing is spoken; the sentence shows as failed
+            out = tr.translate(utt.text, s.my_lang, s.their_lang, context=ctx, history=self._history("me", utt, ctx, tr),
+                               concise=budget, on_clause=on_clause if speak else None)
+        except TranslateError as e:  # nothing (more) is spoken; the sentence shows as failed
+            job.parts.put(None)
             self.log(f"[me] 在线翻译失败 {e.kind}: {e}")
             self.emit("me", src=utt.text, tgt=f"⚠ 翻译失败：{e}", latency=time.time() - utt.t_end,
                       asr_s=utt.asr_s, queue_s=max(0.0, waited - utt.asr_s), translate_s=time.time() - t0,
@@ -330,23 +392,102 @@ class Engine:
             return
         t_tr = time.time() - t0
         if not out:
+            job.parts.put(None)
             return
         self._remember("me", utt.text, out, utt.t_end)
-        latency = voice_s = None
-        if self._voice and not self.muted:  # muted: drop speech that was already queued
-            text = spoken_en(out) if s.their_lang == "en" else out
-            for chunk, sr in self._voice.stream(text, s.their_lang):
-                if latency is None:
-                    latency = time.time() - utt.t_end
-                    voice_s = time.time() - t0 - t_tr
-                if not getattr(self._voice, "native_speed", False):
-                    chunk = time_stretch(chunk, sr, self._voice.speed)
-                self._player.put(chunk, sr)
-        self.log(f"[me] 排队 {waited:.1f}s 翻译 {t_tr:.2f}s 合成 {time.time() - t0 - t_tr:.2f}s: {out[:40]!r}")
-        self.emit("me", src=utt.text, tgt=out, latency=latency or (time.time() - utt.t_end),
-                  asr_s=utt.asr_s, queue_s=max(0.0, waited - utt.asr_s), translate_s=t_tr, voice_s=voice_s,
-                  passthrough=False)
         self._transcript.add("me", utt.text, out)
+        if not speak:
+            self.log(f"[me] 排队 {waited:.1f}s 翻译 {t_tr:.2f}s（不出声）: {out[:40]!r}")
+            self.emit("me", src=utt.text, tgt=out, latency=time.time() - utt.t_end, asr_s=utt.asr_s,
+                      queue_s=max(0.0, waited - utt.asr_s), translate_s=t_tr, voice_s=None, passthrough=False)
+            return
+        job.out, job.t_tr = out, t_tr
+        head = first.get("text", "")
+        if not head:
+            job.t_first_text = time.time()
+            job.parts.put(out)
+        elif out.startswith(head):
+            if out[len(head):].strip():
+                job.parts.put(out[len(head):].strip())
+        else:  # the final text was cleaned up differently: the spoken clause stays, log it
+            self.log(f"[me] 先念的分句与整句不一致：{head!r} / {out!r}")
+        job.parts.put(None)
+        self._pending_s += speech_seconds(out)
+
+    # ------------------------------------------------------------ voice thread
+    BACKLOG_ON_S, BACKLOG_OFF_S, BACKLOG_SPEED = 3.0, 1.5, 1.15
+
+    def _backlog(self) -> float:
+        """Seconds of my speech not yet heard: queued audio plus sentences not synthesised yet."""
+        return max(0.0, self._play_until - time.monotonic()) + max(0.0, self._pending_s)
+
+    def _update_compact(self) -> bool:
+        """English renderings run longer than the Chinese said (2.5 s -> ~6 s): when speech piles up,
+        ask for shorter translations and speak a little faster until it has caught up."""
+        b = self._backlog()
+        was, self._compact = self._compact, b > self.BACKLOG_ON_S or (self._compact and b > self.BACKLOG_OFF_S)
+        if self._compact and not was:
+            self.log(f"[me] 语音积压 {b:.1f}s：精简译文、语速 x{self.BACKLOG_SPEED}")
+            self.emit("notice", text="翻译语音积压，已自动精简译文并稍微加快语速，追上后恢复")
+        return self._compact
+
+    def _voicer(self, vq: queue.Queue) -> None:
+        while True:
+            item = vq.get()
+            if item is None:
+                return
+            kind, job = item
+            self._synth_idle.clear()
+            try:
+                if kind == "swap":
+                    self._swap_voice()
+                else:
+                    self._speak(job)
+            except Exception as e:  # noqa: BLE001 — one bad sentence must not silence the rest
+                self.log(traceback.format_exc())
+                self.emit("notice", text=f"这句语音合成失败：{e}")
+            finally:
+                if vq.empty():
+                    self._synth_idle.set()
+
+    def _speak(self, job: _Speech) -> None:
+        s, voice = self.s, self._voice
+        first_audio = None
+        boost = self.BACKLOG_SPEED if self._compact else 1.0
+        native = getattr(voice, "native_speed", False)
+        base = getattr(voice, "speed", 1.0)
+        try:
+            while True:
+                part = job.parts.get()
+                if part is None:
+                    break
+                if self.muted or voice is None or voice is not self._voice:  # muted / voice switched
+                    continue
+                if native:
+                    voice.speed = base * boost
+                text = spoken_en(part) if s.their_lang == "en" else part
+                for chunk, sr in voice.stream(text, s.their_lang):
+                    if first_audio is None:  # heard once what is already queued has played
+                        first_audio = time.time() + max(0.0, self._play_until - time.monotonic())
+                    if not native:
+                        chunk = time_stretch(chunk, sr, base * boost)
+                    self._player.put(chunk, sr)
+                    self._play_until = max(time.monotonic(), self._play_until) + len(chunk) / sr
+        finally:
+            if native and voice is not None:
+                voice.speed = base
+            self._pending_s = max(0.0, self._pending_s - speech_seconds(job.out))
+        if not job.out:
+            return  # failed or empty: already reported by the translator side
+        utt, t_end = job.utt, job.utt.t_end
+        spoke_at = job.t_first_text or (job.t0 + job.t_tr)
+        translate_s = spoke_at - job.t0
+        voice_s = first_audio - spoke_at if first_audio else None  # includes waiting for earlier speech
+        self.log(f"[me] 排队 {job.waited:.1f}s 翻译 {job.t_tr:.2f}s（先念 {translate_s:.2f}s）"
+                 f" 出声 {voice_s if voice_s is not None else -1:.2f}s: {job.out[:40]!r}")
+        self.emit("me", src=utt.text, tgt=job.out, latency=(first_audio or time.time()) - t_end, asr_s=utt.asr_s,
+                  queue_s=max(0.0, job.waited - utt.asr_s), translate_s=translate_s, voice_s=voice_s,
+                  passthrough=False)
 
     def _do_them(self, tr: Translator, utt: Utterance) -> None:
         s = self.s
@@ -358,7 +499,7 @@ class Engine:
                 raise TranslateError("timeout", "积压太多，已跳过这句")
             ctx = self._context("them", utt)
             out = tr.translate(utt.text, src, s.my_lang, subtitle=True, context=ctx,
-                               history=self._history("them", utt, ctx))
+                               history=self._history("them", utt, ctx, tr))
         except TranslateError as e:
             self.log(f"[them] 未翻译 {e.kind}: {e}")
             self.emit("them", src=utt.text, tgt=f"⚠ {e}", latency=time.time() - utt.t_end, asr_s=utt.asr_s,
@@ -375,10 +516,10 @@ class Engine:
     def reload_voice(self) -> None:
         """New sample / 克隆↔标准 / GPU switch while running: rebuild the voice without a restart."""
         if self.running:
-            self._jobs.put((0, next(self._seq), "voice", None))
+            self._voice_q.put(("swap", None))
 
     def _swap_voice(self) -> None:
-        """Runs on the model thread (which owns every TTS object). Speech is skipped while swapping."""
+        """Runs on the voice thread (which owns every TTS object). Speech is skipped while swapping."""
         s = self.s
         old, self._voice = self._voice, None
         if old is not None:
