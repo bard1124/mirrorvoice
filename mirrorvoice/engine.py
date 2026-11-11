@@ -74,7 +74,8 @@ class Engine:
         self.running = False
         self.muted = False
         # exist before the first start(): the UI may call set_voice_speed / set_monitor / reload_voice early
-        self._player = self._voice = self._transcript = self._me = None
+        self._player = self._voice = self._transcript = self._me = self._them = None
+        self._qwen_sides = set()
         self._prev = {"me": None, "them": None}
         self._hist = {"me": deque(maxlen=4), "them": deque(maxlen=4)}
         self._voice_q: queue.Queue = queue.Queue()
@@ -96,7 +97,8 @@ class Engine:
         self.s = s
         self.running = True
         self.muted = False
-        self._player = self._voice = self._transcript = self._me = None
+        self._player = self._voice = self._transcript = self._me = self._them = None
+        self._qwen_sides: set = set()
         self._ready = False
         self._interim_tr, self._interim_busy, self._interim_at, self._them_gen = None, False, 0.0, 0
         self._words = None
@@ -148,6 +150,50 @@ class Engine:
     def log(self, msg: str) -> None:
         if self._log:
             self._log.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
+
+    def _start_them(self, source: str) -> Listener:
+        s = self.s
+        them = Listener("them", source, s.their_lang, s.pause, self._on_them, self._on_level, self._them_gate,
+                        self.log, alt=s.my_lang, online_key=self._asr_key(s, "them"),
+                        on_partial=lambda t: self._on_partial("them", t), on_notice=self._notice,
+                        words=self._words if "them" in self._qwen_sides else None)
+        them.start()
+        self._closers.append(them.close)
+        self._them = them
+        return them
+
+    # ------------------------------------------------------------ hot device switching
+    def set_mic(self, name: str) -> str:
+        """Switch my microphone while running. Returns the device opened (raises if it can't be)."""
+        if not (self.running and self._me):
+            return ""
+        return self._me.switch_source(name)
+
+    def set_call_out(self, name: str) -> str:
+        """Switch the virtual mic the meeting listens to while running."""
+        if not (self.running and self._player):
+            return ""
+        self._player.set_call(find_device(name, "output"))
+        return self._player.outs[0].name
+
+    def set_their_source(self, name: str) -> str:
+        """Switch, start ("" before) or stop ("" now) the other side's subtitles while running.
+        Starting loads a recognizer (~1 s): done here, so call it off the UI thread."""
+        if not self.running:
+            return ""
+        them = self._them
+        if not name:
+            if them is not None:
+                self._them = None
+                if them.close in self._closers:
+                    self._closers.remove(them.close)
+                them.close()
+            return ""
+        if them is not None:
+            return them.switch_source(name)
+        if not self.s.subtitles:
+            return ""
+        return self._start_them(name).label
 
     def _them_gate(self) -> bool:
         """Ignore the other side's source while our own translation plays on the monitor output —
@@ -246,15 +292,10 @@ class Engine:
         self._closers.append(me.close)
         self._me = me
         them = None
+        self._qwen_sides = sides
         if s.subtitles and s.their_source:
             try:
-                them = Listener("them", s.their_source, s.their_lang, s.pause, self._on_them,
-                                self._on_level, self._them_gate, self.log, alt=s.my_lang,
-                                online_key=self._asr_key(s, "them"),
-                                on_partial=lambda t: self._on_partial("them", t), on_notice=self._notice,
-                                words=words if "them" in sides else None)
-                them.start()
-                self._closers.append(them.close)
+                them = self._start_them(s.their_source)
             except Exception as e:  # noqa: BLE001 — subtitles are optional
                 self.emit("status", text=f"对方声音来源不可用（{e}），字幕关闭")
 

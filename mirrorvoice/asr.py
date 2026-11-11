@@ -323,6 +323,7 @@ class Listener:
         self.source = source
         self.capture = Capture(source, self.q.put, self.WINDOW)
         self.label = self.capture.label
+        self._cap_lock = threading.Lock()
         self.stop_evt = threading.Event()
         self._flush = threading.Event()
         self._restart_at = 0.0
@@ -358,11 +359,26 @@ class Listener:
         self._restart_at = time.time() + 5
         self.log(f"[{self.name}] 输入流 3 s 无数据（{self.capture.health()}），重新打开")
         try:
-            self.capture.close()
-            self.capture = Capture(self.source, self.q.put, self.WINDOW)
-            self.capture.start()
+            with self._cap_lock:
+                self.capture.close()
+                self.capture = Capture(self.source, self.q.put, self.WINDOW)
+                self.capture.start()
         except Exception as e:  # noqa: BLE001 — keep trying every 5 s
             self.log(f"[{self.name}] 重新打开输入流失败：{e}")
+
+    def switch_source(self, source: str) -> str:
+        """Hot switch to another input while running: the new device is opened first (a failure
+        leaves the old one running and raises), then the old one closes; the sentence in progress
+        ends here. Returns the new device's name."""
+        new = Capture(source, self.q.put, self.WINDOW)
+        new.start()
+        with self._cap_lock:
+            old, self.capture, self.source, self.label = self.capture, new, source, new.label
+        old.close()
+        self._restart_at = time.time() + 5
+        self.flush()
+        self.log(f"[{self.name}] 切换输入：{new.label}")
+        return new.label
 
     def _loop(self) -> None:
         while not self.stop_evt.is_set():

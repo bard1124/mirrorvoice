@@ -162,6 +162,17 @@ class Player:
         for o in self.outs:
             o.put(chunk, sr)
 
+    def set_call(self, call_dev: int | None) -> None:
+        """Switch the call output (virtual mic) while running; speech not played yet moves along."""
+        new = DeviceOut(call_dev, 24000)
+        old = self.outs[0]
+        with old.lock:
+            pending, old.buf = old.buf, np.zeros(0, dtype=np.float32)
+        if len(pending):
+            new.put(pending, old.sr)
+        self.outs = [new] + self.outs[1:]
+        old.close()
+
     def set_monitor(self, monitor_dev: int | None) -> None:
         """Replace the headphone monitor (outs[1:]) without touching the call output."""
         old, self.outs = self.outs[1:], self.outs[:1] + ([DeviceOut(monitor_dev, 24000)] if monitor_dev is not None else [])

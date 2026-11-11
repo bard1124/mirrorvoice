@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import subprocess
+import threading
 import sys
 
 from PySide6.QtCore import Qt, QUrl
@@ -458,12 +459,14 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, f"{title}：{dh.label(combo.currentData(), dh.Hint(h.rank))}", h.warning)
 
     # settings that only take effect when the engine (re)starts
-    RESTART_KEYS = ("my_lang", "their_lang", "mic", "call_out", "their_source", "speak", "subtitles",
-                    "passthrough", "mode", "ptt_key", "quality")
+    RESTART_KEYS = ("my_lang", "their_lang", "speak", "subtitles", "passthrough", "mode", "ptt_key", "quality")
+    # devices switched while running (engine.set_*); the monitor was the only one before
+    LIVE_DEVICES = (("mic", "set_mic", "我的麦克风"), ("call_out", "set_call_out", "送进会议"),
+                    ("their_source", "set_their_source", "对方声音来源"))
 
     def _save(self) -> None:
         s = self.s
-        before = {k: getattr(s, k) for k in self.RESTART_KEYS + ("monitor",)}
+        before = {k: getattr(s, k) for k in self.RESTART_KEYS + ("monitor", "mic", "call_out", "their_source")}
         s.my_lang, s.their_lang = self.my.currentData(), self.their.currentData()
         s.mic, s.call_out, s.monitor, s.their_source = (self.mic.currentData(), self.call.currentData(),
                                                         self.mon.currentData(), self.src.currentData())
@@ -475,10 +478,26 @@ class MainWindow(QMainWindow):
             self._refresh_banner()
         if self.engine.running:
             if before["monitor"] != s.monitor:
-                self.engine.set_monitor(s.monitor)  # the one device that can be swapped live
+                self.engine.set_monitor(s.monitor)
+            for key, fn, title in self.LIVE_DEVICES:
+                if before[key] != getattr(s, key):
+                    self._switch_device(fn, title, getattr(s, key))
             if any(before[k] != getattr(s, k) for k in self.RESTART_KEYS):
                 self.status.setText("● 运行中 · 设置已保存，点“停止”再“开始”后生效")
                 self._status_state("busy")
+
+    def _switch_device(self, fn: str, title: str, value: str) -> None:
+        """Hot-switch one device on a worker thread (opening a device or a recognizer can take a
+        second); the outcome shows in the conversation list like other notices."""
+        engine = self.engine
+
+        def work():
+            try:
+                name = getattr(engine, fn)(value)
+                engine.emit("notice", text=f"{title}已切换为：{name or '关闭'}")
+            except Exception as e:  # noqa: BLE001 — the old device keeps running
+                engine.emit("notice", text=f"{title}切换失败，仍用原来的设备：{e}")
+        threading.Thread(target=work, daemon=True, name="switch-device").start()
 
     def _swap(self) -> None:
         my, their = self.my.currentData(), self.their.currentData()

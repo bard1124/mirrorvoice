@@ -283,3 +283,24 @@ def test_local_recognizer_choice_is_saved(app, settings, monkeypatch):
     assert d.local_row.isHidden()
     d._save()
     assert settings.asr_local == "sensevoice"  # Windows: SenseVoice only
+
+
+def test_device_change_while_running_switches_live(app, settings, no_popups, monkeypatch):
+    import time
+
+    from mirrorvoice.ui import main_window
+
+    w = _window(main_window, settings, monkeypatch)
+    calls = []
+    monkeypatch.setattr(w.engine, "set_call_out", lambda name: calls.append(name) or name)
+    w.engine.running = True
+    try:
+        w.call.setCurrentIndex(w.call.findData("BlackHole 16ch"))
+        deadline = time.monotonic() + 2
+        while not calls and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert calls == ["BlackHole 16ch"]
+        assert "再“开始”后生效" not in w.status.text()  # no "stop and start again" for a device any more
+    finally:
+        w.engine.running = False
+        w.close()
