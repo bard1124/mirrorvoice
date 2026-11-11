@@ -153,6 +153,7 @@ def test_patch_zip_has_the_app_layer_only(tmp_path):
     names = zipfile.ZipFile(z).namelist()
     assert "mirrorvoice/__init__.py" in names and "mirrorvoice/ui/mascot.py" in names
     assert "assets/mascot/hello.png" in names and "assets/icon.png" in names and "patch.json" in names
+    assert "assets/mascot/update/link.png" in names  # her update routine
     assert not [n for n in names if "__pycache__" in n or n.startswith("packaging/")]
     with zipfile.ZipFile(z) as zf:
         assert all(n.split("/", 1)[0] in ("mirrorvoice", "assets", "patch.json") for n in zf.namelist())

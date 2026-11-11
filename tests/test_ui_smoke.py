@@ -394,3 +394,65 @@ def test_clicking_check_for_updates_twice_asks_once(app, settings, no_popups, mo
     assert len(shown) == 1 and "已是最新版本" in shown[0]  # one answer, and the manual click is honoured
     c.check(manual=True)
     assert len(calls) == 2  # a new click after the answer checks again
+
+
+def test_update_routine_floats_up_curls_and_plugs_in_then_lands_when_the_update_is_in(app):
+    from mirrorvoice.ui import mascot
+    from mirrorvoice.ui.icons import assets_dir
+
+    for n in mascot.UPDATE_POSES:
+        assert (assets_dir() / "mascot" / "update" / f"{n}.png").exists()
+    now = [100.0]
+    m = mascot.UpdateMascot()
+    assert all(not px.isNull() for px in m.frames.values())
+    m.clock = lambda: now[0]
+    m._t0 = 100.0
+    seen = []
+    for t in [0.0, 0.4, 0.9, 1.7, 2.5, 3.0, 60.0]:
+        pose, _, _, hover = m.at(100.0 + t)
+        seen.append(pose)
+        if t == 0.0:
+            assert hover == 0.0  # still on the ground
+        if t >= 1.7:
+            assert hover == 1.0  # up in the air
+    assert seen == ["lift", "lift", "cross", "curl", "link", "link", "link"]  # plugged in for as long as it takes
+    now[0] = 101.0  # a quick download: she still curls up and plugs in first
+    wait = m.finish()
+    assert wait == pytest.approx(2.4 + mascot.LINK_MIN_S + 2.0 - 1.0)
+    assert m.finish() == pytest.approx(wait)  # asking again does not move the landing
+    end = m.finish_time()
+    assert m.at(end - 2.0 - 0.01)[0] == "link" and m.at(end - 1.5)[0] == "rise" and m.at(end - 0.5)[0] == "land"
+    assert m.at(end - 0.5)[3] < 1.0 and m.at(end + 5)[3] == 0.0  # back on the ground, eyes open
+    assert m.at(end + 5)[0] == "land" and not m.landed()
+    now[0] = end
+    assert m.landed()
+    for t in (0.3, 3.0, end - 100.0 - 1.0):  # rising, plugged in (cable glow), landing
+        now[0] = 100.0 + t
+        img = m.grab().toImage()
+        assert (img.width(), img.height()) == (132, 170)
+
+
+def test_update_progress_installs_then_lets_her_land_before_quitting(app, settings, no_popups, monkeypatch, tmp_path):
+    from mirrorvoice import updater
+    from mirrorvoice.ui import update_ui
+
+    installed, timers, before = [], [], []
+    monkeypatch.setattr(updater, "install", lambda path, rel: installed.append((path, rel)))
+    monkeypatch.setattr(update_ui.QTimer, "singleShot", lambda ms, fn: timers.append(ms))
+    c = update_ui.UpdateController(None, settings, lambda: before.append(1))
+    rel = updater.Release(version="9.9.9", notes="", page="", asset_name="MirrorVoice-9.9.9-patch.zip",
+                          asset_url="", size=2 << 20, sha256="", kind="patch")
+    c._dlg = update_ui.UpdateProgress(None, "正在下载…")
+    c._rel, c._path = rel, tmp_path / "MirrorVoice-9.9.9-patch.zip"
+    c._on_progress(1 << 20, 2 << 20)
+    assert c._dlg.bar.value() == 500
+    c._on_progress(-1, 0)
+    assert before == [1] and installed == [(c._path, rel)]
+    assert len(timers) == 1 and timers[0] >= 1000 * (2.4 + 1.0 + 2.0)  # she curls up, plugs in, rises and lands
+    c._dlg.reject()
+    assert not c._dlg.canceled.is_set()  # installing: no cancelling now
+
+    d = update_ui.UpdateProgress(None, "正在下载…")
+    d.show()
+    d.reject()  # 取消 while downloading stops the download
+    assert d.canceled.is_set() and not d.isVisible()

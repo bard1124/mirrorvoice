@@ -1,16 +1,18 @@
-"""Update prompts for the control panel: '发现新版本' dialog + download progress + hand-over."""
+"""Update prompts for the control panel: '发现新版本' dialog + download progress (with the owl girl's
+update routine) + hand-over."""
 from __future__ import annotations
 
 import threading
 from typing import Callable
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QLabel, QMessageBox, QProgressDialog, QPushButton,
-                               QTextBrowser, QVBoxLayout, QWidget)
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import (QApplication, QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QMessageBox,
+                               QProgressBar, QPushButton, QTextBrowser, QVBoxLayout, QWidget)
 
 from .. import __version__, updater
 from ..config import Settings
 from .bridge import Bridge
+from .mascot import UpdateMascot
 
 
 def mb(n: int) -> str:
@@ -25,6 +27,52 @@ def size_line(rel: updater.Release) -> str:
     return f"完整安装包：{mb(rel.size)}。"
 
 
+class UpdateProgress(QDialog):
+    """Download progress, with her floating, curling up and plugging in beside it."""
+
+    def __init__(self, parent: QWidget | None, text: str) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("更新镜声")
+        self.setWindowModality(Qt.WindowModality.WindowModal)
+        self.canceled = threading.Event()
+        self._locked = False
+        self.mascot = UpdateMascot()
+        self.label = QLabel(text)
+        self.label.setWordWrap(True)
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 1000)
+        self.bar.setTextVisible(False)
+        self.cancel = QPushButton("取消")
+        self.cancel.clicked.connect(self.reject)
+        right = QVBoxLayout()
+        right.addStretch(1)
+        right.addWidget(self.label)
+        right.addWidget(self.bar)
+        right.addStretch(1)
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        buttons.addWidget(self.cancel)
+        right.addLayout(buttons)
+        lay = QHBoxLayout(self)
+        lay.addWidget(self.mascot, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay.addLayout(right, 1)
+        self.setMinimumWidth(520)
+
+    def reject(self) -> None:  # 取消, Esc or the close box
+        if self._locked:
+            return  # installing: too late to stop
+        self.canceled.set()
+        super().reject()
+
+    def lock(self) -> None:
+        self._locked = True
+        self.cancel.setEnabled(False)
+
+    def dismiss(self) -> None:
+        self._locked = False
+        self.done(0)
+
+
 class UpdateController:
     def __init__(self, parent: QWidget, s: Settings, before_install: Callable[[], None]) -> None:
         self.parent, self.s, self.before_install = parent, s, before_install
@@ -33,7 +81,7 @@ class UpdateController:
         self.bridge.progress.connect(self._on_progress)
         self._manual = False
         self._checking = False  # a check is on its way: more clicks join it (one answer, one window)
-        self._dlg: QProgressDialog | None = None
+        self._dlg: UpdateProgress | None = None
 
     def check(self, manual: bool) -> None:
         if self._dlg is not None and self._dlg.isVisible():
@@ -85,12 +133,9 @@ class UpdateController:
         d.exec()
 
     def _start(self, rel: updater.Release) -> None:
-        self._dlg = QProgressDialog(f"正在下载 {rel.asset_name}（{mb(rel.size)}）…", "取消", 0, 1000, self.parent)
-        self._dlg.setWindowTitle("更新镜声")
-        self._dlg.setWindowModality(Qt.WindowModality.WindowModal)
-        self._dlg.setMinimumDuration(0)
-        cancel = threading.Event()
-        self._dlg.canceled.connect(cancel.set)
+        self._dlg = UpdateProgress(self.parent, f"正在下载 {rel.asset_name}（{mb(rel.size)}）…")
+        self._dlg.show()
+        cancel = self._dlg.canceled
         self._rel = rel
 
         def work():
@@ -107,25 +152,34 @@ class UpdateController:
         threading.Thread(target=work, daemon=True, name="update-download").start()
 
     def _on_progress(self, done: int, total: int) -> None:
-        if self._dlg is None:
+        dlg = self._dlg
+        if dlg is None:
             return
         if done >= 0:
-            self._dlg.setValue(int(1000 * done / max(total, 1)))
-            self._dlg.setLabelText(f"正在下载 {self._rel.asset_name}  {mb(done)} / {mb(total)}")
+            dlg.bar.setValue(int(1000 * done / max(total, 1)))
+            dlg.label.setText(f"正在下载 {self._rel.asset_name}  {mb(done)} / {mb(total)}")
             return
-        self._dlg.close()
         if done == -2:
+            dlg.dismiss()
             if getattr(self, "_busy", False):
                 QMessageBox.information(self.parent, "正在更新", self._err)
             elif "取消" not in getattr(self, "_err", ""):
                 QMessageBox.warning(self.parent, "更新失败", self._err)
             return
+        dlg.lock()
+        dlg.bar.setValue(1000)
+        dlg.label.setText("下载好了，正在安装…")
+        QApplication.processEvents()
         try:
             self.before_install()
             updater.install(self._path, self._rel)
         except Exception as e:  # noqa: BLE001
+            dlg.dismiss()
             QMessageBox.warning(self.parent, "更新失败", str(e))
             return
-        from PySide6.QtWidgets import QApplication
-
-        QApplication.quit()  # the hand-over script replaces the app and relaunches it
+        dlg.label.setText("更新好了，马上重新打开镜声…")
+        # let her rise and land first: the hand-over waits for this process to exit, then switches
+        # to the patch (or replaces the app) and relaunches it. Not the Windows installer — it
+        # starts at once and closes the app itself.
+        landing = self._path.suffix.lower() == ".zip" or not updater.IS_WIN
+        QTimer.singleShot(int(1000 * dlg.mascot.finish()) + 300 if landing else 0, QApplication.quit)

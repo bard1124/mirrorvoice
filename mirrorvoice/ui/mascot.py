@@ -4,6 +4,8 @@ other side talks, waves while I talk, blinks now and then.
 
 Six pose pictures from packaging/assets/mascot (packaging/art/make_girl.py lines them up); the
 breathing, the little hop and cross-fade between poses, blinking and "z z z" are animated here.
+
+UpdateMascot is her update routine, shown while an update downloads and installs.
 """
 from __future__ import annotations
 
@@ -12,7 +14,7 @@ import random
 import time
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
+from PySide6.QtGui import QColor, QFont, QPainter, QPixmap, QRadialGradient
 from PySide6.QtWidgets import QWidget
 
 from .icons import assets_dir
@@ -154,3 +156,141 @@ class Mascot(QWidget):
             p.setFont(f)
             p.setPen(QColor(130, 112, 190, int(220 * math.sin(math.pi * ph))))
             p.drawText(QPointF(w * (0.74 + 0.14 * ph), h * (0.30 - 0.18 * ph)), "z")
+
+
+# ---------------------------------------------------------------------------- the update routine
+UPDATE_POSES = ("lift", "cross", "curl", "link", "rise", "land")
+INTRO = (("lift", 0.8), ("cross", 0.8), ("curl", 0.8))  # then "link" for as long as the update takes
+LINK_MIN_S = 1.0
+UPDATE_FADE_S = 0.3
+OUTRO = (("rise", 0.9), ("land", 1.1))
+HOVER = 0.07         # how high she floats, of the widget height
+FEET = (0.46, 0.975)  # under her boots, in the frames (x, y)
+PORT = (0.702, 0.535)  # the cable port on her neck in the "link" frame (x, y)
+GLOW = (110, 232, 240)
+
+
+def _ease(x: float) -> float:
+    x = min(1.0, max(0.0, x))
+    return x * x * (3 - 2 * x)
+
+
+class UpdateMascot(QWidget):
+    """While an update comes in she floats up, folds her arms, curls up and plugs a cable into the
+    back of her neck; once it is installed (finish()) she rises, unfolds and lands with her eyes
+    open. The frames come from packaging/assets/mascot/update; floating, the glow under her boots
+    and at the cable port are drawn here."""
+
+    def __init__(self, width: int = 132, height: int = 170, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedSize(width, height)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        d = assets_dir() / "mascot" / "update"
+        self.frames = {n: QPixmap(str(d / f"{n}.png")) for n in UPDATE_POSES}
+        self.clock = time.monotonic
+        self._t0 = self.clock()
+        self._done: float | None = None  # when she starts rising
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self.update)
+        self._timer.start(1000 // FPS)
+
+    def finish(self) -> float:
+        """The update is in. Returns the seconds until she has landed (she first finishes curling
+        up and plugging in, if the download was quicker than that)."""
+        now = self.clock()
+        if self._done is None:
+            self._done = max(now, self._t0 + sum(d for _, d in INTRO) + LINK_MIN_S)
+        return self._done + sum(d for _, d in OUTRO) - now
+
+    def landed(self) -> bool:
+        return self.finish_time() <= self.clock()
+
+    def finish_time(self) -> float:
+        return math.inf if self._done is None else self._done + sum(d for _, d in OUTRO)
+
+    def _steps(self) -> list[tuple[str, float, float]]:
+        t, steps = self._t0, []
+        for n, d in INTRO:
+            steps.append((n, t, t + d))
+            t += d
+        end = math.inf if self._done is None else self._done
+        steps.append(("link", t, end))
+        for n, d in OUTRO:
+            steps.append((n, end, end + d))
+            end += d
+        return steps
+
+    def at(self, now: float | None = None) -> tuple[str, str, float, float]:
+        """(pose, the pose before it, seconds into the pose, how high she floats 0…1)."""
+        now = self.clock() if now is None else now
+        steps = self._steps()
+        for i, (n, a, b) in enumerate(steps):
+            if now < b or i == len(steps) - 1:
+                since = max(0.0, now - a)
+                prev = steps[i - 1][0] if i else n
+                hover = 1.0
+                if n == "lift":
+                    hover = _ease(since / (b - a))
+                elif n == "land":
+                    hover = 1.0 - _ease(since / (b - a))
+                return n, prev, since, hover
+        raise AssertionError("unreachable")
+
+    def pose(self) -> str:
+        return self.at()[0]
+
+    def showEvent(self, e) -> None:
+        self._timer.start(1000 // FPS)
+        super().showEvent(e)
+
+    def hideEvent(self, e) -> None:
+        self._timer.stop()
+        super().hideEvent(e)
+
+    def _target(self, pm: QPixmap) -> QRectF:
+        room = self.height() * (1 - HOVER)
+        s = min(self.width() / pm.width(), room / pm.height())
+        w, h = pm.width() * s, pm.height() * s
+        return QRectF((self.width() - w) / 2, room - h, w, h)
+
+    def paintEvent(self, _e) -> None:
+        now = self.clock()
+        pose, prev, since, hover = self.at(now)
+        t = now - self._t0
+        pm = self.frames[pose]
+        r = self._target(pm)
+        lift = self.height() * HOVER * (1 - hover) + hover * 2.0 * math.sin(t * 2 * math.pi / 1.8)
+        r.translate(0, lift)  # 0 = up in the air, HOVER of the height = on the ground
+        p = QPainter(self)
+        p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
+        pulse = 0.5 + 0.5 * math.sin(t * 2 * math.pi / 1.1)
+        curled = pose in ("curl", "link")
+        self._glow(p, QPointF(r.left() + FEET[0] * r.width(), r.top() + FEET[1] * r.height()),
+                   r.width() * 0.26, hover * (0.5 if curled else 1.0) * (0.65 + 0.35 * pulse), squash=0.22)
+        fade = min(1.0, since / UPDATE_FADE_S) if prev != pose else 1.0
+        if fade < 1.0:  # both stay mostly opaque mid-way, so she does not look see-through
+            p.setOpacity(1.0 - fade * fade)
+            p.drawPixmap(r, self.frames[prev], QRectF(self.frames[prev].rect()))
+        p.setOpacity(1.0 - (1.0 - fade) ** 2)
+        p.drawPixmap(r, pm, QRectF(pm.rect()))
+        p.setOpacity(1.0)
+        if pose == "link":
+            self._glow(p, QPointF(r.left() + PORT[0] * r.width(), r.top() + PORT[1] * r.height()),
+                       r.width() * 0.09, min(1.0, since / 0.4) * (0.4 + 0.6 * pulse))
+        p.end()
+
+    @staticmethod
+    def _glow(p: QPainter, at: QPointF, radius: float, strength: float, squash: float = 1.0) -> None:
+        if strength <= 0.01 or radius <= 0:
+            return
+        g = QRadialGradient(QPointF(0, 0), radius)
+        g.setColorAt(0.0, QColor(*GLOW, int(230 * strength)))
+        g.setColorAt(0.45, QColor(*GLOW, int(120 * strength)))
+        g.setColorAt(1.0, QColor(*GLOW, 0))
+        p.save()
+        p.translate(at)
+        p.scale(1.0, squash)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(g)
+        p.drawEllipse(QPointF(0, 0), radius, radius)
+        p.restore()
