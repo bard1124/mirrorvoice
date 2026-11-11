@@ -654,12 +654,14 @@ class MainWindow(QMainWindow):
             self.lat_label.setVisible(bool(self.lat_label.text()))
             self.convo.add("me", d["src"], d["tgt"], d["passthrough"])
         elif kind == "them":
-            self._add(f"对方  {d['src']}\n→ {d['tgt']}   ({breakdown(d)})", "#8250df")
+            self._add(f"对方  {d['src']}\n→ {d['tgt']}   ({breakdown(d)})", "#8250df", replace_live=True)
             self.overlay.show_text(d["tgt"], d["src"] if d["tgt"] != d["src"] else "")
             self.convo.add("them", d["src"], d["tgt"])
         elif kind == "partial":
             if d["who"] == "them":  # online recognition: the sentence as it is being spoken
                 self.overlay.show_partial(d["src"], d.get("tgt", ""))
+                if d.get("tgt"):  # its translation so far: a provisional row the final one replaces
+                    self._add(f"对方  {d['src']}\n→ {d['tgt']}", "#a98bd9", live=True)
         elif kind == "notice":
             self._add(f"提示  {d['text']}", "#8a8a8a")
         elif kind == "mute":
@@ -686,9 +688,20 @@ class MainWindow(QMainWindow):
                 self.overlay.hide()
             self.tray.refresh()
 
-    def _add(self, text: str, color: str) -> None:
+    def _add(self, text: str, color: str, live: bool = False, replace_live: bool = False) -> None:
+        """live: the other side's sentence still being translated — kept in one row that later
+        updates and finally the finished translation (replace_live) overwrite."""
+        it = getattr(self, "_live_item", None)
+        if it is not None and (live or replace_live) and self.log.row(it) >= 0:
+            it.setText(text)
+            it.setForeground(QColor(color))
+            self._live_item = None if replace_live else it
+            self.log.scrollToBottom()
+            return
         it = QListWidgetItem(text)
         it.setForeground(QColor(color))
+        if live or replace_live:  # my own rows in between leave the provisional one where it is
+            self._live_item = it if live else None
         self.log.addItem(it)
         if self.log.count() > 300:
             self.log.takeItem(0)

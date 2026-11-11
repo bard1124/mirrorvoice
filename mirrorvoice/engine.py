@@ -665,7 +665,7 @@ class Engine:
                 raise TranslateError("timeout", "积压太多，已跳过这句")
             ctx = self._context("them", utt)
             out = tr.translate(utt.text, src, s.my_lang, subtitle=True, context=ctx,
-                               history=self._history("them", utt, ctx, tr))
+                               history=self._history("them", utt, ctx, tr), on_text=self._live_them(utt))
         except TranslateError as e:
             self.log(f"[them] 未翻译 {e.kind}: {e}")
             self.emit("them", src=utt.text, tgt=f"⚠ {e}", latency=time.time() - utt.t_end, asr_s=utt.asr_s,
@@ -677,6 +677,20 @@ class Engine:
         self.emit("them", src=utt.text, tgt=out, latency=time.time() - utt.t_end, asr_s=utt.asr_s,
                   queue_s=max(0.0, t0 - utt.t_end - utt.asr_s), translate_s=t_tr)
         self._transcript.add("them", utt.text, out)
+
+    LIVE_EVERY_S, LIVE_MIN_CHARS = 0.12, 4
+
+    def _live_them(self, utt: Utterance) -> Callable[[str], None]:
+        """The other side's translation as it is written, a few times a second: the subtitle shows
+        the first words ~0.4 s in instead of after the whole sentence (1.75 s on average)."""
+        last = [0.0]
+
+        def show(text: str) -> None:
+            now = time.monotonic()
+            if len(text) >= self.LIVE_MIN_CHARS and now - last[0] >= self.LIVE_EVERY_S:
+                last[0] = now
+                self.emit("partial", who="them", src=utt.text, tgt=text + " …", live=True)
+        return show
 
     # ------------------------------------------------------------ listener callbacks
     def reload_voice(self) -> None:

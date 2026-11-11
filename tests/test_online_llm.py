@@ -26,6 +26,17 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         status, payload, headers, delay = srv.script.pop(0) if srv.script else srv.default
         if delay:
             time.sleep(delay)
+        if isinstance(payload, dict) and "__sse__" in payload:  # a streamed answer, piece by piece
+            self.send_response(status)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            for piece in payload["__sse__"]:
+                chunk = {"choices": [{"delta": {"content": piece}}]}
+                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+                self.wfile.flush()
+                time.sleep(payload.get("gap", 0))
+            self.wfile.write(b"data: [DONE]\n\n")
+            return
         data = json.dumps(payload).encode()
         self.send_response(status)
         for k, v in (headers or {}).items():
@@ -319,3 +330,48 @@ def test_local_subtitles_far_behind_are_skipped_too(home):
     e._do_them(Translator(local), Utterance("hello", "en", np.zeros(1600, np.float32), time.time() - 30, 0.1))
     kind, d = events[-1]
     assert kind == "them" and d["failed"] and "积压" in d["tgt"] and local.calls == 0
+
+
+def sse(pieces, gap=0.0):
+    return 200, {"__sse__": pieces, "gap": gap}, None, 0
+
+
+def test_online_translation_streams_so_the_first_clause_is_spoken_early(api):
+    srv, url = api
+    pieces = ["Let's", " first", " discuss", " the budget,", " and", " then", " the", " release", " date."]
+    srv.script = [sse(pieces, gap=0.05)]
+    tr = Translator(FailoverChat(OnlineChat("deepseek", "deepseek-chat", KEY, url)))
+    t0, heard = time.monotonic(), []
+    out = tr.translate("我们先讨论预算，然后是发布日期。", "zh", "en",
+                       on_clause=lambda h: heard.append((h, time.monotonic() - t0)))
+    assert out == "Let's first discuss the budget, and then the release date."
+    assert heard[0][0] == "Let's first discuss the budget," and heard[0][1] < 0.4  # before the rest arrived
+    assert srv.seen[0]["body"]["stream"] is True
+
+
+def test_a_server_that_ignores_stream_is_read_as_plain_json(api):
+    srv, url = api
+    srv.script = [ok("Hello there.")]
+    out = Translator(OnlineChat("custom", "m", "", url)).translate("你好", "zh", "en", on_clause=lambda h: None)
+    assert out == "Hello there."
+
+
+def test_streaming_failures_count_towards_switching_to_local(api):
+    srv, url = api
+    srv.script = [(500, {"error": {"message": "boom"}}, None, 0)] * 6
+    fc = FailoverChat(OnlineChat("deepseek", "deepseek-chat", KEY, url), local=lambda: None)
+    tr = Translator(fc)
+    for _ in range(3):
+        with pytest.raises(TranslateError):
+            tr.translate("你好", "zh", "en", on_clause=lambda h: None)
+    assert fc.using_local
+
+
+def test_live_subtitle_text_while_their_sentence_is_translated(api):
+    srv, url = api
+    srv.script = [sse(["我们", "先讨论", "预算，", "然后", "是日期。"])]
+    seen = []
+    out = Translator(OnlineChat("deepseek", "deepseek-chat", KEY, url)).translate(
+        "Let's discuss the budget, then the date.", "en", "zh", subtitle=True, on_text=seen.append)
+    assert out == "我们先讨论预算，然后是日期。"
+    assert seen[0] == "我们" and seen[-1] == out and len(seen) == 5

@@ -320,3 +320,21 @@ def test_feature_change_while_running_applies_live(app, settings, no_popups, mon
     finally:
         w.engine.running = False
         w.close()
+
+
+def test_their_live_translation_row_is_replaced_by_the_final_one(app, settings, no_popups, monkeypatch):
+    from mirrorvoice.ui import main_window
+
+    w = _window(main_window, settings, monkeypatch)
+    try:
+        n = w.log.count()
+        w._on_event("partial", {"who": "them", "src": "Hello all", "tgt": "大家 …"})
+        w._on_event("me", {"src": "你好", "tgt": "Hi", "passthrough": False, "latency": 1.0, "asr_s": 0.1,
+                           "queue_s": 0.0, "translate_s": 0.4, "voice_s": 0.5})
+        w._on_event("partial", {"who": "them", "src": "Hello all", "tgt": "大家好 …"})
+        assert w.log.count() == n + 2 and w.log.item(n).text().endswith("大家好 …")
+        w._on_event("them", {"src": "Hello all", "tgt": "大家好", "latency": 1.0, "asr_s": 0.1, "queue_s": 0.0,
+                             "translate_s": 0.5})
+        assert w.log.count() == n + 2 and "→ 大家好   (" in w.log.item(n).text()
+    finally:
+        w.close()

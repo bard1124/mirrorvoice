@@ -200,14 +200,16 @@ class Translator:
     def translate(self, text: str, src: str, tgt: str, subtitle: bool = False,
                   context: tuple[str, str] | None = None,
                   history: list[tuple[str, str]] | tuple = (), concise: int = 0,
-                  on_clause: Callable[[str], None] | None = None) -> str:
+                  on_clause: Callable[[str], None] | None = None,
+                  on_text: Callable[[str], None] | None = None) -> str:
         """context = (previous part's source, its translation) when `text` continues that part
         (a long sentence cut early): shown to the model as the preceding exchange.
         history = the same speaker's last few (source, translation) pairs, oldest first: earlier
         turns of the conversation, so pronouns, terms and tone carry over between sentences.
         concise = a length budget (words, or characters for zh/ja) when speech is backing up. on_clause(text) is called once with
         the first clause while the model is still writing, when the backend streams — so speech
-        can start before the sentence is translated; the return value is always the whole text."""
+        can start before the sentence is translated; the return value is always the whole text.
+        on_text(text) gets the translation so far while it is being written (live subtitles)."""
         tag = NO_THINK if getattr(self.backend, "no_think", True) else ""
         msgs = [{"role": "system", "content": system_prompt(src, tgt, subtitle, self.meeting, concise)}]
         for h_src, h_tgt in history:
@@ -221,8 +223,8 @@ class Translator:
         if hasattr(self.backend, "max_tokens"):  # local models: stop a runaway answer early
             self.backend.max_tokens = token_budget(text)
         stream = getattr(self.backend, "stream_chat", None)
-        if on_clause is not None and stream is not None:
-            out = last_line(self._streamed(stream(msgs), text, tgt, on_clause))
+        if (on_clause is not None or on_text is not None) and stream is not None:
+            out = last_line(self._streamed(stream(msgs), text, tgt, on_clause, on_text))
         else:
             out = last_line(self.backend.chat(msgs))
         if off_task(out, text, tgt):
@@ -234,12 +236,16 @@ class Translator:
         return out
 
     @staticmethod
-    def _streamed(pieces: Iterator[str], src_text: str, tgt: str, on_clause: Callable[[str], None]) -> str:
-        text, sent = "", False
+    def _streamed(pieces: Iterator[str], src_text: str, tgt: str, on_clause: Callable[[str], None] | None,
+                  on_text: Callable[[str], None] | None = None) -> str:
+        text, sent = "", on_clause is None
         for piece in pieces:
             text += piece
-            if off_task(text.split("</think>")[-1], src_text, tgt):
+            body = text.split("</think>")[-1].strip()
+            if off_task(body, src_text, tgt):
                 break  # stop generating: translate() retries plainly
+            if on_text is not None and body and "\n" not in body and "<think>" not in body:
+                on_text(body.strip('"“”'))
             if not sent:
                 head = first_clause(text, tgt, src_text=src_text)
                 if head:

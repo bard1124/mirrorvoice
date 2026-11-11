@@ -186,3 +186,19 @@ def test_online_translation_does_not_wait_for_speech_synthesis(home):
 
     assert OnlineChat("deepseek", "deepseek-chat", "k", "https://api.deepseek.com").uses_gpu is False
     assert OnlineChat("custom", "qwen3", "", "http://127.0.0.1:8765/v1").uses_gpu is True  # same machine
+
+
+def test_their_translation_shows_while_it_is_written(home):
+    from mirrorvoice.config import Settings
+    from mirrorvoice.engine import Engine
+
+    events = []
+    e = Engine(lambda kind, **d: events.append((kind, d)))
+    e.s = Settings()
+    e.LIVE_EVERY_S = 0  # every update, for the test
+    show = e._live_them(type("U", (), {"text": "Let's discuss the budget first."})())
+    for t in ("我们", "我们先讨论", "我们先讨论预算。"):
+        show(t)
+    live = [d for k, d in events if k == "partial"]
+    assert [d["tgt"] for d in live] == ["我们先讨论 …", "我们先讨论预算。 …"]  # too short at first
+    assert all(d["who"] == "them" and d["src"] == "Let's discuss the budget first." for d in live)

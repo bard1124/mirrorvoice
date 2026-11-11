@@ -12,7 +12,7 @@ import socket
 import time
 import urllib.error
 import urllib.request
-from typing import Callable
+from typing import Callable, Iterator
 
 from . import __version__, keystore, providers
 from .net import urlopen
@@ -64,7 +64,7 @@ def _retry_after(e: urllib.error.HTTPError) -> float:
         return 0.0
 
 
-def _request(url: str, key: str, body: dict | None, timeout: float) -> dict:
+def _request(url: str, key: str, body: dict | None, timeout: float, raw: bool = False):
     headers = {"User-Agent": UA, "Accept": "application/json"}
     if key:
         headers["Authorization"] = f"Bearer {key}"
@@ -73,16 +73,20 @@ def _request(url: str, key: str, body: dict | None, timeout: float) -> dict:
         headers["Content-Type"] = "application/json"
         data = json.dumps(body, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method="POST" if data else "GET")
-    with urlopen(req, timeout=timeout) as r:
+    r = urlopen(req, timeout=timeout)
+    if raw:  # the caller reads (and closes) the open response
+        return r
+    with r:
         return json.loads(r.read().decode("utf-8"))
 
 
-def call(url: str, key: str, body: dict | None, timeout: float = TIMEOUT_S) -> dict:
-    """One request with at most one quick retry; raises TranslateError (never with the key in it)."""
+def call(url: str, key: str, body: dict | None, timeout: float = TIMEOUT_S, raw: bool = False):
+    """One request with at most one quick retry; raises TranslateError (never with the key in it).
+    raw=True returns the open response instead of its JSON (streaming)."""
     for attempt in (1, 2):
         t0 = time.monotonic()
         try:
-            return _request(url, key, body, timeout)
+            return _request(url, key, body, timeout, raw)
         except urllib.error.HTTPError as e:
             err = _http_error(e)
             wait = _retry_after(e)
@@ -104,6 +108,48 @@ def call(url: str, key: str, body: dict | None, timeout: float = TIMEOUT_S) -> d
         except (ValueError, KeyError) as e:
             raise TranslateError("response", f"返回内容看不懂：{e}") from None
     raise TranslateError("network", "连不上服务商")  # pragma: no cover — loop always returns/raises
+
+
+def stream(url: str, key: str, body: dict, timeout: float = TIMEOUT_S) -> Iterator[str]:
+    """POST with "stream": true and yield the text pieces of the server-sent events
+    (data: {"choices":[{"delta":{"content":"…"}}]} … data: [DONE]). A server that answers with
+    one plain JSON body anyway is read as such."""
+    r = call(url, key, body, timeout, raw=True)
+    plain: list[str] = []
+    got = False
+    with r:
+        try:
+            for line in r:
+                line = line.decode("utf-8", "ignore").strip()
+                if not line.startswith("data:"):
+                    if line and not got:
+                        plain.append(line)
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    d = json.loads(data)
+                except ValueError:
+                    continue
+                if isinstance(d, dict) and d.get("error"):
+                    raise TranslateError("server", f"服务商出错：{_detail(data.encode())}")
+                choices = d.get("choices") if isinstance(d, dict) else None
+                piece = ((choices or [{}])[0].get("delta") or {}).get("content") if choices else None
+                if isinstance(piece, str) and piece:
+                    got = True
+                    yield piece
+        except (TimeoutError, socket.timeout):
+            raise TranslateError("timeout", f"等待超过 {timeout:.0f} 秒没有回应") from None
+        except (urllib.error.URLError, OSError) as e:
+            raise TranslateError("network", f"连接中断：{getattr(e, 'reason', e)}") from None
+    if not got and plain:
+        try:
+            content = json.loads("".join(plain))["choices"][0]["message"]["content"]
+        except (ValueError, KeyError, IndexError, TypeError):
+            raise TranslateError("response", "返回内容看不懂") from None
+        if isinstance(content, str) and content:
+            yield content
 
 
 class OnlineChat:
@@ -142,6 +188,17 @@ class OnlineChat:
         if not isinstance(content, str) or not content.strip():
             raise TranslateError("response", "服务商返回了空译文")
         return content.strip()
+
+    def stream_chat(self, msgs: list[dict]) -> Iterator[str]:
+        """The translation as it is written: the first clause can be spoken before the rest arrives."""
+        body = {"model": self.model, "messages": msgs, "temperature": 0, "max_tokens": 200, "stream": True,
+                **self.extra}
+        got = False
+        for piece in stream(self.base_url + "/chat/completions", self.key, body, self.timeout):
+            got = got or bool(piece.strip())
+            yield piece
+        if not got:
+            raise TranslateError("response", "服务商返回了空译文")
 
     def close(self) -> None:
         pass
@@ -205,14 +262,37 @@ class FailoverChat:
         try:
             out = self.online.chat(msgs)
         except TranslateError as e:
-            self.fails = self.FAILS_TO_SWITCH if e.kind in TranslateError.PERSISTENT else self.fails + 1
-            if self.fails >= self.FAILS_TO_SWITCH and self._local_factory is not None:
-                self.fails = 0
-                self.local_until = time.monotonic() + self.LOCAL_FOR_S
-                self.notify(f"在线翻译不可用（{e}），接下来 {int(self.LOCAL_FOR_S)} 秒改用本地模型")
+            self._failed(e)
             raise
         self.fails = 0
         return out
+
+    def stream_chat(self, msgs: list[dict]) -> Iterator[str]:
+        """chat() as it is written; failures count the same way. A failure after the first pieces
+        still raises (what was already spoken stays)."""
+        if self.using_local:
+            local = self._local_backend()
+            if hasattr(local, "stream_chat"):
+                yield from local.stream_chat(msgs)
+            else:
+                yield local.chat(msgs)
+            return
+        if self.local_until:
+            self.local_until = 0.0
+            self.notify("重新改用在线翻译")
+        try:
+            yield from self.online.stream_chat(msgs)
+        except TranslateError as e:
+            self._failed(e)
+            raise
+        self.fails = 0
+
+    def _failed(self, e: TranslateError) -> None:
+        self.fails = self.FAILS_TO_SWITCH if e.kind in TranslateError.PERSISTENT else self.fails + 1
+        if self.fails >= self.FAILS_TO_SWITCH and self._local_factory is not None:
+            self.fails = 0
+            self.local_until = time.monotonic() + self.LOCAL_FOR_S
+            self.notify(f"在线翻译不可用（{e}），接下来 {int(self.LOCAL_FOR_S)} 秒改用本地模型")
 
     def close(self) -> None:
         if self._local is not None:
