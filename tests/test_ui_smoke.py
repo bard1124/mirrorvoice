@@ -585,3 +585,44 @@ def test_restart_after_the_update_really_quits_although_the_progress_window_is_l
     r = subprocess.run([sys.executable, "-c", _QUIT_CHECK], env=env, capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr  # 3: still running 8 s later (the v0.8.12 hang)
     assert "alive-after-plain-quit" in r.stdout  # a plain quit() was held up by the locked window
+
+
+def test_teams_one_click_asks_before_closing_teams_and_reopens_it(app, no_popups, monkeypatch):
+    from mirrorvoice import teams_devices as td
+    from mirrorvoice.ui import checkup
+
+    log, running, answer = [], [True], [QtWidgets.QMessageBox.StandardButton.No]
+    monkeypatch.setattr(td, "supported", lambda: True)
+    monkeypatch.setattr(td, "state", lambda: "other")
+    monkeypatch.setattr(td, "running", lambda: running[0])
+    monkeypatch.setattr(td, "quit", lambda: log.append("quit") or running.__setitem__(0, False) or True)
+    monkeypatch.setattr(td, "launch", lambda: log.append("launch"))
+    monkeypatch.setattr(td, "prepare", lambda out: log.append("prepare") or "")
+    monkeypatch.setattr(td, "apply", lambda: log.append("apply") or "已设置好")
+    monkeypatch.setattr(td, "restore", lambda: log.append("restore") or "已还原")
+    monkeypatch.setattr(checkup.QMessageBox, "question", lambda *a, **k: answer[0])
+    said = []
+    monkeypatch.setattr(checkup.QMessageBox, "information", lambda *a, **k: said.append(a[2]))
+    monkeypatch.setattr(checkup.QMessageBox, "warning", lambda *a, **k: said.append("!" + a[2]))
+
+    d = checkup.MeetingGuideDialog()
+    w = d.findChild(checkup.TeamsOneClick)
+    assert w is not None and "不是翻了么的线路" in w.status.text()
+    w.set_btn.click()  # Teams is open and I say no: nothing is touched
+    assert log == [] and said == []
+    answer[0] = QtWidgets.QMessageBox.StandardButton.Yes
+    w.set_btn.click()
+    assert log == ["quit", "prepare", "apply", "launch"] and "重新打开" in said[-1]
+    del log[:]
+    w.back_btn.click()  # Teams is closed now: no question, no relaunch
+    assert log == ["restore"] and said[-1] == "已还原"
+
+    def broken():
+        raise td.TeamsError("格式和预期不一样")
+    running[0] = True
+    monkeypatch.setattr(td, "apply", broken)
+    del log[:]
+    w.set_btn.click()  # a failure is said, and Teams comes back all the same
+    assert log == ["quit", "prepare", "launch"] and said[-1].startswith("!") and "格式" in said[-1]
+    d.close()
+

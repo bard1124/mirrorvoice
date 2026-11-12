@@ -22,6 +22,10 @@ from .config import GPU_PACK, GPU_PACK_DONE, IS_MAC, resource_dir
 from .net import urlopen
 
 MULTI_OUTPUT_NAME = "Teams 扬声器 (耳机+字幕)"
+# the devices' system ids (what a meeting app stores as its chosen microphone / speaker):
+# BlackHole's is fixed by its driver, the multi-output's by packaging/mac/multi_output.swift
+BLACKHOLE_2CH_UID = "BlackHole2ch_UID"
+MULTI_OUTPUT_UID = "local.zh2en-voice.multi-output"
 VBCABLE_URL = "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip"
 
 
@@ -70,16 +74,24 @@ def mac_create_multi_output(listen_device: str) -> str:
     return (r.stdout or r.stderr).strip()
 
 
-def mac_multi_output_members() -> list[str]:
-    """Sub-devices of the meeting-speaker multi-output ([] if it does not exist or the helper is missing)."""
+def mac_multi_output_state() -> tuple[str, list[str]]:
+    """('ok', its sub-devices) | ('missing', []): the meeting-speaker multi-output was never made
+    (or was removed) | ('unknown', []): the helper is missing or too old to say."""
     try:
         r = subprocess.run([str(_multi_helper()), "--members"], capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.TimeoutExpired):
-        return []
+        return "unknown", []
     lines = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+    if lines == ["none"]:
+        return "missing", []
     if r.returncode != 0 or any(ln.startswith(("exists:", "created:", "error:")) for ln in lines):
-        return []  # an old helper without --members
-    return lines
+        return "unknown", []  # an old helper without --members
+    return "ok", lines
+
+
+def mac_multi_output_members() -> list[str]:
+    """Sub-devices of the meeting-speaker multi-output ([] if it does not exist or the helper is missing)."""
+    return mac_multi_output_state()[1]
 
 
 def mac_rebuild_multi_output(listen_device: str) -> tuple[bool, str]:

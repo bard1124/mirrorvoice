@@ -444,14 +444,16 @@ class MainWindow(QMainWindow):
         if not IS_MAC or dh.kind(self.src.currentData() or "", "input") != "bh16":
             self.multi_fix.hide()
             return
-        from ..virtual_audio import mac_multi_output_members
+        from ..virtual_audio import mac_multi_output_state
 
-        target, why = dh.multi_output_fix(mac_multi_output_members(), self.mon.currentData() or "",
-                                          getattr(self, "_default_out", ""))
+        state, members = mac_multi_output_state()
+        self._multi_missing = state == "missing"
+        target, why = dh.multi_output_fix(members, self.mon.currentData() or "",
+                                          getattr(self, "_default_out", ""), missing=self._multi_missing)
         self._multi_target = target
         if target:
             self.multi_fix_text.setText("🎧 " + why)
-            self.multi_fix_btn.setText(f"改成“{target}”")
+            self.multi_fix_btn.setText(f"创建（用“{target}”听对方）" if self._multi_missing else f"改成“{target}”")
         self.multi_fix.setVisible(bool(target))
 
     def _rebuild_multi_output(self) -> None:
@@ -460,8 +462,13 @@ class MainWindow(QMainWindow):
         target = self._multi_target
         if not target:
             return
+        created = getattr(self, "_multi_missing", False)
         ok, msg = mac_rebuild_multi_output(target)
-        if ok:
+        if ok and created:
+            QMessageBox.information(self, "已创建会议扬声器",
+                                    f"“{MULTI_OUTPUT_NAME}”会把对方的声音同时送到“{target}”和字幕。\n\n"
+                                    "下一步：在会议软件的扬声器里选它（Teams 可以在“会议软件设置”里一键设置）。")
+        elif ok:
             QMessageBox.information(self, "已更新会议扬声器",
                                     f"“{MULTI_OUTPUT_NAME}”现在会把对方的声音送到“{target}”和字幕。\n\n"
                                     "如果会议软件正在运行，请在它的设置里重新选一次扬声器。")

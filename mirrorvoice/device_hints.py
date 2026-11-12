@@ -191,13 +191,23 @@ def ordered(role: str, names: list[str], ctx: Context) -> list[str]:
     return sorted(names, key=lambda n: min(hint(role, n, ctx).rank, UNSUITED))
 
 
-def multi_output_fix(members: list[str], monitor: str, default_out: str) -> tuple[str, str]:
+MULTI_MISSING = (f"还没有“{MULTI_OUTPUT_NAME}”这个设备：会议软件的扬声器选耳机，这里就听不到对方（没有字幕）；"
+                 "选 BlackHole 16ch，你又听不到对方。")
+
+
+def multi_output_fix(members: list[str], monitor: str, default_out: str, missing: bool = False) -> tuple[str, str]:
     """macOS: (headphones to rebuild the meeting-speaker multi-output with, why) — ('', '') when fine.
+    missing: the device does not exist at all — then what to make it with (the speakers will do
+    when no headphones are in sight: subtitles matter more than the echo warning given elsewhere).
 
     The multi-output sends meeting audio to fixed headphones + BlackHole 16ch. After switching
     headphones (AirPods instead of the wired ones) you would no longer hear the other side.
     `members` comes from `multi_output --members` ('missing:<uid>' for a disconnected device).
     """
+    if missing:
+        real = lambda n: bool(n) and kind(n, "output") in ("headphones", "other", "speaker")  # noqa: E731
+        target = monitor if real(monitor) else default_out if real(default_out) else ""
+        return (target, MULTI_MISSING) if target else ("", "")
     if not members:
         return "", ""
     listen = [m for m in members if "blackhole" not in m.lower()]
