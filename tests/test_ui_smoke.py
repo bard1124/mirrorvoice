@@ -482,3 +482,34 @@ def test_update_progress_installs_then_lets_her_land_before_quitting(app, settin
     d.show()
     d.reject()  # 取消 while downloading stops the download
     assert d.canceled.is_set() and not d.isVisible()
+
+
+_QUIT_CHECK = r"""
+import sys
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QApplication
+from mirrorvoice.ui import update_ui
+
+app = QApplication([])
+dlg = update_ui.UpdateProgress(None, "更新好了，马上重新打开镜声…")
+dlg.show()
+dlg.lock()
+state = {}
+QTimer.singleShot(100, QApplication.quit)  # what v0.8.12 did: the locked window refuses, Qt cancels the quit
+QTimer.singleShot(600, lambda: (state.setdefault("alive", True), update_ui.UpdateController._restart(dlg)))
+QTimer.singleShot(8000, lambda: QApplication.exit(3))  # stuck
+code = app.exec()
+print("alive-after-plain-quit" if state.get("alive") else "quit-at-once", code)
+sys.exit(code)
+"""
+
+
+def test_restart_after_the_update_really_quits_although_the_progress_window_is_locked(tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen", MIRRORVOICE_HOME=str(tmp_path))
+    r = subprocess.run([sys.executable, "-c", _QUIT_CHECK], env=env, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stdout + r.stderr  # 3: still running 8 s later (the v0.8.12 hang)
+    assert "alive-after-plain-quit" in r.stdout  # a plain quit() was held up by the locked window

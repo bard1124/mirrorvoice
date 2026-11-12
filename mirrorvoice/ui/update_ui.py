@@ -182,4 +182,14 @@ class UpdateController:
         # to the patch (or replaces the app) and relaunches it. Not the Windows installer — it
         # starts at once and closes the app itself.
         landing = self._path.suffix.lower() == ".zip" or not updater.IS_WIN
-        QTimer.singleShot(int(1000 * dlg.mascot.finish()) + 300 if landing else 0, QApplication.quit)
+        QTimer.singleShot(int(1000 * dlg.mascot.finish()) + 300 if landing else 0, lambda: self._restart(dlg))
+
+    @staticmethod
+    def _restart(dlg: UpdateProgress) -> None:
+        # Qt 6's quit() first asks every window to close and gives up if one refuses — and the
+        # locked progress window refuses (it stayed on "更新好了…" for good, the hand-over script
+        # waiting for an exit that never came). Close it first; if another window still holds
+        # the quit up, leave anyway.
+        dlg.dismiss()
+        QApplication.quit()
+        QTimer.singleShot(3000, lambda: QApplication.exit(0))
