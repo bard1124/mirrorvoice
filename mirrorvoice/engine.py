@@ -68,10 +68,21 @@ def check_models(required: list) -> str:
             "（只下载这几个文件），再点「开始」。")
 
 
+class _Cancelled(Exception):
+    """The session a start-up belongs to was stopped (or replaced) while it was loading."""
+
+
 class Engine:
     def __init__(self, emit: Emit) -> None:
-        self.emit = emit
+        self._emit = emit
         self.running = False
+        # Each start() is a session. Its start-up thread loads models for many seconds and cannot
+        # be interrupted mid-load; if the session is stopped meanwhile, the thread notices at the
+        # next step, closes what it made and quits without a word (no "运行中" after 停止).
+        self._session = 0
+        self._tl = threading.local()  # .sid on a start-up thread: the session it works for
+        self._lock = threading.RLock()
+        self._boot_thread: threading.Thread | None = None
         self.muted = False
         # exist before the first start(): the UI may call set_voice_speed / set_monitor / reload_voice early
         self._player = self._voice = self._transcript = self._me = self._them = None
@@ -94,8 +105,12 @@ class Engine:
     def start(self, s: Settings) -> None:
         if self.running:
             return
+        with self._lock:
+            self._session += 1
+            sid = self._session
+            self._closers = []
+            self.running = True
         self.s = s
-        self.running = True
         self.muted = False
         self._player = self._voice = self._transcript = self._me = self._them = None
         self._qwen_sides: set = set()
@@ -124,20 +139,54 @@ class Engine:
             hotkeys.prime_layout()
         except Exception as e:  # noqa: BLE001 — hotkeys then report themselves unavailable
             self.log(f"读取键盘布局失败：{e}")
-        threading.Thread(target=self._boot, daemon=True, name="engine-boot").start()
+        prev = self._boot_thread
+        self._boot_thread = threading.Thread(target=self._boot, args=(sid, s, self._jobs, prev), daemon=True,
+                                             name="engine-boot")
+        self._boot_thread.start()
 
     def stop(self) -> None:
-        if not self.running:
-            return
-        self.running = False
+        with self._lock:
+            if not self.running:
+                return
+            self.running = False
+            closers, self._closers = self._closers, []
         self._jobs.put((99, next(self._seq), "stop", None))
-        for close in reversed(self._closers):
+        for close in reversed(closers):
             try:
                 close()
             except Exception:  # noqa: BLE001 — best-effort teardown
                 pass
-        self._closers.clear()
         self.emit("stopped")
+
+    def emit(self, kind: str, **d) -> None:
+        if getattr(self._tl, "sid", None) is None:
+            self._emit(kind, **d)
+            return
+        with self._lock:  # checked and sent together: nothing from it can follow "stopped"
+            if not self._stale():
+                self._emit(kind, **d)
+
+    def _stale(self) -> bool:
+        """True on the start-up thread of a session that has been stopped or replaced."""
+        sid = getattr(self._tl, "sid", None)
+        return sid is not None and not (self.running and sid == self._session)
+
+    def _check(self) -> None:
+        if self._stale():
+            raise _Cancelled
+
+    def _own(self, close: Callable[[], None]) -> None:
+        """Close this at stop(). A start-up whose session was stopped meanwhile closes it at once
+        and gives up."""
+        with self._lock:
+            if not self._stale():
+                self._closers.append(close)
+                return
+        try:
+            close()
+        except Exception:  # noqa: BLE001 — best-effort teardown
+            pass
+        raise _Cancelled
 
     def set_muted(self, muted: bool) -> None:
         self.muted = muted
@@ -199,7 +248,7 @@ class Engine:
             except LookupError:
                 pass
         self._player = Player(find_device(s.call_out, "output"), mon, s.gain)
-        self._closers.append(self._player.close)
+        self._own(self._player.close)
 
     def _set_languages(self) -> None:
         """New language pair: listeners expect the new languages; earlier turns no longer apply."""
@@ -255,7 +304,7 @@ class Engine:
         hk = Hotkeys(s.ptt_key, s.mute_hotkey, self._on_ptt, lambda: self.set_muted(not self.muted))
         try:
             hk.start()
-            self._closers.append(hk.stop)
+            self._own(hk.stop)
             self._hk = hk
         except Exception as e:  # noqa: BLE001 — no permission: hotkeys just don't work
             self._hk = None
@@ -295,7 +344,7 @@ class Engine:
                         on_partial=lambda t: self._on_partial("them", t), on_notice=self._notice,
                         words=self._words if "them" in self._qwen_sides else None, stream=s.stream)
         them.start()
-        self._closers.append(them.close)
+        self._own(them.close)
         self._them = them
         return them
 
@@ -347,17 +396,24 @@ class Engine:
             return False
         return self.ptt_down if self.s.mode == "ptt" else True
 
-    def _boot(self) -> None:
+    def _boot(self, sid: int, s: Settings, jobs: queue.PriorityQueue,
+              prev: threading.Thread | None = None) -> None:
+        self._tl.sid = sid
         try:
-            self._worker()
+            if prev is not None and prev.is_alive():  # 开始 → 停止 → 开始: let the last start-up wind down
+                self.emit("status", text="等待上次启动结束…")
+                prev.join(timeout=60)
+            self._check()
+            self._worker(s, jobs)
+        except _Cancelled:
+            self.log("启动途中已停止：放弃这次启动")
         except Exception as e:  # noqa: BLE001 — surface to UI instead of dying silently
             self.log(traceback.format_exc())
-            self.emit("error", message=str(e))
-            if self.running:
+            if not self._stale():  # (a stopped start-up may fail on what stop() closed: no news)
+                self.emit("error", message=str(e))
                 self.stop()
 
-    def _worker(self) -> None:
-        s = self.s
+    def _worker(self, s: Settings, jobs: queue.PriorityQueue) -> None:
         backend = models.voice_backend(s)
         damaged = check_models(models.required(s.quality, s))
         if damaged:
@@ -370,12 +426,13 @@ class Engine:
 
         voice = player = None
         their_tts = LANGS[s.their_lang].tts
+        self._check()
         if s.speak and their_tts:
             self.emit("status", text="加载语音合成…")
             tts_model = {"kokoro": models.KOKORO, "pocket": models.POCKET}.get(backend, models.TTS_CLONE[s.quality])
             voice = make_voice(backend, tts_model.path)
             voice.speed = s.voice_speed
-            self._closers.append(voice.close)
+            self._own(voice.close)
             self._voice_key = (backend, str(tts_model.path))
         if s.speak or s.passthrough:
             self.emit("status", text="打开音频设备…")
@@ -386,7 +443,7 @@ class Engine:
                 except LookupError:
                     self.emit("status", text=f"监听设备 {s.monitor} 未连接，已跳过")
             player = Player(find_device(s.call_out, "output"), mon, s.gain)
-            self._closers.append(player.close)
+            self._own(player.close)
 
         self.emit("status", text="预热…")
         for t in {id(tr): tr, id(tr_them): tr_them}.values():
@@ -399,6 +456,7 @@ class Engine:
         if voice:
             for _ in voice.stream("Hello.", s.their_lang):
                 pass
+        self._check()
 
         transcript = Transcript(s.my_lang, s.their_lang)
         self._transcript = transcript
@@ -407,7 +465,7 @@ class Engine:
         # sentence's voice before taking the next one (or the other side's subtitles).
         vq = self._voice_q
         threading.Thread(target=self._voicer, args=(vq,), daemon=True, name="engine-voice").start()
-        self._closers.append(lambda: vq.put(None))
+        self._own(lambda: vq.put(None))
 
         # expected language fixed (Mandarin was misheard as Cantonese / Japanese); theirs is still
         # recognised, for passthrough
@@ -419,6 +477,7 @@ class Engine:
 
             words = QwenASR(models.ASR_QWEN.path)
             words.hotwords = glossary_hotwords(tr.glossary)
+        self._check()
         self._words = words
         self._interim_tr = Translator(tr_them.backend.online, s.meeting_context) \
             if isinstance(tr_them.backend, FailoverChat) else None
@@ -427,7 +486,7 @@ class Engine:
                       on_partial=lambda t: self._on_partial("me", t), on_notice=self._notice,
                       words=words if "me" in sides else None, stream=s.stream)
         me.start()
-        self._closers.append(me.close)
+        self._own(me.close)
         self._me = me
         them = None
         self._qwen_sides = sides
@@ -439,13 +498,13 @@ class Engine:
 
         self._start_hotkeys()
 
+        self._check()
         self._ready = True
         self.emit("ready", mic=me.label, call=s.call_out, them=them.label if them else "",
                   voice="你的克隆音色" if (voice and voice.clone) else ("标准音色" if voice else "不出声"),
                   transcript=str(transcript.md), llm=tr.label)
 
-        jobs = self._jobs  # bind this session's queue: start() replaces the attribute
-        while self.running:
+        while self.running and not self._stale():  # this session's queue: start() makes a new one
             prio, _, kind, utt = jobs.get()
             if kind == "stop":
                 break
@@ -480,7 +539,7 @@ class Engine:
                 # later as the online fallback: a notice, the status line already says 运行中
                 self._progress("加载翻译模型…")
                 shared["b"] = local_backend(local_path)
-                self._closers.append(shared["b"].close)
+                self._own(shared["b"].close)
             return shared["b"]
 
         if s.llm_mode != "online":
@@ -736,7 +795,7 @@ class Engine:
                 pass
             self._voice = voice
             self._voice_key = (backend, str(tts_model.path))
-            self._closers.append(voice.close)
+            self._own(voice.close)
             self.emit("voice", voice="你的克隆音色" if voice.clone else "标准音色")
         except Exception as e:  # noqa: BLE001 — keep translating, just without speech
             self.log(traceback.format_exc())
