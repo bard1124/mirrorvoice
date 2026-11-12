@@ -1,11 +1,13 @@
-"""Update prompts for the control panel: '发现新版本' dialog + download progress (with the owl girl's
-update routine) + hand-over."""
+"""Update prompts for the control panel: the 检查更新 window (there at the click: checking…, then
+the answer) + download progress (with the owl girl's update routine) + hand-over."""
 from __future__ import annotations
 
 import threading
+import time
 from typing import Callable
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QRectF, Qt, QTimer
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (QApplication, QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QMessageBox,
                                QProgressBar, QPushButton, QTextBrowser, QVBoxLayout, QWidget)
 
@@ -13,6 +15,7 @@ from .. import __version__, updater
 from ..config import Settings
 from .bridge import Bridge
 from .mascot import UpdateMascot
+from .theme import ACCENT
 
 
 def mb(n: int) -> str:
@@ -25,6 +28,127 @@ def size_line(rel: updater.Release) -> str:
         saved = f"，不用下载 {mb(rel.full_size)} 的完整安装包" if rel.full_size else ""
         return f"补丁更新：只需下载 {mb(rel.size)}{saved}，装好后自动重启。"
     return f"完整安装包：{mb(rel.size)}。"
+
+
+class Spinner(QWidget):
+    """A turning arc: the answer is on its way."""
+
+    TURN_S = 1.1  # one turn
+
+    def __init__(self, size: int = 26) -> None:
+        super().__init__()
+        self.setFixedSize(size, size)
+        self._timer = QTimer(self, interval=16)
+        self._timer.timeout.connect(self.update)
+
+    def showEvent(self, e) -> None:  # noqa: N802
+        self._timer.start()
+        super().showEvent(e)
+
+    def hideEvent(self, e) -> None:  # noqa: N802
+        self._timer.stop()
+        super().hideEvent(e)
+
+    def angle(self) -> float:
+        return 360.0 * (time.monotonic() % self.TURN_S) / self.TURN_S
+
+    def paintEvent(self, e) -> None:  # noqa: N802
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        box = QRectF(self.rect()).adjusted(3, 3, -3, -3)
+        p.setPen(QPen(QColor("#EEF0F3"), 3))
+        p.drawEllipse(box)
+        pen = QPen(QColor(ACCENT), 3)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        p.drawArc(box, int(-16 * self.angle()) + 16 * 90, -16 * 100)  # clockwise, from the top
+        p.end()
+
+
+class UpdateWindow(QDialog):
+    """The 检查更新 window. It opens at the click, turning while GitHub is asked, and the answer
+    arrives in it: the new version, "already the newest", or why the check failed."""
+
+    def __init__(self, parent: QWidget | None, on_update: Callable[[updater.Release], None],
+                 on_skip: Callable[[updater.Release], None], on_retry: Callable[[], None]) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("检查更新")
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.state = ""  # checking | newest | error | release
+        self.rel: updater.Release | None = None
+        self.spinner = Spinner()
+        self.head = QLabel()
+        self.head.setWordWrap(True)
+        self.detail = QLabel()
+        self.detail.setWordWrap(True)
+        self.notes = QTextBrowser(openExternalLinks=True)
+        bb = QDialogButtonBox()
+        self.now = bb.addButton("立即更新", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.skip = QPushButton("跳过此版本")
+        bb.addButton(self.skip, QDialogButtonBox.ButtonRole.DestructiveRole)
+        self.again = bb.addButton("重试", QDialogButtonBox.ButtonRole.ActionRole)
+        self.later = bb.addButton("稍后", QDialogButtonBox.ButtonRole.RejectRole)
+        self.now.clicked.connect(lambda: (self.accept(), on_update(self.rel)))
+        self.skip.clicked.connect(lambda: (on_skip(self.rel), self.reject()))
+        self.again.clicked.connect(on_retry)
+        bb.rejected.connect(self.reject)
+        top = QHBoxLayout()
+        top.addWidget(self.spinner, 0, Qt.AlignmentFlag.AlignVCenter)
+        top.addWidget(self.head, 1)
+        top.setSpacing(12)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 20, 22, 16)
+        lay.setSpacing(10)
+        lay.addLayout(top)
+        lay.addWidget(self.detail)
+        lay.addWidget(self.notes, 1)
+        lay.addWidget(bb)
+
+    def _show(self, state: str, head: str, later: str, detail: str = "", notes: str | None = None) -> None:
+        self.state = state
+        self.head.setText(head)
+        self.spinner.setVisible(state == "checking")
+        self.detail.setText(detail)
+        self.detail.setVisible(bool(detail))
+        self.notes.setVisible(notes is not None)
+        if notes is not None:
+            self.notes.setMarkdown(notes or "（无更新说明）")
+        self.now.setVisible(state == "release")
+        self.skip.setVisible(state == "release")
+        self.again.setVisible(state == "error")
+        self.later.setText(later)
+        main = self.now if state == "release" else self.later
+        main.setDefault(True)
+        main.setFocus()  # not the notes: the focus ring around them looked like an error
+        self._fit(580, 440) if state == "release" else self._fit(440, 0)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _fit(self, w: int, h: int) -> None:
+        """Size for what is shown now, staying centred where the window was."""
+        self.layout().activate()
+        centre = self.geometry().center() if self.isVisible() else None
+        self.resize(w, h or max(self.layout().totalHeightForWidth(w), 132))
+        if centre is not None:
+            box = self.geometry()
+            box.moveCenter(centre)
+            self.move(box.topLeft())
+
+    def checking(self) -> None:
+        self._show("checking", "正在检查更新…", "取消")
+
+    def newest(self) -> None:
+        self._show("newest", f"已是最新版本（{__version__}）。", "好的")
+
+    def failed(self, err: str) -> None:
+        self._show("error", f"暂时无法连接 GitHub：{err[:120]}", "关闭")
+
+    def release(self, rel: updater.Release) -> None:
+        self.rel = rel
+        self.now.setText("立即更新" if updater.can_self_install() else "打开下载页")
+        self._show("release", f"<b>翻了么 {rel.version}</b> 可以更新了（当前 {__version__}）。"
+                   "模型、音色、会议记录和设置都会保留。", "稍后", size_line(rel), rel.notes or "")
 
 
 class UpdateProgress(QDialog):
@@ -74,25 +198,27 @@ class UpdateProgress(QDialog):
 
 
 class UpdateController:
-    def __init__(self, parent: QWidget, s: Settings, before_install: Callable[[], None],
-                 on_checking: Callable[[bool], None] | None = None) -> None:
+    def __init__(self, parent: QWidget, s: Settings, before_install: Callable[[], None]) -> None:
         self.parent, self.s, self.before_install = parent, s, before_install
-        # on_checking(True) the moment a check I asked for starts, (False) when its answer is in:
-        # the click shows at once, however long GitHub takes
-        self.on_checking = on_checking or (lambda busy: None)
         self.bridge = Bridge()
         self.bridge.update.connect(self._on_checked)
         self.bridge.progress.connect(self._on_progress)
         self._manual = False
         self._checking = False  # a check is on its way: more clicks join it (one answer, one window)
+        self._win: UpdateWindow | None = None
         self._dlg: UpdateProgress | None = None
+
+    def _window(self) -> UpdateWindow:
+        if self._win is None:
+            self._win = UpdateWindow(self.parent, self._update, self._skip, lambda: self.check(manual=True))
+        return self._win
 
     def check(self, manual: bool) -> None:
         if self._dlg is not None and self._dlg.isVisible():
             self._dlg.raise_()  # already downloading the update
             return
         if manual:
-            self.on_checking(True)
+            self._window().checking()  # there at the click, however long GitHub takes
         if self._checking:
             self._manual = self._manual or manual
             return
@@ -101,43 +227,26 @@ class UpdateController:
 
     def _on_checked(self, rel, err: str) -> None:
         self._checking = False
-        self.on_checking(False)
-        if rel is None:
-            if self._manual:
-                if err:
-                    QMessageBox.information(self.parent, "检查更新", f"暂时无法连接 GitHub：{err[:120]}")
-                else:
-                    QMessageBox.information(self.parent, "检查更新", f"已是最新版本（{__version__}）。")
-            return
-        if not self._manual and rel.version == self.s.skip_version:
-            return
-        self._offer(rel)
+        win = self._win
+        if self._manual:
+            if win is None or not win.isVisible() or win.state != "checking":
+                return  # the window was closed before the answer came: it is not wanted any more
+            if rel is None:
+                win.failed(err) if err else win.newest()
+                return
+        elif rel is None or rel.version == self.s.skip_version:
+            return  # the check at start-up says nothing unless there is something new
+        self._window().release(rel)
 
-    def _offer(self, rel: updater.Release) -> None:
-        d = QDialog(self.parent)
-        d.setWindowTitle("发现新版本")
-        d.resize(520, 420)
-        lay = QVBoxLayout(d)
-        lay.addWidget(QLabel(f"<b>翻了么 {rel.version}</b> 可以更新了（当前 {__version__}）。"
-                             "模型、音色、会议记录和设置都会保留。"))
-        lay.addWidget(QLabel(size_line(rel)))
-        notes = QTextBrowser(openExternalLinks=True)
-        notes.setMarkdown(rel.notes or "（无更新说明）")
-        lay.addWidget(notes)
-        bb = QDialogButtonBox()
-        now = bb.addButton("立即更新", QDialogButtonBox.ButtonRole.AcceptRole)
-        skip = QPushButton("跳过此版本")
-        bb.addButton(skip, QDialogButtonBox.ButtonRole.DestructiveRole)
-        bb.addButton("稍后", QDialogButtonBox.ButtonRole.RejectRole)
-        lay.addWidget(bb)
-        now.clicked.connect(lambda: (d.accept(), self._start(rel)))
-        skip.clicked.connect(lambda: (setattr(self.s, "skip_version", rel.version), self.s.save(), d.reject()))
-        bb.rejected.connect(d.reject)
-        if not updater.can_self_install():
-            now.setText("打开下载页")
-            now.clicked.disconnect()
-            now.clicked.connect(lambda: (d.accept(), __import__("webbrowser").open(rel.page)))
-        d.exec()
+    def _skip(self, rel: updater.Release) -> None:
+        self.s.skip_version = rel.version
+        self.s.save()
+
+    def _update(self, rel: updater.Release) -> None:
+        if updater.can_self_install():
+            self._start(rel)
+        else:
+            __import__("webbrowser").open(rel.page)
 
     def _start(self, rel: updater.Release) -> None:
         self._dlg = UpdateProgress(self.parent, f"正在下载 {rel.asset_name}（{mb(rel.size)}）…")

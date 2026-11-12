@@ -378,22 +378,94 @@ def test_owl_girl_dozes_when_stopped_cheers_on_start_and_reacts_to_voices(app, s
 
 
 def test_clicking_check_for_updates_twice_asks_once(app, settings, no_popups, monkeypatch):
-    from mirrorvoice import updater
+    from mirrorvoice import __version__, updater
     from mirrorvoice.ui import update_ui
 
     calls = []
     monkeypatch.setattr(updater, "check_async", lambda cb: calls.append(cb))
-    shown = []
-    monkeypatch.setattr(update_ui.QMessageBox, "information", lambda *a, **k: shown.append(a[2]))
     c = update_ui.UpdateController(None, settings, lambda: None)
+    try:
+        c.check(manual=False)
+        assert c._win is None  # the check at start-up shows nothing
+        c.check(manual=True)
+        c.check(manual=True)
+        assert len(calls) == 1  # one check on its way
+        c._on_checked(None, "")
+        assert c._win.state == "newest" and __version__ in c._win.head.text()  # the manual click is honoured
+        c.check(manual=True)
+        assert len(calls) == 2  # a new click after the answer checks again
+    finally:
+        c._win.close()
+
+
+def _release(version="99.0.0", kind="patch"):
+    from mirrorvoice import updater
+
+    return updater.Release(version=version, notes="- faster", page="https://example.com/r", asset_name="p.zip",
+                           asset_url="https://example.com/p.zip", size=2 << 20, sha256="", kind=kind, full_size=230 << 20)
+
+
+def test_the_update_window_opens_at_the_click_and_the_answer_arrives_in_it(app, settings, no_popups, monkeypatch):
+    """Nothing showed for the seconds GitHub took: the click looked dead."""
+    from mirrorvoice import updater
+    from mirrorvoice.ui import main_window
+
+    calls = []
+    monkeypatch.setattr(updater, "check_async", lambda cb: calls.append(cb))
+    monkeypatch.setattr(updater, "can_self_install", lambda: True)
+    w = _window(main_window, settings, monkeypatch)
+    try:
+        u = w.updates
+        w.nav["_check_updates"].click()
+        win = u._win
+        assert win.isVisible() and win.state == "checking" and len(calls) == 1  # before GitHub has answered
+        assert win.spinner.isVisible() and "正在检查更新" in win.head.text()
+        assert not win.now.isVisible() and not win.notes.isVisible() and win.later.text() == "取消"
+        small = win.height()
+
+        u._on_checked(None, "timed out")  # no network: said in the window, with a way to try again
+        assert win.state == "error" and "timed out" in win.head.text() and not win.spinner.isVisible()
+        win.again.click()
+        assert win.state == "checking" and len(calls) == 2
+
+        u._on_checked(_release(), "")  # the same window turns into the offer
+        assert win.isVisible() and win.state == "release" and "99.0.0" in win.head.text()
+        assert win.now.isVisible() and win.skip.isVisible() and win.notes.isVisible() and not win.spinner.isVisible()
+        assert "补丁更新" in win.detail.text() and "faster" in win.notes.toPlainText() and win.height() > small
+        started = []
+        monkeypatch.setattr(u, "_start", started.append)
+        win.now.click()
+        assert not win.isVisible() and started[0].version == "99.0.0"
+    finally:
+        w.close()
+
+
+def test_an_answer_nobody_waits_for_opens_nothing(app, settings, no_popups, monkeypatch):
+    from mirrorvoice import updater
+    from mirrorvoice.ui import update_ui
+
+    monkeypatch.setattr(updater, "check_async", lambda cb: None)
+    c = update_ui.UpdateController(None, settings, lambda: None)
+    c.check(manual=True)
+    c._win.later.click()  # 取消 while it is still asking
+    c._on_checked(_release(), "")
+    assert not c._win.isVisible() and c._win.state == "checking"
+
+    c.check(manual=False)  # at start-up: a new version opens the window by itself …
+    c._on_checked(_release(), "")
+    assert c._win.isVisible() and c._win.state == "release"
+    c._win.skip.click()  # … unless it was skipped
+    assert not c._win.isVisible() and settings.skip_version == "99.0.0"
     c.check(manual=False)
-    c.check(manual=True)
-    c.check(manual=True)
-    assert len(calls) == 1  # one check on its way
-    c._on_checked(None, "")
-    assert len(shown) == 1 and "已是最新版本" in shown[0]  # one answer, and the manual click is honoured
-    c.check(manual=True)
-    assert len(calls) == 2  # a new click after the answer checks again
+    c._on_checked(_release(), "")
+    assert not c._win.isVisible()
+    c.check(manual=False)  # nothing new, or offline: silence
+    c._on_checked(None, "offline")
+    assert not c._win.isVisible()
+    c.check(manual=True)  # a click still shows the skipped version
+    c._on_checked(_release(), "")
+    assert c._win.isVisible() and c._win.state == "release"
+    c._win.close()
 
 
 def test_update_routine_floats_up_curls_and_plugs_in_then_lands_when_the_update_is_in(app):
@@ -513,28 +585,3 @@ def test_restart_after_the_update_really_quits_although_the_progress_window_is_l
     r = subprocess.run([sys.executable, "-c", _QUIT_CHECK], env=env, capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr  # 3: still running 8 s later (the v0.8.12 hang)
     assert "alive-after-plain-quit" in r.stdout  # a plain quit() was held up by the locked window
-
-
-def test_the_check_for_updates_button_answers_the_click_at_once(app, settings, no_popups, monkeypatch):
-    from mirrorvoice import updater
-    from mirrorvoice.ui import main_window, update_ui
-
-    calls = []
-    monkeypatch.setattr(updater, "check_async", lambda cb: calls.append(cb))
-    monkeypatch.setattr(update_ui.QMessageBox, "information", lambda *a, **k: None)
-    w = _window(main_window, settings, monkeypatch)
-    try:
-        b = w.nav["_check_updates"]
-        assert b.text() == "检查更新" and b.isEnabled()
-        b.click()
-        assert b.text() == "正在检查更新…" and not b.isEnabled() and len(calls) == 1  # before GitHub has answered
-        w.updates._on_checked(None, "")
-        assert b.text() == "检查更新" and b.isEnabled()
-        w.updates.check(manual=False)  # the check at start-up stays in the background
-        assert b.text() == "检查更新" and b.isEnabled()
-        b.click()  # … and a click while it runs joins it, and shows
-        assert b.text() == "正在检查更新…" and len(calls) == 2
-        w.updates._on_checked(None, "")
-        assert b.text() == "检查更新" and b.isEnabled()
-    finally:
-        w.close()

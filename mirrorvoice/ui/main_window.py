@@ -64,7 +64,7 @@ class MainWindow(QMainWindow):
 
         from .update_ui import UpdateController
 
-        self.updates = UpdateController(self, s, self._before_update, self._checking_updates)
+        self.updates = UpdateController(self, s, self._before_update)
         if s.auto_check_update:
             QTimer.singleShot(3000, lambda: self.updates.check(manual=False))
 
@@ -402,11 +402,6 @@ class MainWindow(QMainWindow):
 
     def _check_updates(self) -> None:
         self.updates.check(manual=True)
-
-    def _checking_updates(self, busy: bool) -> None:
-        b = self.nav["_check_updates"]
-        b.setText("正在检查更新…" if busy else "检查更新")
-        b.setEnabled(not busy)
 
     def _status_state(self, state: str) -> None:
         """'stopped' | 'busy' | 'running' — colours the status pill via the stylesheet."""
