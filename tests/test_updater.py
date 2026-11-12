@@ -5,10 +5,11 @@ import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
-from mirrorvoice import __version__, updater
+from mirrorvoice import APP_NAME, __version__, updater
 
 
 def bump(v: str, n: int = 1) -> str:
@@ -104,7 +105,7 @@ def test_all_sources_failing_reports_the_download_link_error(http_files, monkeyp
 
 @pytest.mark.skipif(sys.platform != "darwin" or not shutil.which("hdiutil"), reason="macOS swap script")
 def test_mac_swap_script_replaces_bundle_and_removes_dmg(tmp_path):
-    payload, target = tmp_path / "payload" / "镜声.app" / "Contents", tmp_path / "Apps" / "镜声.app" / "Contents"
+    payload, target = tmp_path / "payload" / "翻了么.app" / "Contents", tmp_path / "Apps" / "翻了么.app" / "Contents"
     payload.mkdir(parents=True)
     target.mkdir(parents=True)
     (payload / "marker").write_text("new")
@@ -140,7 +141,7 @@ def test_only_one_download_at_a_time(http_files, monkeypatch, home):
 
 @pytest.mark.skipif(sys.platform != "darwin" or not shutil.which("hdiutil"), reason="macOS swap script")
 def test_mac_swap_script_stops_other_running_windows_first(tmp_path):
-    payload, target = tmp_path / "payload" / "镜声.app" / "Contents", tmp_path / "Apps" / "镜声.app" / "Contents"
+    payload, target = tmp_path / "payload" / "翻了么.app" / "Contents", tmp_path / "Apps" / "翻了么.app" / "Contents"
     (payload / "MacOS").mkdir(parents=True)
     (target / "MacOS").mkdir(parents=True)
     (payload / "marker").write_text("new")
@@ -161,3 +162,60 @@ def test_mac_swap_script_stops_other_running_windows_first(tmp_path):
     assert other.wait(timeout=10) != 0  # stopped before the swap
     assert (target / "marker").read_text() == "new"
     assert "other instances running" in (tmp_path / "update.log").read_text()
+
+
+def test_a_bundle_with_the_old_name_is_renamed_once(tmp_path):
+    """After the app got a new name, a full update left its new contents in the folder of the old name."""
+    apps = tmp_path / "Apps"
+    old = apps / updater.OLD_BUNDLE_NAMES[0]
+    (old / "Contents").mkdir(parents=True)
+    marker = tmp_path / "bundle-renamed"
+    new = updater.renamed_bundle(old, marker)
+    assert new == apps / f"{APP_NAME}.app"
+    assert updater.renamed_bundle(apps / "My Interpreter.app", marker) is None  # the user's own name stays
+    assert updater.renamed_bundle(None, marker) is None  # run from source
+    marker.write_text("tried")
+    assert updater.renamed_bundle(old, marker) is None
+    marker.unlink()
+    new.mkdir()
+    assert updater.renamed_bundle(old, marker) is None  # never on top of another copy
+    new.rmdir()
+    if sys.platform != "win32":
+        apps.chmod(0o555)
+        try:
+            assert updater.renamed_bundle(old, marker) is None  # read-only: opened from the disk image
+        finally:
+            apps.chmod(0o755)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="shell script")
+def test_rename_script_moves_the_bundle_after_the_app_quit(tmp_path):
+    old, new = tmp_path / updater.OLD_BUNDLE_NAMES[0], tmp_path / f"{APP_NAME}.app"
+    (old / "Contents").mkdir(parents=True)
+    (old / "Contents" / "marker").write_text("app")
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    subprocess.run(["/bin/sh", "-c", updater.RENAME_MAC, "rename", str(dead.pid), str(old), str(new), "norelaunch"],
+                   check=True, timeout=60)
+    assert not old.exists() and (new / "Contents" / "marker").read_text() == "app"
+    # the new name is taken: nothing is moved or overwritten
+    (old / "Contents").mkdir(parents=True)
+    subprocess.run(["/bin/sh", "-c", updater.RENAME_MAC, "rename", str(dead.pid), str(old), str(new), "norelaunch"],
+                   check=True, timeout=60)
+    assert old.exists() and (new / "Contents" / "marker").read_text() == "app"
+
+
+def test_the_old_name_is_gone_from_what_users_see():
+    """Only the glossary samples in the tests and the notes on the rename may still say it."""
+    root = Path(updater.__file__).resolve().parent.parent
+    allowed = {"mirrorvoice/updater.py", "packaging/windows/installer.iss", "tests/test_translate.py",
+               "tests/test_updater.py"}
+    old = updater.OLD_BUNDLE_NAMES[0].removesuffix(".app")
+    found = set()
+    for folder, pattern in (("mirrorvoice", "*.py"), ("packaging", "*"), ("docs", "*.md"), ("", "*.md")):
+        walk = (root / folder).rglob(pattern) if folder else root.glob(pattern)
+        for f in walk:
+            if f.is_file() and f.suffix in (".py", ".md", ".txt", ".iss", ".spec", ".sh", ".yml") \
+                    and old in f.read_text(encoding="utf-8", errors="ignore"):
+                found.add(f.relative_to(root).as_posix())
+    assert found <= allowed

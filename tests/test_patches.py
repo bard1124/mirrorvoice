@@ -231,7 +231,7 @@ def test_patch_download_and_install(signed_release, monkeypatch, tmp_path):
 def test_mac_relaunch_stops_other_windows_then_opens(tmp_path):
     """A command-line patch update while the app window ran: `open` only brought the old window
     forward, still on the old code. The relaunch script stops it first."""
-    bundle = tmp_path / "镜声.app"
+    bundle = tmp_path / "翻了么.app"
     (bundle / "Contents" / "MacOS").mkdir(parents=True)
     fake = bundle / "Contents" / "MacOS" / "MirrorVoice"
     fake.write_text("#!/bin/sh\nsleep 60\n")

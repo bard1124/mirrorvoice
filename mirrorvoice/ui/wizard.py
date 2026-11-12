@@ -28,7 +28,7 @@ class Wizard(QDialog):
     def __init__(self, s: Settings, parent=None) -> None:
         super().__init__(parent)
         self.s = s
-        self.setWindowTitle("镜声 · 设置向导")
+        self.setWindowTitle("翻了么 · 设置向导")
         self.resize(640, 520)
         self.pages = QStackedWidget()
         for build in (self._p_lang, self._p_models, self._p_audio, self._p_voice, self._p_meeting):
@@ -67,7 +67,7 @@ class Wizard(QDialog):
     def _p_lang(self) -> QWidget:
         w = QWidget()
         f = QFormLayout(w)
-        f.addRow(_title("欢迎使用镜声"))
+        f.addRow(_title("欢迎使用翻了么"))
         f.addRow(QLabel("你说话 → 对方听到翻译后的语音（你的克隆音色）；对方说话 → 你看到翻译字幕。默认全部在本机运行，也可以填 API key 改用在线翻译。"))
         self.my = QComboBox()
         self.their = QComboBox()

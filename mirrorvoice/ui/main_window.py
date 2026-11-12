@@ -35,7 +35,7 @@ class MainWindow(QMainWindow):
     def __init__(self, s: Settings) -> None:
         super().__init__()
         self.s = s
-        self.setWindowTitle(f"镜声 {__version__}")
+        self.setWindowTitle(f"翻了么 {__version__}")
         self.resize(560, 820)
         self.bridge = Bridge()
         self.lat_stats = LatencyStats()
@@ -190,7 +190,7 @@ class MainWindow(QMainWindow):
         self.stream.setToolTip("说话途中每 0.4 秒识别一次，稳定的分句先送去翻译。长句子明显更快，"
                                "但译文会碎一些，已经念出的部分不能改。全部在本机完成。")
         self.quiet = QCheckBox("比我平时说话轻很多的声音不翻译（旁人说话、杂音不会被念进会议）")
-        self.quiet.setToolTip("镜声会记住你平时说话的音量；明显更轻的声音（约低 14 分贝以上）不翻译、不出声。"
+        self.quiet.setToolTip("翻了么会记住你平时说话的音量；明显更轻的声音（约低 14 分贝以上）不翻译、不出声。"
                               "连续几段都很轻时，会认为是你离麦克风远了，自动按新的音量重新学习。")
         for w in (self.speak, self.subs, self.passthru, self.quiet, self.stream):
             v.addWidget(w)
@@ -380,7 +380,7 @@ class MainWindow(QMainWindow):
         # the owl girl: dozes while stopped, cheers on start, types / waves while people talk
         self.mascot = Mascot(100, 120)
         v.addWidget(self.mascot, 0, Qt.AlignmentFlag.AlignHCenter)
-        for text, name in (("镜声", "brand"), (f"MirrorVoice · v{__version__}", "brandSub")):
+        for text, name in (("翻了么", "brand"), (f"MirrorVoice · v{__version__}", "brandSub")):
             lbl = QLabel(text, objectName=name)
             lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
             v.addWidget(lbl)

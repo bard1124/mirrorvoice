@@ -1,9 +1,9 @@
-镜声 · macOS 安装说明（Apple Silicon，macOS 14+）
+翻了么 · macOS 安装说明（Apple Silicon，macOS 14+）
 
-1. 把「镜声」拖进「应用程序」文件夹。
-2. 第一次打开：本应用未经 Apple 公证，请在「应用程序」里右键点「镜声」→「打开」→「打开」。
+1. 把「翻了么」拖进「应用程序」文件夹。
+2. 第一次打开：本应用未经 Apple 公证，请在「应用程序」里右键点「翻了么」→「打开」→「打开」。
    如果提示“已损坏，无法打开”，在终端执行一次：
-       xattr -dr com.apple.quarantine /Applications/镜声.app
+       xattr -dr com.apple.quarantine /Applications/翻了么.app
 3. 打开后跟着设置向导走：下载模型（约 4.5 GB）→ 安装 BlackHole 虚拟声卡 → 录 12 秒音色 → 设置会议软件。
 4. 会议软件（Teams / Zoom / Meet / 腾讯会议）里：麦克风选 BlackHole 2ch，扬声器选「Teams 扬声器 (耳机+字幕)」。
 

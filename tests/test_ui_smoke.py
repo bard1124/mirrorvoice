@@ -94,7 +94,7 @@ def _window(main_window, settings, monkeypatch):
 
 
 def test_floating_windows_stay_shown_when_the_app_is_in_the_background(app, settings, no_popups, monkeypatch):
-    """macOS hid them whenever 镜声 was not frontmost: in the meeting, and when opened from the menu-bar icon."""
+    """macOS hid them whenever 翻了么 was not frontmost: in the meeting, and when opened from the menu-bar icon."""
     from PySide6.QtCore import Qt
 
     from mirrorvoice.ui import main_window
@@ -491,7 +491,7 @@ from PySide6.QtWidgets import QApplication
 from mirrorvoice.ui import update_ui
 
 app = QApplication([])
-dlg = update_ui.UpdateProgress(None, "更新好了，马上重新打开镜声…")
+dlg = update_ui.UpdateProgress(None, "更新好了，马上重新打开翻了么…")
 dlg.show()
 dlg.lock()
 state = {}

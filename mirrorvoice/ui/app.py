@@ -30,7 +30,7 @@ def _taskbar_window_identity(win) -> None:
     from .winshell import set_window_identity
 
     exe = sys.executable.replace("python.exe", "pythonw.exe")
-    set_window_identity(int(win.winId()), "镜声", f"{assets_dir() / 'icon.ico'},0", f'"{exe}" -m mirrorvoice')
+    set_window_identity(int(win.winId()), "翻了么", f"{assets_dir() / 'icon.ico'},0", f'"{exe}" -m mirrorvoice')
 
 
 def run_gui(argv: list[str] | None = None) -> int:
@@ -66,8 +66,15 @@ def run_gui(argv: list[str] | None = None) -> int:
         confirm_boot()
         return 0
 
+    if not mode or mode.startswith("-psn"):  # opened from its icon
+        from ..updater import adopt_new_name
+
+        if adopt_new_name():
+            confirm_boot()
+            return 0
+
     app = QApplication(argv)
-    app.setApplicationName("镜声")
+    app.setApplicationName("翻了么")
     theme.apply(app)
     app.setWindowIcon(app_icon())
     from .main_window import MainWindow

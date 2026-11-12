@@ -53,7 +53,7 @@ def open_cli_terminal() -> None:
         line = "clear && exec " + " ".join(shlex.quote(c) for c in cmd)
         script = ('tell application "Terminal"\nactivate\n'
                   f'set w to do script {applescript_str(line)}\n'
-                  'set custom title of w to "镜声"\nend tell')
+                  'set custom title of w to "翻了么"\nend tell')
         subprocess.run(["osascript", "-e", script])
     elif IS_WIN:
         subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE)
@@ -72,4 +72,4 @@ def applescript_str(s: str) -> str:
 
 def notify(text: str) -> None:
     if IS_MAC:
-        subprocess.run(["osascript", "-e", f'display notification {applescript_str(text)} with title "镜声"'])
+        subprocess.run(["osascript", "-e", f'display notification {applescript_str(text)} with title "翻了么"'])

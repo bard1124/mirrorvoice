@@ -1,6 +1,6 @@
 ﻿; Inno Setup script -> dist\MirrorVoice-<ver>-windows-x64-setup.exe
 ; Built by GitHub Actions (windows-latest) after PyInstaller produced dist\MirrorVoice\.
-#define AppName "镜声"
+#define AppName "翻了么"
 #ifndef AppVersion
   #define AppVersion "0.2.0"
 #endif
@@ -16,6 +16,8 @@ DefaultDirName={autopf}\MirrorVoice
 DisableDirPage=no
 UsePreviousAppDir=yes
 DefaultGroupName={#AppName}
+; the Start menu folder follows the app's name (an upgrade would keep the folder of the old name)
+UsePreviousGroup=no
 OutputDir=..\..\dist
 OutputBaseFilename=MirrorVoice-{#AppVersion}-windows-x64-setup
 SetupIconFile=..\assets\icon.ico
@@ -45,6 +47,11 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "..\..\dist\MirrorVoice\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[InstallDelete]
+; the app was called 镜声 up to 0.8.19: an upgrade leaves no shortcuts under that name
+Type: filesandordirs; Name: "{autoprograms}\镜声"
+Type: files; Name: "{autodesktop}\镜声.lnk"
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\MirrorVoice.exe"; AppUserModelID: "io.github.mirrorvoice"

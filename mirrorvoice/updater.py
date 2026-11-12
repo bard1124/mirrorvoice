@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from . import __version__, ed25519, patches
+from . import APP_NAME, __version__, ed25519, patches
 from .config import FROZEN, HOME, IS_MAC, IS_WIN
 from .net import urlopen
 
@@ -276,7 +276,7 @@ def _download_lock():
             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         f.close()
-        raise UpdateBusy("另一个镜声窗口正在下载这个更新，下载完会自动安装并重新打开镜声，请稍候。") from None
+        raise UpdateBusy("另一个翻了么窗口正在下载这个更新，下载完会自动安装并重新打开翻了么，请稍候。") from None
     try:
         yield
     finally:
@@ -409,12 +409,60 @@ def can_self_install() -> bool:
 
 
 def current_app_bundle() -> Path | None:
-    """…/镜声.app when running from the macOS bundle."""
+    """…/翻了么.app when running from the macOS bundle."""
     p = Path(sys.executable).resolve()
     for parent in p.parents:
         if parent.suffix == ".app":
             return parent
     return None
+
+
+
+# What the bundle was called before the app got its present name. A full update puts the new app
+# inside the folder it finds, so an older install keeps the old name in Finder and the Dock.
+OLD_BUNDLE_NAMES = ("镜声.app",)
+
+# args: pid of the app, the bundle now, the bundle after, "norelaunch" to leave it closed
+RENAME_MAC = r"""
+for i in $(seq 1 60); do kill -0 "$1" 2>/dev/null || break; sleep 0.25; done
+if [ ! -e "$3" ] && mv "$2" "$3"; then NOW="$3"; else NOW="$2"; fi
+[ "$4" = "norelaunch" ] || open "$NOW"
+"""
+
+
+def renamed_bundle(bundle: Path | None, marker: Path) -> Path | None:
+    """Where a bundle still carrying an old name should move to, or None to leave it alone: it has
+    another name (the user's choice), the new name is taken, the folder is read-only (run from the
+    disk image), another window of the app is open, or it was tried before."""
+    if bundle is None or bundle.name not in OLD_BUNDLE_NAMES or marker.exists():
+        return None
+    new = bundle.with_name(f"{APP_NAME}.app")
+    if new.exists() or not os.access(bundle.parent, os.W_OK):
+        return None
+    others = subprocess.run(["pgrep", "-f", f"{bundle}/Contents/MacOS/"], capture_output=True, text=True).stdout
+    if any(int(pid) != os.getpid() for pid in others.split()):
+        return None
+    return new
+
+
+def adopt_new_name() -> bool:
+    """Rename a bundle installed under the app's old name, once. True: the app is being started
+    again from its new place and this process must exit now."""
+    if not (FROZEN and IS_MAC):
+        return False
+    marker = HOME / "bundle-renamed"
+    try:
+        bundle = current_app_bundle()
+        new = renamed_bundle(bundle, marker)
+        if new is None:
+            return False
+        marker.write_text(f"{bundle} -> {new}\n", encoding="utf-8")  # a failed try is not repeated at every start
+        subprocess.Popen(["/bin/sh", "-c", RENAME_MAC, "rename", str(os.getpid()), str(bundle), str(new)],
+                         start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+    except Exception:  # noqa: BLE001 — a name is not worth a failed start
+        return False
+    return True
 
 
 MAC_SCRIPT = r"""#!/bin/bash

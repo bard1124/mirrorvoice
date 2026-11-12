@@ -1,7 +1,7 @@
-"""镜声 MirrorVoice — local real-time speech translation in your own cloned voice."""
+"""翻了么 MirrorVoice — local real-time speech translation in your own cloned voice."""
 
 __version__ = "0.8.19"
-APP_NAME = "镜声"
+APP_NAME = "翻了么"
 APP_ID = "MirrorVoice"
 
 # Running a code patch (packaging/patchboot.py): let Python cache its compiled modules in the patch

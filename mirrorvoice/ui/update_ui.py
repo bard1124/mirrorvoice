@@ -32,7 +32,7 @@ class UpdateProgress(QDialog):
 
     def __init__(self, parent: QWidget | None, text: str) -> None:
         super().__init__(parent)
-        self.setWindowTitle("更新镜声")
+        self.setWindowTitle("更新翻了么")
         self.setWindowModality(Qt.WindowModality.WindowModal)
         self.canceled = threading.Event()
         self._locked = False
@@ -118,7 +118,7 @@ class UpdateController:
         d.setWindowTitle("发现新版本")
         d.resize(520, 420)
         lay = QVBoxLayout(d)
-        lay.addWidget(QLabel(f"<b>镜声 {rel.version}</b> 可以更新了（当前 {__version__}）。"
+        lay.addWidget(QLabel(f"<b>翻了么 {rel.version}</b> 可以更新了（当前 {__version__}）。"
                              "模型、音色、会议记录和设置都会保留。"))
         lay.addWidget(QLabel(size_line(rel)))
         notes = QTextBrowser(openExternalLinks=True)
@@ -184,7 +184,7 @@ class UpdateController:
             dlg.dismiss()
             QMessageBox.warning(self.parent, "更新失败", str(e))
             return
-        dlg.label.setText("更新好了，马上重新打开镜声…")
+        dlg.label.setText("更新好了，马上重新打开翻了么…")
         # let her rise and land first: the hand-over waits for this process to exit, then switches
         # to the patch (or replaces the app) and relaunches it. Not the Windows installer — it
         # starts at once and closes the app itself.

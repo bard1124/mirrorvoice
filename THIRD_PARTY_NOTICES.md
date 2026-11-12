@@ -1,6 +1,6 @@
 # Third-party software and models
 
-镜声 itself is MIT-licensed. It bundles or downloads the following components, each under
+翻了么 itself is MIT-licensed. It bundles or downloads the following components, each under
 its own license.
 
 ## Bundled in the installers

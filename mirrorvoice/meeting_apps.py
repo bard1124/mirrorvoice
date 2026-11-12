@@ -35,7 +35,7 @@ def steps(app: str, mac: bool = IS_MAC) -> list[str]:
          f"降噪：{_NOISE[app]}，否则合成的翻译语音可能被当成噪音削弱"]
     if not mac:
         s.append("Windows 的系统默认扬声器保持为你的耳机，不要设成 CABLE Input")
-    s.append("戴耳机；先在镜声点“开始”，再进会议")
+    s.append("戴耳机；先在翻了么点“开始”，再进会议")
     return s
 
 

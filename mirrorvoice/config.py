@@ -19,7 +19,7 @@ IS_APPLE_SILICON = IS_MAC and platform.machine() == "arm64"
 FROZEN = getattr(sys, "frozen", False)  # running from the PyInstaller bundle
 
 
-LEGACY_APP_ID = "TongChuan"  # data folder name before the rename to 镜声 / MirrorVoice
+LEGACY_APP_ID = "TongChuan"  # data folder name before the rename to MirrorVoice
 
 
 def data_dir() -> Path:

@@ -2,7 +2,7 @@
 
 <p align="center"><img src="packaging/assets/icon.png" width="120" alt="MirrorVoice"></p>
 
-<h1 align="center">MirrorVoice 镜声</h1>
+<h1 align="center">MirrorVoice 翻了么</h1>
 
 <p align="center"><a href="https://github.com/bard1124/mirrorvoice/releases/latest"><img alt="Download latest release" src="https://img.shields.io/github/v/release/bard1124/mirrorvoice?label=Download%20latest%20release"></a> <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue"> <img alt="macOS | Windows" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey"></p>
 

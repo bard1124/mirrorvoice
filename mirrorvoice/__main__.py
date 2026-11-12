@@ -94,7 +94,7 @@ def _cmd_update(_args) -> None:
         print(f"已下载到 {path}（从源码运行，请手动安装）")
         return
     updater.install(path, rel)
-    print("正在安装，完成后会自动重新打开镜声")
+    print("正在安装，完成后会自动重新打开翻了么")
 
 
 def _utf8_console() -> None:

@@ -2,7 +2,7 @@
 
 <p align="center"><img src="packaging/assets/icon.png" width="120" alt="MirrorVoice"></p>
 
-<h1 align="center">镜声 MirrorVoice</h1>
+<h1 align="center">翻了么 MirrorVoice</h1>
 
 <p align="center"><a href="https://github.com/bard1124/mirrorvoice/releases/latest"><img alt="下载最新版" src="https://img.shields.io/github/v/release/bard1124/mirrorvoice?label=下载最新版"></a> <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue"> <img alt="macOS | Windows" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey"></p>
 
@@ -33,7 +33,7 @@
 | 🖥️ **两种界面** | 图形控制面板（默认）或命令行风格（彩色日志，输入 `m` 静音 / `u` 更新 / `q` 退出 / `ui` 切回） |
 | 🪟 **悬浮窗与托盘** | 对话悬浮窗（我和对方的原文 + 译文，置顶、可拖动缩放）、对方字幕条可常驻；托盘 / 菜单栏图标和 macOS Dock 右键菜单：开始/停止、暂停/继续、退出 |
 | 🧭 **首次向导** | 自动下载模型（ModelScope / HuggingFace 自动选更快的源，大文件多线程，断点续传）、安装虚拟声卡、录音色、会议软件设置 |
-| 🔄 **一键更新** | 启动时检查 GitHub 新版本（离线自动跳过），一键下载、SHA256 校验、替换并重启；模型和设置全部保留。只改了镜声自身代码的版本走**补丁更新**（约 2 MB，带签名校验，启动失败自动退回），依赖升级时才下载完整安装包。命令行模式输入 `u` |
+| 🔄 **一键更新** | 启动时检查 GitHub 新版本（离线自动跳过），一键下载、SHA256 校验、替换并重启；模型和设置全部保留。只改了翻了么自身代码的版本走**补丁更新**（约 2 MB，带签名校验，启动失败自动退回），依赖升级时才下载完整安装包。命令行模式输入 `u` |
 
 ## 安装
 

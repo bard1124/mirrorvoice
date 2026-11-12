@@ -1,5 +1,5 @@
-# PyInstaller spec for 镜声 (macOS .app and Windows folder build).
-#   macOS:   pyinstaller packaging/mirrorvoice.spec   -> dist/镜声.app
+# PyInstaller spec for 翻了么 (macOS .app and Windows folder build).
+#   macOS:   pyinstaller packaging/mirrorvoice.spec   -> dist/翻了么.app
 #   Windows: pyinstaller packaging/mirrorvoice.spec   -> dist/MirrorVoice/{MirrorVoice.exe,MirrorVoiceCLI.exe}
 # Models are NOT bundled; the first-run wizard downloads them.
 import json
@@ -94,13 +94,13 @@ coll = COLLECT(*exes, a.binaries, a.datas, strip=False, upx=False, name="MirrorV
 
 if IS_MAC:
     app = BUNDLE(
-        coll, name="镜声.app", icon=icon, bundle_identifier="io.github.mirrorvoice",
+        coll, name="翻了么.app", icon=icon, bundle_identifier="io.github.mirrorvoice",
         info_plist={
-            "CFBundleDisplayName": "镜声",
+            "CFBundleDisplayName": "翻了么",
             "CFBundleShortVersionString": VERSION,
             "CFBundleVersion": VERSION,
             "LSMinimumSystemVersion": "14.0",
-            "NSMicrophoneUsageDescription": "镜声需要麦克风来识别你说的话并实时翻译。",
+            "NSMicrophoneUsageDescription": "翻了么需要麦克风来识别你说的话并实时翻译。",
             "NSAppleEventsUsageDescription": "命令行模式需要打开“终端”窗口。",
             "NSHighResolutionCapable": True,
         },
