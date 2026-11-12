@@ -18,7 +18,7 @@ from typing import Callable
 
 from . import models
 from .asr import SENTENCE_END, Listener, Utterance
-from .audio import Player, find_device, time_stretch
+from .audio import Player, find_device, time_stretch, trim_silence
 from .config import LOG_FILE, Settings
 from . import hotkeys
 from .hotkeys import Hotkeys
@@ -44,6 +44,11 @@ class _Speech:
     t_first_text: float = 0.0       # when the first piece to speak was known
     out: str = ""                   # the whole translation ("" = nothing to report)
     t_tr: float = 0.0
+    # A head start (Segmenter.on_guess): translated while it is still open whether the sentence
+    # ends there. "open" -> "go" (it did: speak it) or "void" (I went on: drop it unheard).
+    guess: int = 0
+    state: str = "go"
+    decided: threading.Event = field(default_factory=threading.Event)
 
 
 def speech_seconds(text: str) -> float:
@@ -66,6 +71,10 @@ def check_models(required: list) -> str:
         return ""
     return ("模型文件损坏：" + "；".join(found) + "。损坏的文件已删除，请点窗口顶部的「下载模型」补齐"
             "（只下载这几个文件），再点「开始」。")
+
+
+class _Void(Exception):
+    """The sentence went on after the pause a guess was made in: stop translating the guess."""
 
 
 class _Cancelled(Exception):
@@ -91,6 +100,8 @@ class Engine:
         self._hist = {"me": deque(maxlen=4), "them": deque(maxlen=4)}
         self._voice_q: queue.Queue = queue.Queue()
         self._play_until, self._pending_s, self._compact = 0.0, 0.0, False
+        self._waiting_s = 0.0  # seconds of my speech heard but not being translated yet
+        self._guess_job: _Speech | None = None
         self._synth_idle = threading.Event()
         self._synth_idle.set()
         self._interim_tr, self._interim_busy, self._interim_at, self._them_gen = None, False, 0.0, 0
@@ -125,6 +136,8 @@ class Engine:
         self._jobs = queue.PriorityQueue()
         self._voice_q: queue.Queue = queue.Queue()  # my translated speech, played in order by the voice thread
         self._play_until, self._pending_s, self._compact = 0.0, 0.0, False
+        self._waiting_s = 0.0  # seconds of my speech heard but not being translated yet
+        self._guess_job: _Speech | None = None
         self._synth_idle = threading.Event()
         self._synth_idle.set()
         self._seq = itertools.count()
@@ -484,7 +497,7 @@ class Engine:
         me = Listener("me", s.mic, s.my_lang, s.pause, self._on_me, self._on_level, self._gate, self.log,
                       alt=s.their_lang, online_key=self._asr_key(s, "me"),
                       on_partial=lambda t: self._on_partial("me", t), on_notice=self._notice,
-                      words=words if "me" in sides else None, stream=s.stream)
+                      words=words if "me" in sides else None, stream=s.stream, on_guess=self._on_me_guess)
         me.start()
         self._own(me.close)
         self._me = me
@@ -525,6 +538,8 @@ class Engine:
                 continue
             if kind == "me":
                 self._do_me(tr, utt)
+            elif kind == "guess":
+                self._do_me(tr, utt.utt, utt)
             else:
                 self._do_them(tr_them, utt)
 
@@ -589,8 +604,28 @@ class Engine:
         self._prev[who] = (src, tgt, t_end)
         self._hist[who].append((src, tgt, t_end))
 
-    def _do_me(self, tr: Translator, utt: Utterance) -> None:
+    GUESS_WAIT_S = 1.0  # a guess is settled within the sentence-ending pause; never wait longer
+
+    def _translating(self, utt: Utterance) -> None:
+        with self._lock:
+            self._waiting_s = max(0.0, self._waiting_s - len(utt.audio) / 16000)
+
+    def _settled(self, job: _Speech) -> bool:
+        """True when the job may be spoken and recorded: always, except for a guess that was not
+        confirmed (waits a moment for the verdict if the translation was done first)."""
+        if job.state == "open":
+            job.decided.wait(self.GUESS_WAIT_S)
+            with self._lock:
+                if job.state == "open":
+                    job.state = "void"
+                    job.decided.set()
+        return job.state == "go"
+
+    def _do_me(self, tr: Translator, utt: Utterance, guess: _Speech | None = None) -> None:
         s = self.s
+        if guess is not None and guess.state == "void":
+            self._translating(utt)
+            return
         t0 = time.time()
         waited = t0 - utt.t_end  # time the sentence sat in the queue behind earlier work
         utt.text = correct_asr(utt.text, tr.glossary, "me")
@@ -603,7 +638,11 @@ class Engine:
             self._synth_idle.wait(30)
             t0 = time.time()
             waited = t0 - utt.t_end
-        job = _Speech(utt, waited, t0)
+        self._translating(utt)
+        if guess is not None and guess.state == "void":
+            return  # I went on while it waited its turn
+        job = guess or _Speech(utt, waited, t0)
+        job.waited, job.t0 = max(0.0, waited), t0
         compact = self._update_compact()
         budget = 0
         if compact:  # roughly as long as I took to say it, so the backlog shrinks instead of growing
@@ -616,19 +655,29 @@ class Engine:
         def on_clause(text: str) -> None:  # the first clause, while the rest is still being written
             first["text"], job.t_first_text = text, time.time()
             job.parts.put(text)
+
+        def still_wanted(_text: str) -> None:  # a guess I talked past: stop writing it
+            if job.state == "void":
+                raise _Void
         try:
             ctx = self._context("me", utt)
             out = tr.translate(utt.text, s.my_lang, s.their_lang, context=ctx, history=self._history("me", utt, ctx, tr),
-                               concise=budget, on_clause=on_clause if speak else None)
+                               concise=budget, on_clause=on_clause if speak else None,
+                               on_text=still_wanted if guess is not None else None)
+        except _Void:
+            job.parts.put(None)
+            return
         except TranslateError as e:  # nothing (more) is spoken; the sentence shows as failed
             job.parts.put(None)
+            if not self._settled(job):
+                return
             self.log(f"[me] 在线翻译失败 {e.kind}: {e}")
             self.emit("me", src=utt.text, tgt=f"⚠ 翻译失败：{e}", latency=time.time() - utt.t_end,
                       asr_s=utt.asr_s, queue_s=max(0.0, waited - utt.asr_s), translate_s=time.time() - t0,
                       voice_s=None, passthrough=False, failed=True)
             return
         t_tr = time.time() - t0
-        if not out:
+        if not out or not self._settled(job):
             job.parts.put(None)
             return
         self._remember("me", utt.text, out, utt.t_end)
@@ -657,6 +706,16 @@ class Engine:
     def _backlog(self) -> float:
         """Seconds of my speech not yet heard: queued audio plus sentences not synthesised yet."""
         return max(0.0, self._play_until - time.monotonic()) + max(0.0, self._pending_s)
+
+    # Before it gets that far: a sentence that had to wait behind earlier speech (or has the next
+    # one waiting behind it) is spoken a little faster, more the longer the wait.
+    CATCH_UP_FROM_S, CATCH_UP_FULL_S, CATCH_UP_SPEED = 0.8, 3.0, 1.2
+
+    def _catch_up(self, lag: float) -> float:
+        """Speaking-rate factor for speech that is `lag` seconds behind (1.0 = on time)."""
+        x = (lag - self.CATCH_UP_FROM_S) / (self.CATCH_UP_FULL_S - self.CATCH_UP_FROM_S)
+        boost = 1.0 + (self.CATCH_UP_SPEED - 1.0) * min(1.0, max(0.0, x))
+        return max(boost, self.BACKLOG_SPEED if self._compact else 1.0)
 
     def _update_compact(self) -> bool:
         """English renderings run longer than the Chinese said (2.5 s -> ~6 s): when speech piles up,
@@ -689,8 +748,12 @@ class Engine:
 
     def _speak(self, job: _Speech) -> None:
         s, voice = self.s, self._voice
+        if job.state != "go":  # a guess: its first words may be ready before it is known to stand
+            job.decided.wait(10)
+            if job.state != "go":
+                return
         first_audio = None
-        boost = self.BACKLOG_SPEED if self._compact else 1.0
+        late = None  # how long this sentence waits behind earlier speech (known at its first sound)
         native = getattr(voice, "native_speed", False)
         base = getattr(voice, "speed", 1.0)
         try:
@@ -700,14 +763,16 @@ class Engine:
                     break
                 if self.muted or voice is None or voice is not self._voice:  # muted / voice switched
                     continue
-                if native:
-                    voice.speed = base * boost
+                if native:  # these voices take their rate per sentence part
+                    ahead = max(0.0, self._play_until - time.monotonic()) if late is None else late
+                    voice.speed = base * self._catch_up(ahead + self._waiting_s)
                 text = spoken_en(part) if s.their_lang == "en" else part
-                for chunk, sr in voice.stream(text, s.their_lang):
-                    if first_audio is None:  # heard once what is already queued has played
-                        first_audio = time.time() + max(0.0, self._play_until - time.monotonic())
+                for chunk, sr in trim_silence(voice.stream(text, s.their_lang)):
+                    if late is None:  # heard once what is already queued has played
+                        late = max(0.0, self._play_until - time.monotonic())
+                        first_audio = time.time() + late
                     if not native:
-                        chunk = time_stretch(chunk, sr, base * boost)
+                        chunk = time_stretch(chunk, sr, base * self._catch_up(late + self._waiting_s))
                     self._player.put(chunk, sr)
                     self._play_until = max(time.monotonic(), self._play_until) + len(chunk) / sr
         finally:
@@ -720,9 +785,12 @@ class Engine:
         spoke_at = job.t_first_text or (job.t0 + job.t_tr)
         translate_s = spoke_at - job.t0
         voice_s = first_audio - spoke_at if first_audio else None  # includes waiting for earlier speech
+        latency = (first_audio or time.time()) - t_end
+        head = f" 抢跑 {t_end - job.t0:.2f}s" if job.guess else ""
         self.log(f"[me] 排队 {job.waited:.1f}s 翻译 {job.t_tr:.2f}s（先念 {translate_s:.2f}s）"
-                 f" 出声 {voice_s if voice_s is not None else -1:.2f}s: {job.out[:40]!r}")
-        self.emit("me", src=utt.text, tgt=job.out, latency=(first_audio or time.time()) - t_end, asr_s=utt.asr_s,
+                 f" 出声 {voice_s if voice_s is not None else -1:.2f}s{head} 说完到出声 {latency:.2f}s:"
+                 f" {job.out[:40]!r}")
+        self.emit("me", src=utt.text, tgt=job.out, latency=latency, asr_s=utt.asr_s,
                   queue_s=max(0.0, job.waited - utt.asr_s), translate_s=translate_s, voice_s=voice_s,
                   passthrough=False)
 
@@ -870,8 +938,42 @@ class Engine:
             self.emit("me", src=utt.text, tgt=utt.text, latency=time.time() - utt.t_end,
                       translate_s=0.0, passthrough=True)
             self._transcript.add("me", utt.text, "（原声透传）")
+            self._settle_guess(None)
             return
-        self._jobs.put((0, next(self._seq), "me", utt))
+        if not self._settle_guess(utt):
+            self._queue_me("me", utt, utt)
+
+    def _queue_me(self, kind: str, utt: Utterance, item) -> None:
+        with self._lock:
+            self._waiting_s += len(utt.audio) / 16000
+        self._jobs.put((0, next(self._seq), kind, item))
+
+    def _settle_guess(self, utt: Utterance | None) -> bool:
+        """The open guess is confirmed by `utt` (the sentence ended there, same words: True, and
+        the work done on it stands) or void."""
+        with self._lock:
+            job, self._guess_job = self._guess_job, None
+            if job is None or job.state != "open":
+                return False
+            if utt is not None and utt.guess and utt.guess == job.guess:
+                job.utt.t_end, job.utt.asr_s = utt.t_end, utt.asr_s
+                job.state = "go"
+            else:
+                job.state = "void"
+            job.decided.set()
+            return job.state == "go"
+
+    def _on_me_guess(self, utt: Utterance | None) -> None:
+        """I paused, and this may be the whole sentence: translate it now, speak it only if the
+        sentence does end there. None: I went on — the guess is void."""
+        self._settle_guess(None)
+        s = self.s
+        if utt is None or s.mode == "ptt" or (utt.lang == s.their_lang and s.passthrough):
+            return
+        job = _Speech(utt, 0.0, 0.0, guess=utt.guess, state="open")
+        with self._lock:
+            self._guess_job = job
+        self._queue_me("guess", utt, job)
 
     def _on_them(self, utt: Utterance) -> None:
         self._them_gen += 1  # provisional translations of this sentence are now out of date

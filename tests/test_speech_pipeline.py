@@ -64,7 +64,7 @@ class _Voice:
 
     def stream(self, text, lang):
         self.said.append(text)
-        yield np.zeros(2400, np.float32), 24000  # 0.1 s
+        yield np.full(2400, 0.1, np.float32), 24000  # 0.1 s of sound
 
 
 class _Player:

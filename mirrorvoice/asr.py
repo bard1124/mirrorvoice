@@ -22,6 +22,12 @@ class Utterance:
     audio: np.ndarray  # 16 kHz mono, padded with 0.3 s lead-in
     t_end: float       # wall time the sentence was cut
     asr_s: float
+    guess: int = 0     # a guess made at a short pause (Segmenter.on_guess), or the guess this sentence confirms
+
+
+def _plain(text: str) -> str:
+    """The words alone: no punctuation or spaces."""
+    return re.sub(r"[\W_]+", "", text)
 
 
 @dataclass
@@ -153,6 +159,13 @@ class Segmenter:
     (the engine passes it as context, like an early cut). Long sentences start being translated
     after their first clause instead of at their end.
 
+    Head start (on_guess): a sentence only counts as finished after `pause` of silence, and nothing
+    downstream used to start before that. Now GUESS_S into a pause the speech so far is decoded
+    and handed out as a guess — on_guess(Utterance with .guess = n) — so translation can begin;
+    if the speaker goes on it is withdrawn (on_guess(None)), and if the sentence does end there
+    with the same words, the finished Utterance carries the same .guess and the work already done
+    is used. Saves most of `pause` on every sentence.
+
     Language: decoded in "auto" first. A result in neither the expected language nor the other
     side's (Mandarin heard as Cantonese / Japanese) is decoded again in the expected language;
     the other side's language is kept, so passthrough still sees it.
@@ -167,12 +180,17 @@ class Segmenter:
                                   #   can sit above a quarter of the speech level)
     HIST_S = 30
     LIVE_STEP_S, LIVE_MIN_S = 0.4, 1.4  # simultaneous mode: decode the sentence so far this often
+    GUESS_S, GUESS_MIN_S = 0.12, 0.5    # head start: guess this far into a pause, for at least this much audio
 
     def __init__(self, name: str, pause: float, on_utt: Callable[[Utterance], None],
                  lang: str = "", alt: str = "", log: Callable[[str], None] | None = None,
                  on_level: Callable[[str, float], None] | None = None, recognizer=None, vad=None,
-                 words: "QwenASR | None" = None, stream: bool = False) -> None:
+                 words: "QwenASR | None" = None, stream: bool = False,
+                 on_guess: Callable[[Utterance | None], None] | None = None) -> None:
         self.name, self.pause, self.on_utt = name, pause, on_utt
+        self.on_guess = on_guess
+        self.guess: tuple[int, str] | None = None  # (n, its words) of the guess not settled yet
+        self.guess_n, self.guess_dip = 0, -1       # guesses made; the pause the last one was made in
         self.stream = stream  # 边说边译: send finished clauses while the sentence goes on
         self.live_from, self.live_next, self.live_prev = -1, 0, ""
         self.words = words  # optional better recognizer for the final text of each sentence
@@ -217,8 +235,39 @@ class Segmenter:
                 self.log(f"[{self.name}] Qwen3-ASR 失败，用 SenseVoice 结果：{e}")
         self.count += 1
         self.log(f"[{self.name}] segment {len(seg)/ASR_SR:.2f}s lang={d.lang} text={d.text!r}")
-        if re.sub(r"[\W_]+", "", d.text):
-            self.on_utt(Utterance(d.text, d.lang, seg, t_end, time.time() - t_end))
+        guess = 0
+        if self.guess is not None:  # whatever goes out next settles the guess
+            n, words = self.guess
+            self.guess = None
+            if words == _plain(d.text):
+                guess = n
+            else:
+                self.on_guess(None)
+        if _plain(d.text):
+            self.on_utt(Utterance(d.text, d.lang, seg, t_end, time.time() - t_end, guess))
+
+    def _guess(self) -> None:
+        """The speaker has just paused: decode the speech so far and hand it out as a guess."""
+        self.guess_dip = self.dip_from
+        if self.live_from >= 0:
+            start = self.live_from
+        else:  # (the VAD notices speech a little late: same lead-in as simultaneous mode)
+            start = self.carry[0] if self.carry else self.speech_from - self.pre - int(0.25 * ASR_SR)
+        a = max(start, self.hist_start, self.cut_to)
+        seg = self.hist[self._abs(a):self._abs(self.fed)]
+        if len(seg) < self.GUESS_MIN_S * ASR_SR:
+            return
+        d = self.recognize(seg)
+        if not _plain(d.text):
+            return
+        self.guess_n += 1
+        self.guess = (self.guess_n, _plain(d.text))
+        self.on_guess(Utterance(d.text, d.lang, seg, time.time(), 0.0, self.guess_n))
+
+    def _drop_guess(self) -> None:
+        if self.guess is not None:
+            self.guess = None
+            self.on_guess(None)
 
     def _abs(self, i: int) -> int:
         return min(max(i, self.hist_start), self.fed) - self.hist_start
@@ -255,6 +304,11 @@ class Segmenter:
                     vad.flush()
                     self.early_end = self.fed
                     self.speech_from, self.dip_from = -1, -1
+                elif self.on_guess is not None:
+                    if self.guess is not None and self.dip_from < 0:
+                        self._drop_guess()  # the speaker went on
+                    elif self.guess is None and dip >= self.GUESS_S and self.dip_from != self.guess_dip:
+                        self._guess()
             else:
                 self.speech_from, self.dip_from = -1, -1
                 self.noise_rms = rms if self.noise_rms == 0.0 else 0.95 * self.noise_rms + 0.05 * rms
@@ -269,12 +323,16 @@ class Segmenter:
         if self.stream and open_gate:
             self._live()
         self._pop()
+        if self.guess is not None and not vad.is_speech_detected():
+            self._drop_guess()  # the speech ended without a sentence (too short for the VAD)
         self._send_lone_tail()
 
     def _live(self) -> None:
         """Simultaneous mode: send the finished clauses of the sentence still being spoken."""
         if self.speech_from < 0 or not self.vad.is_speech_detected():
             return
+        if self.guess is not None:
+            return  # in a pause, the whole sentence so far is already being tried
         if self.live_from < 0:  # a new stretch of speech (the VAD noticed it a little late)
             start = self.carry[0] if self.carry else self.speech_from - self.pre - int(0.25 * ASR_SR)
             self.live_from = max(start, self.hist_start, self.cut_to)
@@ -361,7 +419,7 @@ class Listener:
                  log: Callable[[str], None] | None = None, alt: str = "", online_key: str = "",
                  on_partial: Callable[[str], None] | None = None,
                  on_notice: Callable[[str], None] | None = None, words: "QwenASR | None" = None,
-                 stream: bool = False) -> None:
+                 stream: bool = False, on_guess: Callable[[Utterance | None], None] | None = None) -> None:
         """language: the language expected from this source ("auto" = any); alt: the other
         side's language, accepted as detected (passthrough / same-language subtitles).
         online_key: 阿里云百炼 key → streaming online recognition (online_asr.py) instead of
@@ -376,7 +434,8 @@ class Listener:
             self.seg = OnlineSegmenter(name, pause, on_utt, online_key, lang, alt, self.log, on_level,
                                        on_partial, on_notice, detector=Recognizer("auto"), words=words)
         else:
-            self.seg = Segmenter(name, pause, on_utt, lang, alt, self.log, on_level, words=words, stream=stream)
+            self.seg = Segmenter(name, pause, on_utt, lang, alt, self.log, on_level, words=words, stream=stream,
+                                 on_guess=None if words is not None else on_guess)  # (a second recognizer may reword it)
         self.q: queue.Queue[np.ndarray] = queue.Queue()
         self.source = source
         self.capture = Capture(source, self.q.put, self.WINDOW)

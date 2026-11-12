@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Callable
+from typing import Callable, Iterable, Iterator
 
 import numpy as np
 import sounddevice as sd
@@ -18,6 +18,41 @@ def resample(x: np.ndarray, sr_in: int, sr_out: int) -> np.ndarray:
         return x.astype(np.float32, copy=False)
     n = int(round(len(x) * sr_out / sr_in))
     return np.interp(np.linspace(0, len(x), n, endpoint=False), np.arange(len(x)), x).astype(np.float32)
+
+
+SILENCE_FLOOR = 0.004  # |sample| below this is silence whatever the voice's level
+
+
+def trim_silence(chunks: Iterable[tuple[np.ndarray, int]], tail_keep: float = 0.12,
+                 lead_keep: float = 0.02) -> Iterator[tuple[np.ndarray, int]]:
+    """Drop the silence a voice model puts before its first sound, and all but tail_keep seconds of
+    what it leaves after the last one (Qwen3-TTS: 0.17 s and 0.34 s a sentence on average, 16 % of
+    the audio — the first is pure delay, the second makes the next sentence wait). Pauses inside
+    are kept. Sound is never held back: only silence waits until it is known whether more follows."""
+    started, peak = False, 0.0
+    held: np.ndarray | None = None  # silence after the last sound so far
+    sr = 0
+    for chunk, sr in chunks:
+        chunk = np.asarray(chunk, dtype=np.float32)
+        if not len(chunk):
+            continue
+        level = np.abs(chunk)
+        peak = max(peak, float(level.max()))
+        loud = np.flatnonzero(level > max(SILENCE_FLOOR, 0.02 * peak))
+        if not len(loud):
+            if started:
+                held = chunk if held is None else np.concatenate([held, chunk])
+            continue
+        first, last = int(loud[0]), int(loud[-1])
+        if not started:
+            started = True
+            body = chunk[max(0, first - int(lead_keep * sr)):last + 1]
+        else:
+            body = chunk[:last + 1] if held is None else np.concatenate([held, chunk[:last + 1]])
+        held = chunk[last + 1:]
+        yield body, sr
+    if started and held is not None and len(held) and tail_keep > 0:
+        yield held[:int(tail_keep * sr)], sr
 
 
 def time_stretch(x: np.ndarray, sr: int, speed: float) -> np.ndarray:
