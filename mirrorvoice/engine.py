@@ -25,7 +25,7 @@ from .hotkeys import Hotkeys
 from .languages import LANGS
 from .transcript import Transcript
 from .online_llm import FailoverChat, OnlineChat, TranslateError
-from .translate import Translator, correct_asr, local_backend, spoken_en
+from .translate import Translator, correct_asr, is_filler, local_backend, spoken_en
 from .tts import make_voice
 
 Emit = Callable[..., None]  # emit(kind: str, **data)
@@ -940,6 +940,10 @@ class Engine:
             self._transcript.add("me", utt.text, "（原声透传）")
             self._settle_guess(None)
             return
+        if is_filler(utt.text):  # "嗯。": nothing to say in the other language
+            self._settle_guess(None)
+            self.log(f"[me] 语气词，不翻译：{utt.text!r}")
+            return
         if not self._settle_guess(utt):
             self._queue_me("me", utt, utt)
 
@@ -968,7 +972,7 @@ class Engine:
         sentence does end there. None: I went on — the guess is void."""
         self._settle_guess(None)
         s = self.s
-        if utt is None or s.mode == "ptt" or (utt.lang == s.their_lang and s.passthrough):
+        if utt is None or s.mode == "ptt" or (utt.lang == s.their_lang and s.passthrough) or is_filler(utt.text):
             return
         job = _Speech(utt, 0.0, 0.0, guess=utt.guess, state="open")
         with self._lock:
@@ -980,6 +984,9 @@ class Engine:
         if utt.lang in SIMILAR.get(self.s.my_lang, {self.s.my_lang}):
             self.emit("them", src=utt.text, tgt=utt.text, latency=0.0)  # same language: show as-is
             self._transcript.add("them", utt.text, utt.text)
+            return
+        if is_filler(utt.text):
+            self.log(f"[them] 语气词，不翻译：{utt.text!r}")
             return
         self._jobs.put((1, next(self._seq), "them", utt))
 

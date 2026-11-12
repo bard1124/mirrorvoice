@@ -76,6 +76,22 @@ def correct_asr(text: str, rows: list[Term], side: str) -> str:
 # ------------------------------------------------------------------ prompts
 
 
+# Sounds of hesitation, not words. Translating them is wasted work and worse: small models make
+# something up ("呃。" came out as "I.", "嗯嗯。" as "Hmm." in my voice a second and a half later).
+_FILLER_WORDS = {"uh", "um", "umm", "uhm", "hm", "hmm", "mm", "mmm", "mhm", "er", "erm", "ah", "eh", "ugh", "huh"}
+_FILLER_CHARS = set("嗯呃额啊哦噢喔唔呣诶欸唉哎" "うえあはんおつー")  # (the kana: how noises are misheard)
+_WORDS = re.compile(r"[a-z']+|[^\W\d_a-z]")  # Latin words; any other letter on its own
+
+
+def is_filler(text: str) -> bool:
+    """True when the sentence is nothing but hesitation ("嗯。", "呃，嗯", "Um."). Answers stay:
+    "好", "对", "Yeah", "Okay" are words — and so does a question ("啊？")."""
+    if "?" in text or "？" in text:
+        return False
+    words = _WORDS.findall(text.lower())
+    return bool(words) and all(w in _FILLER_WORDS or w in _FILLER_CHARS for w in words)
+
+
 def system_prompt(src: str, tgt: str, subtitle: bool, meeting: str = "", concise: int = 0) -> str:
     s, t = LANGS[src].english, LANGS[tgt].english
     p = (f"You are a simultaneous interpreter. Translate the {s} speech transcript into natural, "
