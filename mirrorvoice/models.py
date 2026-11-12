@@ -515,3 +515,38 @@ def adopt_existing(src_dir: Path) -> list[str]:
                 (m.path / ".complete").touch()
             moved.append(m.dest)
     return moved
+
+
+# ---------------------------------------------------------------- the models' memory (Apple GPU)
+_resident = 0
+_resident_lock = threading.Lock()
+
+
+def keep_resident(on: bool) -> None:
+    """Hold the local models' memory in RAM while a session runs (on=False when its thread ends).
+
+    MLX keeps a model resident only while it is generating: mlx_lm raises the "wired limit" for
+    each call and puts the previous one (0) back. Between sentences the system is free to compress
+    or swap the model out, and on a Mac short of memory the next sentence then waits for it to
+    come back — 4-7 s instead of 0.6 s, with the whole process stalled (audio input too: the
+    streams were reopened, words were lost). 2026-11-12, 28 GB in swap: 9 of the 14 sentences that
+    followed a 15 s pause. A limit set here is the "previous" one those calls restore, so it holds.
+
+    Counted, because the limit must not change while another thread is generating: the session
+    thread and the voice thread each hold it, and it drops to 0 only when both are done."""
+    global _resident
+    import sys
+
+    mx = sys.modules.get("mlx.core")  # nothing to do before / without a local Apple-GPU model
+    with _resident_lock:
+        before = _resident
+        _resident = max(0, _resident + (1 if on else -1))
+        if mx is None or bool(before) == bool(_resident):
+            return
+        try:
+            limit = mx.device_info().get("max_recommended_working_set_size") if _resident else 0
+            if limit is not None:
+                mx.set_wired_limit(int(limit))
+        except Exception:  # noqa: BLE001 — older macOS / no Metal: the models just stay pageable
+            pass
+

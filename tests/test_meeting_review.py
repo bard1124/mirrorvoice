@@ -178,3 +178,39 @@ def test_terms_written_the_same_on_both_sides_are_to_be_copied_not_translated():
     assert "Use these fixed translations: user story -> 用户故事" in p and "Siena -> Siena" not in p
     assert "copy them exactly as written, do not translate them: Siena, QA" in p
     assert user_prompt("Hello.", []) == "Translate ONLY this sentence: Hello."
+
+
+def test_local_models_stay_in_memory_for_the_session(monkeypatch):
+    """2026-11-12, a Mac with 28 GB in swap: after a 15 s pause the next sentence took 4-7 s
+    instead of 0.6 s and the audio input stalled with it — the model had been paged out, because
+    mlx_lm holds it resident only while it generates."""
+    import sys
+    import types
+
+    from mirrorvoice import models
+
+    calls = []
+    fake = types.SimpleNamespace(device_info=lambda: {"max_recommended_working_set_size": 21 << 30},
+                                 set_wired_limit=lambda n: calls.append(n) or 0)
+    monkeypatch.setitem(sys.modules, "mlx.core", fake)
+    monkeypatch.setattr(models, "_resident", 0)
+    models.keep_resident(True)   # the session thread
+    models.keep_resident(True)   # the voice thread: no second change while the first may be generating
+    assert calls == [21 << 30]
+    models.keep_resident(False)  # one of them ends: the other may still be generating
+    assert calls == [21 << 30]
+    models.keep_resident(False)
+    assert calls == [21 << 30, 0]
+    models.keep_resident(False)  # an extra release never goes below zero
+    models.keep_resident(True)
+    assert calls == [21 << 30, 0, 21 << 30]
+
+    monkeypatch.setattr(models, "_resident", 0)
+    monkeypatch.delitem(sys.modules, "mlx.core")  # Windows / online only: nothing to hold
+    models.keep_resident(True)
+    models.keep_resident(False)
+    fake.set_wired_limit = lambda n: 1 / 0  # an older macOS refusing it must not stop the session
+    monkeypatch.setitem(sys.modules, "mlx.core", fake)
+    models.keep_resident(True)
+    assert models._resident == 1
+

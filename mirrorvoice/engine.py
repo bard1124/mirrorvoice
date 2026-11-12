@@ -437,6 +437,9 @@ class Engine:
             if not self._stale():  # (a stopped start-up may fail on what stop() closed: no news)
                 self.emit("error", message=str(e))
                 self.stop()
+        finally:
+            if getattr(self._tl, "resident", False):
+                models.keep_resident(False)
 
     def _worker(self, s: Settings, jobs: queue.PriorityQueue) -> None:
         backend = models.voice_backend(s)
@@ -470,6 +473,8 @@ class Engine:
             player = Player(find_device(s.call_out, "output"), mon, s.gain)
             self._own(player.close)
 
+        models.keep_resident(True)  # until this session's thread ends (_boot)
+        self._tl.resident = True
         self.emit("status", text="预热…")
         for t in {id(tr): tr, id(tr_them): tr_them}.values():
             try:
@@ -740,6 +745,13 @@ class Engine:
         return self._compact
 
     def _voicer(self, vq: queue.Queue) -> None:
+        models.keep_resident(True)
+        try:
+            self._voice_loop(vq)
+        finally:
+            models.keep_resident(False)
+
+    def _voice_loop(self, vq: queue.Queue) -> None:
         while True:
             item = vq.get()
             if item is None:
