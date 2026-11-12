@@ -74,8 +74,12 @@ class UpdateProgress(QDialog):
 
 
 class UpdateController:
-    def __init__(self, parent: QWidget, s: Settings, before_install: Callable[[], None]) -> None:
+    def __init__(self, parent: QWidget, s: Settings, before_install: Callable[[], None],
+                 on_checking: Callable[[bool], None] | None = None) -> None:
         self.parent, self.s, self.before_install = parent, s, before_install
+        # on_checking(True) the moment a check I asked for starts, (False) when its answer is in:
+        # the click shows at once, however long GitHub takes
+        self.on_checking = on_checking or (lambda busy: None)
         self.bridge = Bridge()
         self.bridge.update.connect(self._on_checked)
         self.bridge.progress.connect(self._on_progress)
@@ -87,6 +91,8 @@ class UpdateController:
         if self._dlg is not None and self._dlg.isVisible():
             self._dlg.raise_()  # already downloading the update
             return
+        if manual:
+            self.on_checking(True)
         if self._checking:
             self._manual = self._manual or manual
             return
@@ -95,6 +101,7 @@ class UpdateController:
 
     def _on_checked(self, rel, err: str) -> None:
         self._checking = False
+        self.on_checking(False)
         if rel is None:
             if self._manual:
                 if err:

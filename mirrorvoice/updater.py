@@ -33,6 +33,7 @@ import tempfile
 import threading
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -42,7 +43,11 @@ from .config import FROZEN, HOME, IS_MAC, IS_WIN
 from .net import urlopen
 
 REPO = "bard1124/mirrorvoice"
-FEED = os.environ.get("MIRRORVOICE_UPDATE_FEED", f"https://api.github.com/repos/{REPO}/releases/latest")
+DEFAULT_FEED = f"https://api.github.com/repos/{REPO}/releases/latest"
+FEED = os.environ.get("MIRRORVOICE_UPDATE_FEED", DEFAULT_FEED)
+# The newest release's files by a fixed address: no need to ask the API first which release that is
+LATEST = f"https://github.com/{REPO}/releases/latest/download/"
+DOWNLOAD = f"https://github.com/{REPO}/releases/download/"
 UPDATES = HOME / "updates"
 UA = {"User-Agent": f"MirrorVoice/{__version__} (updater)", "Accept": "application/vnd.github+json"}
 MANIFEST = "update.json"
@@ -116,15 +121,13 @@ def platform_tag() -> str:
     return "macos-arm64" if IS_MAC else "windows-x64" if IS_WIN else ""
 
 
-def manifest(assets: list[dict]) -> dict | None:
-    """The release's update.json when its signature checks out, else None."""
-    man = next((a for a in assets if a["name"] == MANIFEST), None)
-    sig = next((a for a in assets if a["name"] == MANIFEST + ".sig"), None)
-    if not man or not sig:
-        return None
-    body = _get_asset(man)
+def _both(get_body: Callable[[], bytes], get_sig: Callable[[], bytes]) -> dict | None:
+    """update.json and its signature, fetched side by side; the manifest when the signature checks out."""
+    with ThreadPoolExecutor(2) as pool:
+        b, g = pool.submit(get_body), pool.submit(get_sig)
+        body, sig = b.result(), g.result()
     try:
-        signature = bytes.fromhex(_get_asset(sig).decode().strip())
+        signature = bytes.fromhex(sig.decode().strip())
     except ValueError:
         return None
     if not ed25519.verify(PUBLIC_KEY, body, signature):
@@ -135,13 +138,34 @@ def manifest(assets: list[dict]) -> dict | None:
         return None
 
 
-def _patch_offer(data: dict, version: str, full: dict) -> Release | None:
-    """The release's code patch when it fits this bundle's runtime."""
+def manifest(assets: list[dict]) -> dict | None:
+    """The release's update.json when its signature checks out, else None."""
+    man = next((a for a in assets if a["name"] == MANIFEST), None)
+    sig = next((a for a in assets if a["name"] == MANIFEST + ".sig"), None)
+    if not man or not sig:
+        return None
+    return _both(lambda: _get_asset(man), lambda: _get_asset(sig))
+
+
+def _latest_manifest() -> dict | None:
+    """The newest release's signed update.json by its fixed address (None: not there, unsigned,
+    offline — or the feed was pointed somewhere else, as the tests do)."""
+    if FEED != DEFAULT_FEED:
+        return None
+    try:
+        return _both(lambda: _get(LATEST + MANIFEST), lambda: _get(LATEST + MANIFEST + ".sig"))
+    except Exception:  # noqa: BLE001 — the release list is asked as well
+        return None
+
+
+def _patch_offer(data: dict, version: str, full: dict, m: dict | None = None) -> Release | None:
+    """The release's code patch when it fits this bundle's runtime. m = its manifest if already fetched."""
     runtime = patches.bundle_info().get("runtime", "")
     if not runtime or version in patches.bad_versions():
         return None
     assets = data.get("assets", [])
-    m = manifest(assets)
+    if not m or m.get("version") != version:
+        m = manifest(assets)
     if not m or m.get("version") != version:
         return None
     plat = (m.get("platforms") or {}).get(platform_tag()) or {}
@@ -156,10 +180,44 @@ def _patch_offer(data: dict, version: str, full: dict) -> Release | None:
                    a.get("url", ""), kind="patch", runtime=runtime, full_size=int(full.get("size", 0)))
 
 
+def _from_manifest(m: dict) -> Release | None:
+    """The update a signed manifest describes, without the release list (api.github.com answers
+    60 questions an hour per address, and not at all on some networks): the manifest names the
+    files, their sizes and checksums; only the release notes are missing."""
+    version = str(m.get("version", ""))
+    plat = (m.get("platforms") or {}).get(platform_tag()) or {}
+    inst = plat.get("installer") or {}
+    if _ver(version) <= _ver(__version__):
+        return None
+    base, page = f"{DOWNLOAD}v{version}/", f"https://github.com/{REPO}/releases/tag/v{version}"
+    patch = m.get("patch") or {}
+    runtime = patches.bundle_info().get("runtime", "")
+    if runtime and plat.get("runtime") == runtime and version not in patches.bad_versions() \
+            and patch.get("name") and len(patch.get("sha256", "")) == 64:
+        return Release(version, "", page, patch["name"], base + patch["name"], int(patch.get("size", 0)),
+                       patch["sha256"].lower(), kind="patch", runtime=runtime, full_size=int(inst.get("size", 0)))
+    if not inst.get("name"):
+        return None
+    return Release(version, "", page, inst["name"], base + inst["name"], int(inst.get("size", 0)),
+                   str(inst.get("sha256", "")).lower())
+
+
 def check() -> Release | None:
     """Newest release if it is newer than this build: its code patch when that fits this bundle,
-    else its installer for this platform."""
-    data = json.loads(_get(FEED))
+    else its installer for this platform.
+
+    The release list and the newest release's signed manifest are asked for at the same time
+    (three requests side by side, ~1 s; one after the other they took ~3 s before the window
+    appeared). If the list cannot be had, the manifest alone is enough."""
+    with ThreadPoolExecutor(2) as pool:
+        feed, early = pool.submit(lambda: json.loads(_get(FEED))), pool.submit(_latest_manifest)
+        m = early.result()
+        try:
+            data = feed.result()
+        except Exception:  # noqa: BLE001 — rate-limited or unreachable
+            if m is None:
+                raise
+            return _from_manifest(m)
     tag = data.get("tag_name", "")
     if _ver(tag) <= _ver(__version__):
         return None
@@ -169,7 +227,7 @@ def check() -> Release | None:
     if not inst:
         return None
     try:
-        rel = _patch_offer(data, tag.lstrip("v"), inst)
+        rel = _patch_offer(data, tag.lstrip("v"), inst, m)
     except Exception:  # noqa: BLE001 — any trouble with the patch: offer the installer
         rel = None
     if rel:

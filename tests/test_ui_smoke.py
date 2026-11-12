@@ -513,3 +513,28 @@ def test_restart_after_the_update_really_quits_although_the_progress_window_is_l
     r = subprocess.run([sys.executable, "-c", _QUIT_CHECK], env=env, capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr  # 3: still running 8 s later (the v0.8.12 hang)
     assert "alive-after-plain-quit" in r.stdout  # a plain quit() was held up by the locked window
+
+
+def test_the_check_for_updates_button_answers_the_click_at_once(app, settings, no_popups, monkeypatch):
+    from mirrorvoice import updater
+    from mirrorvoice.ui import main_window, update_ui
+
+    calls = []
+    monkeypatch.setattr(updater, "check_async", lambda cb: calls.append(cb))
+    monkeypatch.setattr(update_ui.QMessageBox, "information", lambda *a, **k: None)
+    w = _window(main_window, settings, monkeypatch)
+    try:
+        b = w.nav["_check_updates"]
+        assert b.text() == "检查更新" and b.isEnabled()
+        b.click()
+        assert b.text() == "正在检查更新…" and not b.isEnabled() and len(calls) == 1  # before GitHub has answered
+        w.updates._on_checked(None, "")
+        assert b.text() == "检查更新" and b.isEnabled()
+        w.updates.check(manual=False)  # the check at start-up stays in the background
+        assert b.text() == "检查更新" and b.isEnabled()
+        b.click()  # … and a click while it runs joins it, and shows
+        assert b.text() == "正在检查更新…" and len(calls) == 2
+        w.updates._on_checked(None, "")
+        assert b.text() == "检查更新" and b.isEnabled()
+    finally:
+        w.close()

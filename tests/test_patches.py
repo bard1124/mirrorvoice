@@ -248,3 +248,39 @@ def test_mac_relaunch_stops_other_windows_then_opens(tmp_path):
                    timeout=30, check=True)
     assert old.wait(timeout=5) is not None  # the old window was stopped
     assert (tmp_path / "opened.txt").read_text().strip() == f"opened {bundle}"
+
+
+@pytest.mark.skipif(sys.platform not in ("darwin", "win32"), reason="installers exist for macOS / Windows only")
+def test_the_manifest_is_asked_for_alongside_the_release_list_and_either_one_is_enough(signed_release, http_files,
+                                                                                    monkeypatch):
+    new, publish = signed_release
+    base, files, srv = http_files
+    monkeypatch.setattr(updater, "DEFAULT_FEED", updater.FEED)  # as with the real feed: the fixed address is used too
+    monkeypatch.setattr(updater, "LATEST", base + "/")
+    monkeypatch.setattr(updater, "DOWNLOAD", base + "/dl/")
+    srv.hits.clear()
+    rel = updater.check()
+    assert rel.kind == "patch" and rel.notes == "notes"
+    paths = [p for p, _ in srv.hits]
+    assert paths.count("/update.json") == 1 and paths.count("/update.json.sig") == 1  # not fetched again from the list
+
+    srv.fail.add("/feed.json")  # api.github.com: rate-limited or unreachable
+    rel = updater.check()
+    pname = f"MirrorVoice-{new}-patch.zip"
+    assert rel.kind == "patch" and rel.version == new and rel.runtime == "rt-a" and rel.notes == ""
+    assert rel.asset_url == f"{base}/dl/v{new}/{pname}" and rel.page.endswith(f"/releases/tag/v{new}")
+    files[f"/dl/v{new}/{pname}"] = files[f"/{pname}"]
+    assert updater.download(rel, lambda d, t: None).read_bytes() == files[f"/{pname}"]  # checksum from the manifest
+
+    tag = updater.platform_tag()
+    inst = {"name": "MirrorVoice-9-installer", "size": 9, "sha256": "ab" * 32}
+    other = json.dumps({"version": new, "patch": {"name": pname, "size": 1, "sha256": "cd" * 32},
+                        "platforms": {tag: {"runtime": "rt-OTHER", "installer": inst}}}).encode()
+    publish(manifest=other)
+    rel = updater.check()  # the patch is for another runtime: the installer the manifest describes
+    assert rel.kind == "full" and rel.asset_name == inst["name"] and rel.sha256 == "ab" * 32 and rel.size == 9
+    publish(manifest=json.dumps({"version": __version__, "platforms": {}}).encode())
+    assert updater.check() is None  # nothing newer
+    publish(sig="00" * 64)
+    with pytest.raises(Exception):  # no list and no manifest that can be trusted: the check fails, as before
+        updater.check()
