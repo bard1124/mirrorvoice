@@ -164,6 +164,7 @@ def test_mac_swap_script_stops_other_running_windows_first(tmp_path):
     assert "other instances running" in (tmp_path / "update.log").read_text()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="app bundles are a macOS thing (and it asks pgrep)")
 def test_a_bundle_with_the_old_name_is_renamed_once(tmp_path):
     """After the app got a new name, a full update left its new contents in the folder of the old name."""
     apps = tmp_path / "Apps"
@@ -180,12 +181,11 @@ def test_a_bundle_with_the_old_name_is_renamed_once(tmp_path):
     new.mkdir()
     assert updater.renamed_bundle(old, marker) is None  # never on top of another copy
     new.rmdir()
-    if sys.platform != "win32":
-        apps.chmod(0o555)
-        try:
-            assert updater.renamed_bundle(old, marker) is None  # read-only: opened from the disk image
-        finally:
-            apps.chmod(0o755)
+    apps.chmod(0o555)
+    try:
+        assert updater.renamed_bundle(old, marker) is None  # read-only: opened from the disk image
+    finally:
+        apps.chmod(0o755)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="shell script")
