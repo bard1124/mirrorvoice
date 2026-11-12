@@ -216,6 +216,12 @@ def _wait(events, n, kind="me", timeout=5):
         time.sleep(0.01)
 
 
+def _until(cond, timeout=10):
+    deadline = time.monotonic() + timeout
+    while not cond() and time.monotonic() < deadline:
+        time.sleep(0.005)
+
+
 PIECES = ["We will", " first discuss", " the budget,", " and then", " we will", " set", " the date."]
 
 
@@ -232,7 +238,7 @@ def test_a_guess_is_translated_at_once_but_spoken_only_when_the_sentence_ends_th
     e, events = _engine()
     backend = _Slow(PIECES)
     job, t = _start_guess(e, backend)
-    time.sleep(0.15)
+    _until(lambda: backend.given >= 3)  # (no fixed sleep: slow machines take longer to get there)
     assert backend.given >= 3 and e._voice.said == []  # translating already; not a word spoken yet
     final = _utt("我们先讨论预算，然后再定日期。", guess=1)
     e._on_me(final)  # the sentence did end there
@@ -250,7 +256,7 @@ def test_a_guess_i_talk_past_is_dropped_unheard_and_stops_being_translated():
     e, events = _engine()
     backend = _Slow(PIECES * 4)
     job, t = _start_guess(e, backend)
-    time.sleep(0.1)
+    _until(lambda: backend.given >= 2)
     e._on_me_guess(None)  # I went on
     t.join(5)
     assert not t.is_alive() and backend.given < len(backend.pieces)  # the translation was cut short
@@ -303,7 +309,7 @@ def test_speech_that_runs_late_is_spoken_faster_the_later_it_is():
     _wait(events, 1)
     on_time = e._player.samples
     assert on_time == pytest.approx(SR * 1.0, rel=0.02)  # nothing waiting: natural pace
-    e._play_until = time.monotonic() + 3.0  # earlier speech still has 3 s to play
+    e._play_until = time.monotonic() + 30.0  # earlier speech still has a long time to play
     e._do_me(_tr(_Slow(["Running late."], delay=0)), _utt("晚了。"))
     _wait(events, 2)
     assert e._player.samples - on_time == pytest.approx(SR * 1.0 / e.CATCH_UP_SPEED, rel=0.05)
