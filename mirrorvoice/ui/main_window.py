@@ -189,7 +189,10 @@ class MainWindow(QMainWindow):
         self.stream = QCheckBox("边说边译（实验）：一句话说到逗号就先翻译，长句更快开口")
         self.stream.setToolTip("说话途中每 0.4 秒识别一次，稳定的分句先送去翻译。长句子明显更快，"
                                "但译文会碎一些，已经念出的部分不能改。全部在本机完成。")
-        for w in (self.speak, self.subs, self.passthru, self.stream):
+        self.quiet = QCheckBox("比我平时说话轻很多的声音不翻译（旁人说话、杂音不会被念进会议）")
+        self.quiet.setToolTip("镜声会记住你平时说话的音量；明显更轻的声音（约低 14 分贝以上）不翻译、不出声。"
+                              "连续几段都很轻时，会认为是你离麦克风远了，自动按新的音量重新学习。")
+        for w in (self.speak, self.subs, self.passthru, self.quiet, self.stream):
             v.addWidget(w)
         mh = QHBoxLayout()
         self.cont, self.ptt = QRadioButton("持续翻译"), QRadioButton("按住说话")
@@ -313,6 +316,7 @@ class MainWindow(QMainWindow):
         self.speak.setChecked(s.speak)
         self.subs.setChecked(s.subtitles)
         self.passthru.setChecked(s.passthrough)
+        self.quiet.setChecked(s.quiet_gate)
         self.stream.setChecked(s.stream)
         (self.ptt if s.mode == "ptt" else self.cont).setChecked(True)
         self.ptt_key.setCurrentIndex(max(0, self.ptt_key.findData(s.ptt_key)))
@@ -320,7 +324,7 @@ class MainWindow(QMainWindow):
         self.display.setCurrentIndex(self.display.findData(s.display))
         for w in (self.my, self.their, self.ptt_key, self.quality, self.display, self.mic, self.call, self.mon, self.src):
             w.currentIndexChanged.connect(self._save)
-        for w in (self.speak, self.subs, self.passthru, self.stream, self.cont, self.ptt):
+        for w in (self.speak, self.subs, self.passthru, self.quiet, self.stream, self.cont, self.ptt):
             w.toggled.connect(self._save)
         self.display.currentIndexChanged.connect(self._display_changed)
         for role, combo, _ in self._device_combos():
@@ -522,7 +526,7 @@ class MainWindow(QMainWindow):
         s.mic, s.call_out, s.monitor, s.their_source = (self.mic.currentData(), self.call.currentData(),
                                                         self.mon.currentData(), self.src.currentData())
         s.speak, s.subtitles, s.passthrough = self.speak.isChecked(), self.subs.isChecked(), self.passthru.isChecked()
-        s.stream = self.stream.isChecked()
+        s.stream, s.quiet_gate = self.stream.isChecked(), self.quiet.isChecked()
         s.mode = "ptt" if self.ptt.isChecked() else "continuous"
         s.ptt_key, s.quality, s.display = self.ptt_key.currentData(), self.quality.currentData(), self.display.currentData()
         s.save()

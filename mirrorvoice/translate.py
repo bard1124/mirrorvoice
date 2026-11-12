@@ -92,6 +92,37 @@ def is_filler(text: str) -> bool:
     return bool(words) and all(w in _FILLER_WORDS or w in _FILLER_CHARS for w in words)
 
 
+# Replies that stand on their own however short; anything else this short is a piece of a sentence
+_REPLY_WORDS = {"ok", "okay", "yes", "yeah", "yep", "no", "nope", "sure", "thanks", "thank", "you", "good", "great",
+                "right", "hello", "hi", "bye", "sorry", "please", "oh", "alright", "perfect", "exactly", "correct",
+                "nice", "cool", "fine", "problem", "welcome"}
+_REPLY_CHARS = set("好对是行的可以谢没有不嗯哦啊")
+
+
+def is_fragment(text: str) -> bool:
+    """True for a piece too short to mean anything alone ("And.", "His question is.", "Into a
+    start."): a speaker who pauses mid-sentence gets cut there, and such pieces were translated
+    one by one into nonsense (27 % of the other side's sentences in one meeting). Short replies
+    ("Okay.", "Thank you.", "好的") and questions ("Why first?") are whole."""
+    if "?" in text or "？" in text:
+        return False
+    words = _WORDS.findall(text.lower())
+    if not words:
+        return False
+    if all(w in _REPLY_WORDS or w in _REPLY_CHARS for w in words):
+        return False
+    return len(words) <= (3 if words[0].isascii() else 2)
+
+
+_LONE_O = re.compile(r"(?<![A-Za-z'])O{1,2}(?![A-Za-z'])")
+
+
+def tidy_asr(text: str) -> str:
+    """SenseVoice writes a spoken "OK" as a lone capital O ("It should be O.", 22 times in one
+    meeting, translated as "哦" or left as "O")."""
+    return _LONE_O.sub("OK", text)
+
+
 def system_prompt(src: str, tgt: str, subtitle: bool, meeting: str = "", concise: int = 0) -> str:
     s, t = LANGS[src].english, LANGS[tgt].english
     p = (f"You are a simultaneous interpreter. Translate the {s} speech transcript into natural, "
@@ -115,8 +146,13 @@ def system_prompt(src: str, tgt: str, subtitle: bool, meeting: str = "", concise
 
 def user_prompt(text: str, glossary: list[tuple[str, str]], continuation: bool = False) -> str:
     g = ""
-    if glossary:
-        g = "Use these fixed translations: " + "; ".join(f"{a} -> {b}" for a, b in glossary) + "\n\n"
+    keep = [a for a, b in glossary if a.lower() == b.lower()]  # names, product terms: the same on both sides
+    fixed = [(a, b) for a, b in glossary if a.lower() != b.lower()]
+    if fixed:
+        g = "Use these fixed translations: " + "; ".join(f"{a} -> {b}" for a, b in fixed) + "\n\n"
+    if keep:  # ("Danish -> Danish" was read as nothing to do, and the name came out as 丹麦人)
+        g += "These are names or product terms: copy them exactly as written, do not translate them: " \
+             + ", ".join(keep) + "\n\n"
     if continuation:
         return (f"{g}The speaker continues the same sentence. Translate ONLY this new part so that it reads "
                 f"naturally right after your previous output; do not repeat what you already said: {text}")

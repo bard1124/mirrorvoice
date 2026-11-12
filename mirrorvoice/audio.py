@@ -20,6 +20,16 @@ def resample(x: np.ndarray, sr_in: int, sr_out: int) -> np.ndarray:
     return np.interp(np.linspace(0, len(x), n, endpoint=False), np.arange(len(x)), x).astype(np.float32)
 
 
+def speech_level(x: np.ndarray, sr: int = ASR_SR) -> float:
+    """How loud the speech in a clip is: the 90th percentile of its 20 ms frame levels (rms) — the
+    level of its loud parts, however much silence surrounds them."""
+    n = sr // 50
+    frames = np.asarray(x, dtype=np.float32)[:len(x) // n * n].reshape(-1, n)
+    if not len(frames):
+        return 0.0
+    return float(np.percentile(np.sqrt((frames * frames).mean(axis=1)), 90))
+
+
 SILENCE_FLOOR = 0.004  # |sample| below this is silence whatever the voice's level
 
 

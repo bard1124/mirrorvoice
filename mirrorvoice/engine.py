@@ -16,16 +16,18 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable
 
+import numpy as np
+
 from . import models
 from .asr import SENTENCE_END, Listener, Utterance
-from .audio import Player, find_device, time_stretch, trim_silence
+from .audio import Player, find_device, speech_level, time_stretch, trim_silence
 from .config import LOG_FILE, Settings
 from . import hotkeys
 from .hotkeys import Hotkeys
 from .languages import LANGS
 from .transcript import Transcript
 from .online_llm import FailoverChat, OnlineChat, TranslateError
-from .translate import Translator, correct_asr, is_filler, local_backend, spoken_en
+from .translate import Translator, correct_asr, is_filler, is_fragment, local_backend, spoken_en, tidy_asr
 from .tts import make_voice
 
 Emit = Callable[..., None]  # emit(kind: str, **data)
@@ -105,6 +107,11 @@ class Engine:
         self._synth_idle = threading.Event()
         self._synth_idle.set()
         self._interim_tr, self._interim_busy, self._interim_at, self._them_gen = None, False, 0.0, 0
+        self._levels: deque = deque(maxlen=30)  # speech levels of my recent sentences
+        self._quiet_hits: list[float] = []      # when sounds were dropped as too quiet
+        self._quiet_told = 0.0
+        self._held: Utterance | None = None     # a short piece of the other side's sentence, waiting for the rest
+        self._held_timer: threading.Timer | None = None
         self._ready = False
         self.ptt_down = False
         self._jobs: queue.PriorityQueue = queue.PriorityQueue()
@@ -128,6 +135,9 @@ class Engine:
         self._ready = False
         self._interim_tr, self._interim_busy, self._interim_at, self._them_gen = None, False, 0.0, 0
         self._words = None
+        self._levels.clear()
+        self._quiet_hits, self._quiet_told = [], 0.0
+        self._take_held()
         self._prev = {"me": None, "them": None}  # (source, translation, t_end) of the last part
         self._hist = {"me": deque(maxlen=self.HISTORY_N + 1), "them": deque(maxlen=self.HISTORY_N + 1)}
         # A fresh queue per session: the previous worker may still be busy (and the previous
@@ -163,6 +173,8 @@ class Engine:
                 return
             self.running = False
             closers, self._closers = self._closers, []
+        self._take_held()
+        self._save_level()
         self._jobs.put((99, next(self._seq), "stop", None))
         for close in reversed(closers):
             try:
@@ -939,11 +951,16 @@ class Engine:
                       translate_s=0.0, passthrough=True)
             self._transcript.add("me", utt.text, "（原声透传）")
             self._settle_guess(None)
+            self._note_level(utt)
             return
         if is_filler(utt.text):  # "嗯。": nothing to say in the other language
             self._settle_guess(None)
             self.log(f"[me] 语气词，不翻译：{utt.text!r}")
             return
+        if self._too_quiet(utt):
+            self._settle_guess(None)
+            return
+        self._note_level(utt)
         if not self._settle_guess(utt):
             self._queue_me("me", utt, utt)
 
@@ -972,23 +989,123 @@ class Engine:
         sentence does end there. None: I went on — the guess is void."""
         self._settle_guess(None)
         s = self.s
-        if utt is None or s.mode == "ptt" or (utt.lang == s.their_lang and s.passthrough) or is_filler(utt.text):
+        if utt is None or s.mode == "ptt" or (utt.lang == s.their_lang and s.passthrough) or is_filler(utt.text) \
+                or self._too_quiet(utt, verdict=False):
             return
         job = _Speech(utt, 0.0, 0.0, guess=utt.guess, state="open")
         with self._lock:
             self._guess_job = job
         self._queue_me("guess", utt, job)
 
+    # ---- my microphone: sounds far quieter than my speech are not for the meeting
+    # A faint sound (someone talking nearby, a murmur) was once recognised as a Chinese sentence,
+    # translated and spoken into the meeting in my voice. My sentences sit within a few dB of each
+    # other; what arrives 14 dB below them is not me talking to the meeting.
+    QUIET_RATIO = 0.2
+    QUIET_STRIKES, QUIET_STRIKE_S = 4, 60.0  # this many in a row: I moved away from the microphone — relearn
+
+    def _usual_level(self) -> float:
+        if len(self._levels) >= 3:
+            return float(sorted(self._levels)[len(self._levels) // 2])
+        s = self.s
+        return s.speech_level if s.speech_level > 0 and s.speech_level_mic == s.mic else 0.0
+
+    def _note_level(self, utt: Utterance) -> None:
+        if len(re.sub(r"[\W_]+", "", utt.text)) >= 2:
+            self._levels.append(speech_level(utt.audio))
+            self._quiet_hits = []
+
+    def _too_quiet(self, utt: Utterance, verdict: bool = True) -> bool:
+        """verdict=False only asks (a guess: the finished sentence gets the verdict)."""
+        usual = self._usual_level()
+        if not self.s.quiet_gate or usual <= 0:
+            return False
+        level = speech_level(utt.audio)
+        if level >= self.QUIET_RATIO * usual:
+            return False
+        if not verdict:
+            return True
+        now = time.time()
+        self._quiet_hits = [t for t in self._quiet_hits if now - t < self.QUIET_STRIKE_S] + [now]
+        if len(self._quiet_hits) >= self.QUIET_STRIKES:
+            self.log(f"[me] 连续 {self.QUIET_STRIKES} 段都很轻：按新的音量重新学习（{level:.4f}，原来 {usual:.4f}）")
+            self._levels.clear()
+            self._levels.extend([level] * 3)
+            self._quiet_hits = []
+            return False
+        self.log(f"[me] 声音太轻，不翻译：{utt.text!r}（{level:.4f}，平时 {usual:.4f}）")
+        if now - self._quiet_told > 30:
+            self._quiet_told = now
+            self.emit("notice", text="有一段声音比你平时说话轻很多，没有翻译。如果是你在说话，请靠近麦克风；"
+                                     "这项检查可以在“功能”里关闭")
+        return True
+
+    def _save_level(self) -> None:
+        s = self.s
+        if len(self._levels) >= 5:
+            s.speech_level, s.speech_level_mic = round(self._usual_level(), 5), s.mic
+            try:
+                s.save()
+            except OSError:
+                pass
+
+    # ---- the other side: a short piece of a sentence waits for the rest
+    HOLD_S, HOLD_MAX_S = 0.8, 8.0
+
+    def _take_held(self) -> Utterance | None:
+        with self._lock:
+            held, self._held = self._held, None
+            if self._held_timer is not None:
+                self._held_timer.cancel()
+                self._held_timer = None
+        return held
+
+    def _hold(self, utt: Utterance, wait: float | None = None) -> None:
+        with self._lock:
+            self._held = utt
+            self._held_timer = threading.Timer(self.HOLD_S if wait is None else wait, self._release_held, (utt,))
+            self._held_timer.daemon = True
+            self._held_timer.start()
+
+    def _release_held(self, utt: Utterance) -> None:
+        """Nothing followed in time: the piece goes out alone — unless they are still talking."""
+        with self._lock:
+            if self._held is not utt or not self.running:
+                return
+            talking = self._them is not None and self._them.speaking()
+            if talking and time.time() - utt.t_end < self.HOLD_MAX_S:
+                self._hold(utt, 0.3)
+                return
+            self._held = self._held_timer = None
+        self._queue_them(utt)
+
+    def _queue_them(self, utt: Utterance) -> None:
+        self._jobs.put((1, next(self._seq), "them", utt))
+
     def _on_them(self, utt: Utterance) -> None:
         self._them_gen += 1  # provisional translations of this sentence are now out of date
-        if utt.lang in SIMILAR.get(self.s.my_lang, {self.s.my_lang}):
+        utt.text = tidy_asr(utt.text)
+        same = utt.lang in SIMILAR.get(self.s.my_lang, {self.s.my_lang})
+        held = self._take_held()
+        if held is not None:
+            if same or is_filler(utt.text):
+                self._queue_them(held)  # nothing to join it to
+            else:
+                sep = " " if held.text[-1:].isascii() else ""
+                utt = Utterance(held.text.rstrip(" .。,，") + sep + utt.text, utt.lang,
+                                np.concatenate([held.audio, utt.audio]), utt.t_end, utt.asr_s)
+                self.log(f"[them] 并入上一小段：{utt.text!r}")
+        if same:
             self.emit("them", src=utt.text, tgt=utt.text, latency=0.0)  # same language: show as-is
             self._transcript.add("them", utt.text, utt.text)
             return
         if is_filler(utt.text):
             self.log(f"[them] 语气词，不翻译：{utt.text!r}")
             return
-        self._jobs.put((1, next(self._seq), "them", utt))
+        if is_fragment(utt.text):
+            self._hold(utt)
+            return
+        self._queue_them(utt)
 
     def _on_ptt(self, down: bool) -> None:
         if self.s.mode != "ptt":

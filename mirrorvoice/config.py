@@ -203,6 +203,9 @@ class Settings:
     pause: float = 0.35             # silence that ends a sentence (0.5 before 0.8.4: 0.15 s slower)
     quality: str = "fast"           # "turbo" (smallest, weak machines) | "fast" | "quality" (bigger models)
     meeting_context: str = ""       # free-text background of the meeting, helps the translator pick terms
+    quiet_gate: bool = True         # sounds far quieter than my usual speech are not translated
+    speech_level: float = 0.0       # my usual speech level on speech_level_mic (learned, engine.py)
+    speech_level_mic: str = ""
     llm_mode: str = "local"         # translation: "local" (downloaded Qwen3) | "online" (API key, providers.py)
     llm_provider: str = "deepseek"  # providers.PRESETS id
     llm_model: str = ""             # "" = the provider's default model
