@@ -1,6 +1,6 @@
 """翻了么 MirrorVoice — local real-time speech translation in your own cloned voice."""
 
-__version__ = "0.8.20"
+__version__ = "0.8.21"
 APP_NAME = "翻了么"
 APP_ID = "MirrorVoice"
 
