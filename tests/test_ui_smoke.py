@@ -659,3 +659,41 @@ def test_the_switch_at_the_bottom_left_shows_and_hides_her_and_is_remembered(app
     assert not again.mascot_switch.isChecked() and again.mascot.isHidden()
     again.close()
 
+
+
+def test_three_looks_and_switching_between_them(app, settings, no_popups, monkeypatch):
+    from mirrorvoice.config import Settings
+    from mirrorvoice.ui import logview, main_window, theme
+
+    assert settings.theme == "quiet" and set(theme.THEMES) == {"quiet", "studio", "chat"}
+    for t in theme.THEMES.values():  # every token of the stylesheet has a value in every theme
+        css = theme.qss(t)
+        assert t.accent in css and t.bg in css and "{" not in css.replace("{ ", "").replace(" {", "").replace("{\n", "")
+    w = _window(main_window, settings, monkeypatch)
+    try:
+        w.resize(1100, 700)
+        w.show()
+        w._on_event("me", dict(src="大家好。", tgt="Hello everyone.", latency=1.2, asr_s=0.1, queue_s=0.0,
+                               translate_s=0.6, voice_s=0.5, passthrough=False))
+        w._on_event("them", dict(src="Any blockers?", tgt="有什么阻碍吗？", latency=0.6, asr_s=0.1, queue_s=0.0,
+                                 translate_s=0.5))
+        w._on_event("notice", dict(text="有一段声音很轻，没有翻译。"))
+        me, them, note = (w.log.item(w.log.count() - k) for k in (3, 2, 1))
+        assert me.data(logview.ROLE) == logview.entry("me", "大家好。", "Hello everyone.", "1.2s")
+        assert "翻译 0.6s" in me.text() and "翻译 0.6s" in me.toolTip()  # the full timing: text and tooltip
+        assert them.data(logview.ROLE)["who"] == "them" and note.data(logview.ROLE)["who"] == "note"
+
+        box, d, opt = w.theme_box, w.log.itemDelegate(), QtWidgets.QStyleOptionViewItem()
+        heights = {}
+        for key in ("studio", "chat", "quiet"):
+            box.setCurrentIndex(box.findData(key))
+            assert theme.current().key == key and Settings.load().theme == key  # at once, and remembered
+            assert theme.current().accent in app.styleSheet()
+            heights[key] = d.sizeHint(opt, w.log.indexFromItem(me)).height()
+            w.grab()  # every way of drawing a sentence paints without error
+        assert heights["chat"] > heights["quiet"]  # a bubble carries its time below it
+        assert theme.current().convo == "rows" and theme.STUDIO.convo == "cards" and theme.CHAT.convo == "bubbles"
+        assert theme.use(app, "no-such-look").key == "quiet"  # a setting from a newer version: the default
+    finally:
+        w.close()
+        theme.use(app, "quiet")

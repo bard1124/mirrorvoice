@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, 
                                QHeaderView, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
                                QSlider, QTableWidget, QTableWidgetItem, QVBoxLayout)
 
+from . import theme
 from ..config import Settings
 from ..languages import label
 from ..translate import load_glossary, save_glossary
@@ -191,13 +192,14 @@ class VoiceDialog(QDialog):
         row.addStretch()
         lay.addLayout(row)
         self.lang_hint = QLabel(wordWrap=True)
-        self.lang_hint.setStyleSheet("color: #9a6700;")
+        self.lang_hint.setStyleSheet(f"color: {theme.current().warn_fg};")
         lay.addWidget(self.lang_hint)
         self.prompt = QLabel(SAMPLE[self.lang.currentData()], wordWrap=True)
         self.lang.currentIndexChanged.connect(self._lang_changed)
         self._lang_changed()
-        self.prompt.setStyleSheet("font-size: 16px; padding: 12px; background: #F7F8FA; border: 1px solid #E8EAEE;"
-                                  " border-radius: 10px;")
+        t = theme.current()
+        self.prompt.setStyleSheet(f"font-size: 16px; padding: 12px; background: {t.bg_soft}; border: 1px solid {t.line};"
+                                  f" border-radius: {t.r2}px;")
         lay.addWidget(self.prompt)
         self.meter = QProgressBar(maximum=100, textVisible=False)
         lay.addWidget(self.meter)

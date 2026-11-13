@@ -8,6 +8,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QPlainTextEdit,
                                QProgressBar, QPushButton, QStackedWidget, QVBoxLayout, QWidget)
 
+from . import theme
 from .. import models, virtual_audio
 from ..config import IS_MAC, Settings, cpu_voice_reason, gpu_pack_installed, has_nvidia_gpu
 from ..languages import LANGS
@@ -204,14 +205,14 @@ class Wizard(QDialog):
     def _on_dl_done(self, err: str) -> None:
         if err:
             self.dl_status.setText(f"❌ 下载中断：{err[:160]}\n已下载的部分会保留，检查网络后点“重试”继续。")
-            self.dl_status.setStyleSheet("font-size: 14px; color: #c62828;")
+            self.dl_status.setStyleSheet(f"font-size: 14px; color: {theme.current().danger_fg};")
             self.dl_btn.show()
             return
         if not DownloadManager.missing(self.s.quality):
             self.dl_total.setValue(1000)
             self.dl_total.setFormat("全部就绪")
             self.dl_status.setText("✅ 模型全部下载完成")
-            self.dl_status.setStyleSheet("font-size: 14px; color: #1a9e4b;")
+            self.dl_status.setStyleSheet(f"font-size: 14px; color: {theme.current().ok_fg};")
             self.dl_btn.hide()
             for pb in self.m_rows.values():
                 pb.setValue(1000)

@@ -15,7 +15,7 @@ from .. import __version__, updater
 from ..config import Settings
 from .bridge import Bridge
 from .mascot import UpdateMascot
-from .theme import ACCENT
+from . import theme
 
 
 def mb(n: int) -> str:
@@ -56,9 +56,9 @@ class Spinner(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         box = QRectF(self.rect()).adjusted(3, 3, -3, -3)
-        p.setPen(QPen(QColor("#EEF0F3"), 3))
+        p.setPen(QPen(QColor(theme.current().pressed), 3))
         p.drawEllipse(box)
-        pen = QPen(QColor(ACCENT), 3)
+        pen = QPen(QColor(theme.current().accent), 3)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         p.setPen(pen)
         p.drawArc(box, int(-16 * self.angle()) + 16 * 90, -16 * 100)  # clockwise, from the top

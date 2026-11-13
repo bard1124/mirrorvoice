@@ -24,6 +24,8 @@ from .checkup import MeetingGuideDialog, SelfTestDialog
 from .convo import ConversationWindow
 from .dialogs import GlossaryDialog, StyleDialog, VoiceDialog
 from .icons import app_icon
+from . import theme
+from .logview import ROLE, ConvoDelegate, entry
 from .mascot import Mascot
 from .switch import Switch
 from .theme import card, repolish
@@ -288,6 +290,8 @@ class MainWindow(QMainWindow):
         self.log.setWordWrap(True)
         self.log.setResizeMode(QListWidget.ResizeMode.Adjust)  # rewrap rows when the column changes width
         self.log.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.log.setItemDelegate(ConvoDelegate(self.log))  # rows, cards or bubbles: the theme's choice
+        self.log.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
         self.log.setMinimumHeight(200)
         tv.addWidget(self.log, 1)
         cl.addStretch()
@@ -400,7 +404,18 @@ class MainWindow(QMainWindow):
                 b.clicked.connect(getattr(self, fn))
             v.addWidget(b)
         v.addStretch()
-        # bottom left: her on / off
+        # bottom left: the look, and her on / off
+        look = QHBoxLayout()
+        look.setContentsMargins(4, 0, 4, 6)
+        self.theme_box = QComboBox()
+        self.theme_box.setAccessibleName("界面风格")
+        for t in theme.THEMES.values():
+            self.theme_box.addItem(f"风格 · {t.name}", t.key)
+        self.theme_box.setCurrentIndex(max(0, self.theme_box.findData(theme.current().key)))
+        self.theme_box.setToolTip("静场：极简浅色 · 调音台：深色专业 · 对话：亲和圆润（气泡）")
+        self.theme_box.currentIndexChanged.connect(self._use_theme)
+        look.addWidget(self.theme_box, 1)
+        v.addLayout(look)
         row = QHBoxLayout()
         row.setContentsMargins(14, 0, 4, 0)
         self.mascot_label = QLabel("虚拟形象", objectName="sideOption")
@@ -412,6 +427,15 @@ class MainWindow(QMainWindow):
         row.addWidget(self.mascot_switch)
         v.addLayout(row)
         return side
+
+    def _use_theme(self, *_) -> None:
+        key = self.theme_box.currentData()
+        theme.use(QApplication.instance(), key)
+        self.s.theme = key
+        self.s.save()
+        if hasattr(self, "log"):  # sentences are laid out again: a bubble is not as tall as a row
+            self.log.doItemsLayout()
+            self.log.scrollToBottom()
 
     def _show_mascot(self, on: bool) -> None:
         self.mascot.setVisible(on)
@@ -685,23 +709,30 @@ class MainWindow(QMainWindow):
         elif kind == "me":
             tag = "我·原声" if d["passthrough"] else "我"
             timing = f"{d['latency']:.1f}s" if d["passthrough"] else breakdown(d)
-            self._add(f"{tag}  {d['src']}\n→ {d['tgt']}   ({timing})", "#1f6feb")
+            took = f"{d['latency']:.1f}s"
+            self._add(f"{tag}  {d['src']}\n→ {d['tgt']}   ({timing})", "me",
+                      entry("me_raw", "原声透传", d["src"], took) if d["passthrough"]
+                      else entry("me", d["src"], d["tgt"], took), tip=timing)
             if not d.get("failed"):
                 self.lat_stats.add(d)
             self.lat_label.setText(self.lat_stats.summary("online" if self.s.llm_mode == "online" else self.s.quality))
             self.lat_label.setVisible(bool(self.lat_label.text()))
             self.convo.add("me", d["src"], d["tgt"], d["passthrough"])
         elif kind == "them":
-            self._add(f"对方  {d['src']}\n→ {d['tgt']}   ({breakdown(d)})", "#8250df", replace_live=True)
+            same = d["tgt"] == d["src"]  # they spoke my language: nothing to translate
+            took = f"{d['latency']:.1f}s" if d.get("latency") else ""
+            self._add(f"对方  {d['src']}\n→ {d['tgt']}   ({breakdown(d)})", "them",
+                      entry("them", "" if same else d["src"], d["tgt"], took), replace_live=True, tip=breakdown(d))
             self.overlay.show_text(d["tgt"], d["src"] if d["tgt"] != d["src"] else "")
             self.convo.add("them", d["src"], d["tgt"])
         elif kind == "partial":
             if d["who"] == "them":  # online recognition: the sentence as it is being spoken
                 self.overlay.show_partial(d["src"], d.get("tgt", ""))
                 if d.get("tgt"):  # its translation so far: a provisional row the final one replaces
-                    self._add(f"对方  {d['src']}\n→ {d['tgt']}", "#a98bd9", live=True)
+                    self._add(f"对方  {d['src']}\n→ {d['tgt']}", "live", entry("them", d["src"], d["tgt"], live=True),
+                              live=True)
         elif kind == "notice":
-            self._add(f"提示  {d['text']}", "#8a8a8a")
+            self._add(f"提示  {d['text']}", "note", entry("note", f"提示  {d['text']}"))
         elif kind == "mute":
             self.mascot.set_muted(d["muted"])
             self.mute_btn.blockSignals(True)
@@ -727,17 +758,25 @@ class MainWindow(QMainWindow):
                 self.overlay.hide()
             self.tray.refresh()
 
-    def _add(self, text: str, color: str, live: bool = False, replace_live: bool = False) -> None:
-        """live: the other side's sentence still being translated — kept in one row that later
-        updates and finally the finished translation (replace_live) overwrite."""
+    def _add(self, text: str, kind: str, data: dict | None = None, live: bool = False,
+             replace_live: bool = False, tip: str = "") -> None:
+        """kind: me | them | live | note. data: what the row is made of, for the theme's way of
+        drawing it (logview.entry). live: the other side's sentence still being translated — kept
+        in one row that later updates and finally the finished translation (replace_live) overwrite."""
+        t = theme.current()
+        color = {"me": t.me, "them": t.them, "live": t.live}.get(kind, t.text_2)
         it = getattr(self, "_live_item", None)
         if it is not None and (live or replace_live) and self.log.row(it) >= 0:
             it.setText(text)
+            it.setData(ROLE, data)
+            it.setToolTip(tip)
             it.setForeground(QColor(color))
             self._live_item = None if replace_live else it
             self.log.scrollToBottom()
             return
         it = QListWidgetItem(text)
+        it.setData(ROLE, data)
+        it.setToolTip(tip)
         it.setForeground(QColor(color))
         if live or replace_live:  # my own rows in between leave the provisional one where it is
             self._live_item = it if live else None

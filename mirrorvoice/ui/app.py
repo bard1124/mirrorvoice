@@ -49,7 +49,7 @@ def run_gui(argv: list[str] | None = None) -> int:
         confirm_boot()
 
         app = QApplication(argv)
-        theme.apply(app)
+        theme.apply(app, s.theme)
         app.setWindowIcon(app_icon())
         app.setQuitOnLastWindowClosed(False)
         return run_cli(app)
@@ -75,7 +75,7 @@ def run_gui(argv: list[str] | None = None) -> int:
 
     app = QApplication(argv)
     app.setApplicationName("翻了么")
-    theme.apply(app)
+    theme.apply(app, s.theme)
     app.setWindowIcon(app_icon())
     from .main_window import MainWindow
     from .wizard import Wizard

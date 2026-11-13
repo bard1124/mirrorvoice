@@ -5,12 +5,11 @@ from PySide6.QtCore import QEasingCurve, QRectF, QSize, Qt, QVariantAnimation
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QAbstractButton, QWidget
 
-from .theme import ACCENT
+from . import theme
 
 
 class Switch(QAbstractButton):
     W, H, PAD = 36, 20, 2
-    OFF, OFF_HOVER = "#C9CDD4", "#B4BAC4"
 
     def __init__(self, checked: bool = False, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -47,13 +46,16 @@ class Switch(QAbstractButton):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         track = QRectF(0, (self.height() - self.H) / 2, self.W, self.H)
-        off, on = QColor(self.OFF_HOVER if self.underMouse() else self.OFF), QColor(ACCENT)
-        t = self._pos
+        t = theme.current()
+        off, on = QColor(t.switch_off), QColor(t.accent)
+        if self.underMouse():
+            off = off.darker(112)
+        k = self._pos
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(*(round(a + (b - a) * t) for a, b in zip(off.getRgb()[:3], on.getRgb()[:3]))))
+        p.setBrush(QColor(*(round(a + (b - a) * k) for a, b in zip(off.getRgb()[:3], on.getRgb()[:3]))))
         p.setOpacity(1.0 if self.isEnabled() else 0.5)
         p.drawRoundedRect(track, self.H / 2, self.H / 2)
         d = self.H - 2 * self.PAD
         p.setBrush(QColor("white"))
-        p.drawEllipse(QRectF(track.x() + self.PAD + t * (self.W - d - 2 * self.PAD), track.y() + self.PAD, d, d))
+        p.drawEllipse(QRectF(track.x() + self.PAD + k * (self.W - d - 2 * self.PAD), track.y() + self.PAD, d, d))
         p.end()
