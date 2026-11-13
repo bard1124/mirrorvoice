@@ -183,6 +183,14 @@ QPushButton#nav:hover {{ background: {CHIP}; }}
 QPushButton#nav:checked {{ background: {NAV_ON_BG}; color: {NAV_ON_FG}; font-weight: 600; }}
 
 QLabel#h1 {{ font-size: 20px; font-weight: 700; }}
+QFrame#topbar {{ background: {BG_SIDE}; border: none; border-bottom: 1px solid {LINE}; }}
+QFrame#topbar QPushButton#nav {{ padding: 8px 11px; }}
+QFrame#rail {{ background: transparent; border: none; }}
+QFrame#chain {{ background: transparent; border: none; }}
+QFrame#cell {{ background: {SURFACE}; border: 1px solid {LINE}; border-radius: {R2}px; }}
+QFrame#cellOn {{ background: {ACCENT_SOFT}; border: 1px solid {ACCENT}; border-radius: {R2}px; }}
+QLabel#cellCaption {{ font-size: 12px; color: {TEXT_2}; }}
+QLabel#cellValue {{ font-size: 14px; font-weight: 600; }}
 QLabel#status {{ padding: 5px 12px; border-radius: 13px; background: {CHIP}; color: {TEXT_2}; font-size: 13px; }}
 QLabel#status[state="running"] {{ background: {OK_BG}; color: {OK_FG}; }}
 QLabel#status[state="busy"] {{ background: {BUSY_BG}; color: {BUSY_FG}; }}

@@ -697,3 +697,55 @@ def test_three_looks_and_switching_between_them(app, settings, no_popups, monkey
     finally:
         w.close()
         theme.use(app, "quiet")
+
+
+def test_each_look_has_its_own_layout_made_of_the_same_controls(app, settings, no_popups, monkeypatch):
+    """静场: conversation in the middle, settings at the right. 调音台: navigation across the top, the
+    time of each stage, my side and theirs in two lists. 对话: languages at the top, start under the
+    conversation. Switching moves the very same controls: nothing set or said is lost."""
+    from mirrorvoice.ui import main_window, theme
+
+    w = _window(main_window, settings, monkeypatch)
+    try:
+        w.resize(1280, 800)
+        w.show()
+        at = lambda x: x.mapTo(w, x.rect().center())  # noqa: E731
+        w._on_event("me", dict(src="大家好。", tgt="Hello everyone.", latency=1.2, asr_s=0.1, queue_s=0.0,
+                               translate_s=0.6, voice_s=0.5, passthrough=False))
+        w._on_event("partial", dict(who="them", src="Any block", tgt="有什么 …", live=True))
+        w._on_event("them", dict(src="Any blockers?", tgt="有什么阻碍吗？", latency=0.6, asr_s=0.1, queue_s=0.0,
+                                 translate_s=0.5))
+        assert (w.log.count(), w.log_me.count(), w.log_them.count()) == (2, 1, 1)  # the partial row became the sentence
+        w.stream.setChecked(True)
+        controls = (w.start_btn, w.mute_btn, w.my, w.their, w.mic, w.call, w.speak, w.stream, w.theme_box, w.mascot_switch)
+        ids = [id(c) for c in controls]
+
+        def use(key):
+            w.theme_box.setCurrentIndex(w.theme_box.findData(key))
+            app.processEvents()
+            assert w._layout_key == key and [id(c) for c in controls] == ids
+            assert all(c.isVisible() for c in controls), key  # every control found its place again
+            assert w.stream.isChecked() and w.lat_label.isVisible() and not w.mascot.isVisible()
+            w.grab()
+
+        use("studio")
+        assert at(w.nav["_glossary"]).y() < 60 and at(w.start_btn).y() < 60  # pages and start across the top
+        assert w.chain.isVisible() and w._chain_vals["total"].text() == "1.2 s" and w._chain_vals["tr"].text() == "0.6 s"
+        assert w.log_me.isVisible() and w.log_them.isVisible() and not w.log.isVisible()
+        assert at(w.log_me).x() < at(w.log_them).x() < at(w.mic).x()  # my side, theirs, then the settings
+
+        use("chat")
+        assert at(w.my).y() < 70 and at(w.their).y() < 70  # the two languages head the window
+        assert w.log.isVisible() and not w.log_me.isVisible() and not w.chain.isVisible()
+        assert at(w.start_btn).y() > at(w.log).y() and at(w.start_btn).x() < at(w.mic).x()  # docked under the conversation
+        assert at(w.nav["_glossary"]).x() < at(w.log).x()
+
+        use("quiet")
+        assert at(w.nav["_glossary"]).x() < 176 and at(w.log).x() < at(w.mic).x()  # conversation first, settings right
+        assert w.log.isVisible() and not w.chain.isVisible() and at(w.start_btn).y() < 80
+        w.resize(820, 700)  # a narrow window: the settings go under the conversation
+        app.processEvents()
+        assert at(w.mic).y() > at(w.log).y()
+    finally:
+        w.close()
+        theme.use(app, "quiet")

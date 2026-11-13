@@ -76,242 +76,9 @@ class MainWindow(QMainWindow):
            ("会议记录", "_open_transcripts"), ("设置向导", "_wizard"), ("检查更新", "_check_updates"))
 
     def _build(self) -> None:
-        root = QWidget()
-        outer = QHBoxLayout(root)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
-        outer.addWidget(self._sidebar())
-
-        content = QWidget(objectName="content")
-        lay = QVBoxLayout(content)
-        lay.setContentsMargins(28, 20, 28, 20)
-        lay.setSpacing(12)
-
-        top = QHBoxLayout()
-        top.setSpacing(12)
-        top.addWidget(QLabel("同传", objectName="h1"))
-        self.status = QLabel("● 已停止", objectName="status")
-        top.addWidget(self.status)
-        top.addStretch()
-        self.mute_btn = QPushButton("静音")
-        self.mute_btn.setCheckable(True)
-        self.mute_btn.setMinimumHeight(40)
-        self.mute_btn.toggled.connect(self.engine.set_muted)
-        self.start_btn = QPushButton("开始", objectName="primary")
-        self.start_btn.clicked.connect(self._toggle)
-        top.addWidget(self.mute_btn)
-        top.addWidget(self.start_btn)
-        lay.addLayout(top)
-
-        # model status banner: always tells whether models are ready / downloading / failed
-        self.banner = QFrame(objectName="banner")
-        bl = QHBoxLayout(self.banner)
-        bl.setContentsMargins(14, 8, 14, 8)
-        self.banner_text = QLabel()
-        self.banner_bar = QProgressBar(maximum=1000)
-        self.banner_bar.setMaximumHeight(8)
-        self.banner_bar.setTextVisible(False)
-        self.banner_btn = QPushButton("下载模型")
-        self.banner_btn.clicked.connect(lambda: self.dm.start(self.s.quality))
-        bl.addWidget(self.banner_text, 1)
-        bl.addWidget(self.banner_bar, 1)
-        bl.addWidget(self.banner_btn)
-        lay.addWidget(self.banner)
-
-        # settings cards on the left (scrolling on their own), the conversation on the right at full
-        # height; a narrow window stacks them (_fit_layout)
-        settings = QWidget(objectName="content")
-        cl = QVBoxLayout(settings)
-        cl.setContentsMargins(0, 0, 4, 0)
-        cl.setSpacing(12)
-
-        g, h0 = card("语言")
-        h = QHBoxLayout()
-        self.my, self.their = QComboBox(), QComboBox()
-        for c, lg in LANGS.items():
-            self.my.addItem(lg.label, c)
-            if lg.tts:
-                self.their.addItem(lg.label, c)
-        swap = QPushButton("⇄")
-        swap.setFixedWidth(40)
-        swap.setToolTip("交换两种语言")
-        swap.clicked.connect(self._swap)
-        h.addWidget(QLabel("我说", objectName="muted"))
-        h.addWidget(self.my, 1)
-        h.addWidget(swap)
-        h.addWidget(QLabel("对方说", objectName="muted"))
-        h.addWidget(self.their, 1)
-        h0.addLayout(h)
-        cl.addWidget(g)
-
-        g, body = card()
-        tr_ = QHBoxLayout()
-        tr_.addWidget(QLabel("声音设备", objectName="cardTitle"))
-        tr_.addStretch()
-        self.test_btn = QPushButton("测试链路")
-        self.test_btn.setToolTip("不用开会，检查对方能否听到翻译、字幕能否出来（翻译运行时不可用）")
-        self.test_btn.clicked.connect(self._selftest)
-        guide = QPushButton("会议软件设置")
-        guide.clicked.connect(lambda: MeetingGuideDialog(self).exec())
-        rb = QPushButton("刷新设备")
-        rb.clicked.connect(self._load_devices)
-        tr_.addWidget(self.test_btn)
-        tr_.addWidget(guide)
-        tr_.addWidget(rb)
-        body.addLayout(tr_)
-        f = QFormLayout()
-        f.setHorizontalSpacing(16)
-        f.setVerticalSpacing(6)
-        self.mic, self.call, self.mon, self.src = QComboBox(), QComboBox(), QComboBox(), QComboBox()
-        f.addRow(QLabel("我的麦克风", objectName="muted"), self.mic)
-        f.addRow(QLabel("送进会议（虚拟麦克风）", objectName="muted"), self.call)
-        f.addRow(QLabel("我自己监听（耳机）", objectName="muted"), self.mon)
-        f.addRow(QLabel("对方声音来源", objectName="muted"), self.src)
-        body.addLayout(f)
-        self.dev_warn = QLabel(objectName="devWarn", wordWrap=True)  # problems with the current choice
-        self.dev_warn.hide()
-        body.addWidget(self.dev_warn)
-        # macOS: the meeting-speaker multi-output still points at the old headphones
-        self.multi_fix = QFrame(objectName="banner")
-        mh_ = QHBoxLayout(self.multi_fix)
-        mh_.setContentsMargins(12, 8, 8, 8)
-        self.multi_fix_text = QLabel(wordWrap=True)
-        self.multi_fix_btn = QPushButton()
-        self.multi_fix_btn.clicked.connect(self._rebuild_multi_output)
-        mh_.addWidget(self.multi_fix_text, 1)
-        mh_.addWidget(self.multi_fix_btn)
-        self.multi_fix.hide()
-        body.addWidget(self.multi_fix)
-        self._multi_target = ""
-        cl.addWidget(g)
-
-        g, v = card("功能")
-        self.speak = QCheckBox("用我的声音说出翻译（送进会议）")
-        self.subs = QCheckBox("对方说话显示翻译字幕")
-        self.passthru = QCheckBox("我直接说对方的语言时，透传原声不翻译")
-        self.stream = QCheckBox("边说边译（实验）：一句话说到逗号就先翻译，长句更快开口")
-        self.stream.setToolTip("说话途中每 0.4 秒识别一次，稳定的分句先送去翻译。长句子明显更快，"
-                               "但译文会碎一些，已经念出的部分不能改。全部在本机完成。")
-        self.quiet = QCheckBox("比我平时说话轻很多的声音不翻译（旁人说话、杂音不会被念进会议）")
-        self.quiet.setToolTip("翻了么会记住你平时说话的音量；明显更轻的声音（约低 14 分贝以上）不翻译、不出声。"
-                              "连续几段都很轻时，会认为是你离麦克风远了，自动按新的音量重新学习。")
-        for w in (self.speak, self.subs, self.passthru, self.quiet, self.stream):
-            v.addWidget(w)
-        mh = QHBoxLayout()
-        self.cont, self.ptt = QRadioButton("持续翻译"), QRadioButton("按住说话")
-        bg = QButtonGroup(self)
-        bg.addButton(self.cont)
-        bg.addButton(self.ptt)
-        self.ptt_key = QComboBox()
-        for k, name in PTT_KEYS.items():
-            self.ptt_key.addItem(name, k)
-        mh.addWidget(self.cont)
-        mh.addWidget(self.ptt)
-        mh.addWidget(self.ptt_key)
-        mh.addStretch()
-        v.addLayout(mh)
-        oh = QHBoxLayout()
-        oh.setSpacing(8)
-        self.quality = QComboBox()
-        for i, q in enumerate(models.QUALITIES):
-            self.quality.addItem(f"{models.QUALITY_LABEL[q]}（{models.llm_name(q)}）", q)
-            tip = models.summary(q) + ("\n速度约快一倍，但翻译质量明显较低，适合 8 GB 内存或老电脑" if q == "turbo" else "")
-            self.quality.setItemData(i, tip, Qt.ItemDataRole.ToolTipRole)
-        self.display = QComboBox()
-        self.display.addItem("图形界面", "ui")
-        self.display.addItem("命令行风格", "cli")
-        oh.addWidget(QLabel("模型", objectName="muted"))
-        oh.addWidget(self.quality, 1)
-        oh.addWidget(QLabel("显示方式", objectName="muted"))
-        oh.addWidget(self.display, 1)
-        v.addLayout(oh)
-        oh = QHBoxLayout()
-        self.llm_btn = QPushButton(objectName="link")  # 翻译：本地模型 / 翻译：在线 · DeepSeek
-        self.llm_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.llm_btn.setToolTip("用本地模型，或填 API key 改用在线模型翻译")
-        self.llm_btn.clicked.connect(self._online)
-        oh.addWidget(self.llm_btn)
-        oh.addStretch()
-        v.addLayout(oh)
-        self._refresh_llm_label()
-        oh = QHBoxLayout()  # voice options on their own row so the card never forces the window wider
-        oh.setSpacing(8)
-        from ..config import cuda_voice_ok, has_nvidia_gpu
-
-        self.gpu_voice = QComboBox()
-        self.gpu_voice.addItem("自动（RTX 30 系及以上）", "auto")
-        self.gpu_voice.addItem("强制使用（旧卡会很慢）", "cuda")
-        self.gpu_voice.addItem("不使用", "cpu")
-        self.gpu_voice.setCurrentIndex(max(0, self.gpu_voice.findData(self.s.gpu_voice)))
-        self.gpu_voice.currentIndexChanged.connect(
-            lambda: (setattr(self.s, "gpu_voice", self.gpu_voice.currentData()), self.s.save(), self._refresh_banner(),
-                     self.engine.reload_voice()))
-        if not IS_MAC and has_nvidia_gpu():
-            oh.addWidget(QLabel("GPU 音色", objectName="muted"))
-            oh.addWidget(self.gpu_voice, 1)
-        self.cpu_voice = QComboBox()
-        self.cpu_voice.addItem("我的克隆音色（CPU，英文样本）", "clone")
-        self.cpu_voice.addItem("标准音色", "standard")
-        self.cpu_voice.setCurrentIndex(max(0, self.cpu_voice.findData(self.s.cpu_voice)))
-        self.cpu_voice.currentIndexChanged.connect(
-            lambda: (setattr(self.s, "cpu_voice", self.cpu_voice.currentData()), self.s.save(), self._refresh_banner(),
-                     self.engine.reload_voice()))
-        if not IS_MAC and not cuda_voice_ok(self.s.gpu_voice):  # Windows without a usable CUDA voice
-            oh.addWidget(QLabel("音色", objectName="muted"))
-            oh.addWidget(self.cpu_voice, 1)
-        if oh.count():
-            v.addLayout(oh)
-        self.auto_upd = QCheckBox("启动时检查更新（离线时自动跳过）")
-        self.auto_upd.setChecked(self.s.auto_check_update)
-        self.auto_upd.toggled.connect(lambda on: (setattr(self.s, "auto_check_update", on), self.s.save()))
-        v.addWidget(self.auto_upd)
-        hk = self.s.mute_hotkey.replace("<ctrl>", "⌃" if IS_MAC else "Ctrl+").replace("<alt>", "⌥" if IS_MAC else "Alt+").replace("+", "").upper() if IS_MAC else self.s.mute_hotkey.replace("<", "").replace(">", "").title()
-        v.addWidget(QLabel(f"静音快捷键：{hk}　（全局快捷键需要系统“辅助功能/输入监控”权限）", objectName="muted"))
-        cl.addWidget(g)
-
-        g, tv = card()
-        th = QHBoxLayout()
-        th.addWidget(QLabel("对话", objectName="cardTitle"))
-        th.addSpacing(16)
-        self.lv_me, self.lv_them = QProgressBar(maximum=100, textVisible=False), QProgressBar(maximum=100, textVisible=False)
-        for w in (self.lv_me, self.lv_them):
-            w.setFixedHeight(6)
-            w.setMinimumWidth(80)
-        th.addWidget(QLabel("我", objectName="muted"))
-        th.addWidget(self.lv_me, 1)
-        th.addSpacing(8)
-        th.addWidget(QLabel("对方", objectName="muted"))
-        th.addWidget(self.lv_them, 1)
-        tv.addLayout(th)
-        self.lat_label = QLabel(objectName="muted", wordWrap=True)  # rolling latency summary
-        self.lat_label.hide()
-        tv.addWidget(self.lat_label)
-        self.log = QListWidget(objectName="log")
-        self.log.setWordWrap(True)
-        self.log.setResizeMode(QListWidget.ResizeMode.Adjust)  # rewrap rows when the column changes width
-        self.log.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.log.setItemDelegate(ConvoDelegate(self.log))  # rows, cards or bubbles: the theme's choice
-        self.log.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
-        self.log.setMinimumHeight(200)
-        tv.addWidget(self.log, 1)
-        cl.addStretch()
-
-        scroll = QScrollArea(objectName="page")  # the settings scroll when the window is short
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setWidget(settings)
-        self._settings_scroll, self._convo_card = scroll, g
-        self._body = QBoxLayout(QBoxLayout.Direction.LeftToRight)
-        self._body.setSpacing(16)
-        self._body.addWidget(scroll, 5)
-        self._body.addWidget(g, 6)
-        lay.addLayout(self._body, 1)
-        outer.addWidget(content, 1)
-        self.setCentralWidget(root)
+        self._make_widgets()
         self.resize(1320, 860)
-        self.setMinimumSize(760, 560)
-        self._fit_layout()
+        self._arrange()
         self._center_on_screen()
 
         # load settings into widgets, save on any change
@@ -334,6 +101,524 @@ class MainWindow(QMainWindow):
         self.display.currentIndexChanged.connect(self._display_changed)
         for role, combo, _ in self._device_combos():
             combo.currentIndexChanged.connect(lambda _i, role=role: self._device_picked(role))
+        for combo in (self.mic, self.call):
+            combo.currentIndexChanged.connect(self._refresh_chain)
+
+    # ---- the pieces, made once
+    def _make_widgets(self) -> None:
+        """Everything that holds state or is talked to. _arrange() places these in the theme's
+        layout, and again when the theme changes: only frames, rows and plain labels are made anew."""
+        s = self.s
+        self._attic = QWidget(self)  # where the pieces wait while a layout is rebuilt (or does not use them)
+        self._attic.hide()
+        self._atoms: list[QWidget] = []
+
+        def keep(*ws):
+            self._atoms.extend(ws)
+            return ws[0] if len(ws) == 1 else ws
+
+        # brand and navigation. The owl girl dozes while stopped, cheers on start, types / waves while people talk
+        self.mascot = keep(Mascot(100, 120))
+        self.mascot.setVisible(s.mascot)
+        self.brand = keep(QLabel("翻了么", objectName="brand"))
+        self.brand_sub = keep(QLabel(f"MirrorVoice · v{__version__}", objectName="brandSub"))
+        self.nav_main = None
+        self.nav = {}
+        for text, fn in self.NAV:
+            b = self.nav[fn] = keep(QPushButton(text, objectName="nav"))
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            if fn is None:
+                b.setCheckable(True)
+                b.setChecked(True)
+                self.nav_main = b
+            else:
+                b.clicked.connect(getattr(self, fn))
+        self.theme_box = keep(QComboBox())
+        self.theme_box.setAccessibleName("界面风格")
+        for t in theme.THEMES.values():
+            self.theme_box.addItem(f"风格 · {t.name}", t.key)
+        self.theme_box.setCurrentIndex(max(0, self.theme_box.findData(theme.current().key)))
+        self.theme_box.setToolTip("静场：极简浅色 · 调音台：深色专业 · 对话：亲和圆润（气泡）")
+        self.theme_box.currentIndexChanged.connect(self._use_theme)
+        self.mascot_label = keep(QLabel("虚拟形象", objectName="sideOption"))
+        self.mascot_switch = keep(Switch(s.mascot))
+        self.mascot_switch.setToolTip("显示或隐藏虚拟形象（更新时的动画也跟着开关）")
+        self.mascot_switch.toggled.connect(self._show_mascot)
+
+        # the page's head
+        self.h1 = keep(QLabel("同传", objectName="h1"))
+        self.status = keep(QLabel("● 已停止", objectName="status"))
+        self.mute_btn = keep(QPushButton("静音"))
+        self.mute_btn.setCheckable(True)
+        self.mute_btn.setMinimumHeight(40)
+        self.mute_btn.toggled.connect(self.engine.set_muted)
+        self.start_btn = keep(QPushButton("开始", objectName="primary"))
+        self.start_btn.clicked.connect(self._toggle)
+
+        # model status banner: always tells whether models are ready / downloading / failed
+        self.banner = keep(QFrame(objectName="banner"))
+        bl = QHBoxLayout(self.banner)
+        bl.setContentsMargins(14, 8, 14, 8)
+        self.banner_text = QLabel()
+        self.banner_bar = QProgressBar(maximum=1000)
+        self.banner_bar.setMaximumHeight(8)
+        self.banner_bar.setTextVisible(False)
+        self.banner_btn = QPushButton("下载模型")
+        self.banner_btn.clicked.connect(lambda: self.dm.start(self.s.quality))
+        bl.addWidget(self.banner_text, 1)
+        bl.addWidget(self.banner_bar, 1)
+        bl.addWidget(self.banner_btn)
+
+        # languages
+        self.my, self.their = keep(QComboBox(), QComboBox())
+        for c, lg in LANGS.items():
+            self.my.addItem(lg.label, c)
+            if lg.tts:
+                self.their.addItem(lg.label, c)
+        self.swap_btn = keep(QPushButton("⇄"))
+        self.swap_btn.setFixedWidth(40)
+        self.swap_btn.setToolTip("交换两种语言")
+        self.swap_btn.clicked.connect(self._swap)
+
+        # sound devices
+        self.test_btn = keep(QPushButton("测试链路"))
+        self.test_btn.setToolTip("不用开会，检查对方能否听到翻译、字幕能否出来（翻译运行时不可用）")
+        self.test_btn.clicked.connect(self._selftest)
+        self.guide_btn = keep(QPushButton("会议软件设置"))
+        self.guide_btn.clicked.connect(lambda: MeetingGuideDialog(self).exec())
+        self.refresh_btn = keep(QPushButton("刷新设备"))
+        self.refresh_btn.clicked.connect(self._load_devices)
+        self.mic, self.call, self.mon, self.src = keep(QComboBox(), QComboBox(), QComboBox(), QComboBox())
+        self.dev_warn = keep(QLabel(objectName="devWarn", wordWrap=True))  # problems with the current choice
+        self.dev_warn.hide()
+        # macOS: the meeting-speaker multi-output still points at the old headphones
+        self.multi_fix = keep(QFrame(objectName="banner"))
+        mh_ = QHBoxLayout(self.multi_fix)
+        mh_.setContentsMargins(12, 8, 8, 8)
+        self.multi_fix_text = QLabel(wordWrap=True)
+        self.multi_fix_btn = QPushButton()
+        self.multi_fix_btn.clicked.connect(self._rebuild_multi_output)
+        mh_.addWidget(self.multi_fix_text, 1)
+        mh_.addWidget(self.multi_fix_btn)
+        self.multi_fix.hide()
+        self._multi_target = ""
+
+        # what it does
+        self.speak = keep(QCheckBox("用我的声音说出翻译（送进会议）"))
+        self.subs = keep(QCheckBox("对方说话显示翻译字幕"))
+        self.passthru = keep(QCheckBox("我直接说对方的语言时，透传原声不翻译"))
+        self.stream = keep(QCheckBox("边说边译（实验）：一句话说到逗号就先翻译，长句更快开口"))
+        self.stream.setToolTip("说话途中每 0.4 秒识别一次，稳定的分句先送去翻译。长句子明显更快，"
+                               "但译文会碎一些，已经念出的部分不能改。全部在本机完成。")
+        self.quiet = keep(QCheckBox("比我平时说话轻很多的声音不翻译（旁人说话、杂音不会被念进会议）"))
+        self.quiet.setToolTip("翻了么会记住你平时说话的音量；明显更轻的声音（约低 14 分贝以上）不翻译、不出声。"
+                              "连续几段都很轻时，会认为是你离麦克风远了，自动按新的音量重新学习。")
+        self.cont, self.ptt = keep(QRadioButton("持续翻译"), QRadioButton("按住说话"))
+        bg = QButtonGroup(self)
+        bg.addButton(self.cont)
+        bg.addButton(self.ptt)
+        self.ptt_key = keep(QComboBox())
+        for k, name in PTT_KEYS.items():
+            self.ptt_key.addItem(name, k)
+        self.quality = keep(QComboBox())
+        for i, q in enumerate(models.QUALITIES):
+            self.quality.addItem(f"{models.QUALITY_LABEL[q]}（{models.llm_name(q)}）", q)
+            tip = models.summary(q) + ("\n速度约快一倍，但翻译质量明显较低，适合 8 GB 内存或老电脑" if q == "turbo" else "")
+            self.quality.setItemData(i, tip, Qt.ItemDataRole.ToolTipRole)
+        self.display = keep(QComboBox())
+        self.display.addItem("图形界面", "ui")
+        self.display.addItem("命令行风格", "cli")
+        self.llm_btn = keep(QPushButton(objectName="link"))  # 翻译：本地模型 / 翻译：在线 · DeepSeek
+        self.llm_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.llm_btn.setToolTip("用本地模型，或填 API key 改用在线模型翻译")
+        self.llm_btn.clicked.connect(self._online)
+        self._refresh_llm_label()
+        self.gpu_voice = keep(QComboBox())
+        self.gpu_voice.addItem("自动（RTX 30 系及以上）", "auto")
+        self.gpu_voice.addItem("强制使用（旧卡会很慢）", "cuda")
+        self.gpu_voice.addItem("不使用", "cpu")
+        self.gpu_voice.setCurrentIndex(max(0, self.gpu_voice.findData(self.s.gpu_voice)))
+        self.gpu_voice.currentIndexChanged.connect(
+            lambda: (setattr(self.s, "gpu_voice", self.gpu_voice.currentData()), self.s.save(), self._refresh_banner(),
+                     self.engine.reload_voice()))
+        self.cpu_voice = keep(QComboBox())
+        self.cpu_voice.addItem("我的克隆音色（CPU，英文样本）", "clone")
+        self.cpu_voice.addItem("标准音色", "standard")
+        self.cpu_voice.setCurrentIndex(max(0, self.cpu_voice.findData(self.s.cpu_voice)))
+        self.cpu_voice.currentIndexChanged.connect(
+            lambda: (setattr(self.s, "cpu_voice", self.cpu_voice.currentData()), self.s.save(), self._refresh_banner(),
+                     self.engine.reload_voice()))
+        self.auto_upd = keep(QCheckBox("启动时检查更新（离线时自动跳过）"))
+        self.auto_upd.setChecked(self.s.auto_check_update)
+        self.auto_upd.toggled.connect(lambda on: (setattr(self.s, "auto_check_update", on), self.s.save()))
+        hk = self.s.mute_hotkey.replace("<ctrl>", "⌃" if IS_MAC else "Ctrl+").replace("<alt>", "⌥" if IS_MAC else "Alt+").replace("+", "").upper() if IS_MAC else self.s.mute_hotkey.replace("<", "").replace(">", "").title()
+        self._hotkey_text = f"静音快捷键：{hk}　（全局快捷键需要系统“辅助功能/输入监控”权限）"
+
+        # the conversation: one list of everything, and (调音台) one per side
+        self.lv_me, self.lv_them = keep(QProgressBar(maximum=100, textVisible=False),
+                                        QProgressBar(maximum=100, textVisible=False))
+        for w in (self.lv_me, self.lv_them):
+            w.setFixedHeight(6)
+            w.setMinimumWidth(80)
+        self.lat_label = keep(QLabel(objectName="muted", wordWrap=True))  # rolling latency summary
+        self.lat_label.hide()
+        self.log, self.log_me, self.log_them = keep(*(self._convo_list() for _ in range(3)))
+        # 调音台: where the time of a sentence goes, stage by stage
+        self.chain = keep(QFrame(objectName="chain"))
+        ch = QHBoxLayout(self.chain)
+        ch.setContentsMargins(0, 0, 0, 0)
+        ch.setSpacing(8)
+        self._chain_vals: dict[str, QLabel] = {}
+        for key, caption, stretch in (("mic", "麦克风", 3), ("asr", "识别", 2), ("tr", "翻译", 2), ("voice", "发声", 2),
+                                      ("out", "送进会议", 3), ("total", "说完到出声", 3)):
+            cell = QFrame(objectName="cellOn" if key == "total" else "cell")
+            cv = QVBoxLayout(cell)
+            cv.setContentsMargins(12, 8, 12, 8)
+            cv.setSpacing(2)
+            cv.addWidget(QLabel(caption, objectName="cellCaption"))
+            val = self._chain_vals[key] = QLabel("—", objectName="cellValue")
+            cv.addWidget(val)
+            ch.addWidget(cell, stretch)
+
+    def _convo_list(self) -> QListWidget:
+        lst = QListWidget(objectName="log")
+        lst.setWordWrap(True)
+        lst.setResizeMode(QListWidget.ResizeMode.Adjust)  # rewrap rows when the column changes width
+        lst.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        lst.setItemDelegate(ConvoDelegate(lst))  # rows, cards or bubbles: the theme's choice
+        lst.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+        lst.setMinimumHeight(200)
+        return lst
+
+    def _refresh_chain(self, *_) -> None:
+        """调音台's strip: the devices at both ends and the average time of each stage between."""
+        if not hasattr(self, "_chain_vals"):
+            return
+        avg = self.lat_stats.averages()
+        plain = lambda combo: combo.currentText().split("（")[0] or "系统默认"  # noqa: E731
+        show = {"mic": plain(self.mic), "out": plain(self.call)}
+        for key, stage in (("asr", "asr_s"), ("tr", "translate_s"), ("voice", "voice_s"), ("total", "latency")):
+            show[key] = f"{avg[stage]:.1f} s" if stage in avg else "—"
+        for key, text in show.items():
+            self._chain_vals[key].setText(text)
+
+    # ---- the layouts: the same pieces, placed the theme's way
+    LAYOUTS = {"quiet": "_lay_quiet", "studio": "_lay_studio", "chat": "_lay_chat"}
+    MIN_SIZE = {"quiet": (760, 560), "studio": (980, 600), "chat": (900, 600)}
+
+    def _arrange(self) -> None:
+        key = theme.current().key if theme.current().key in self.LAYOUTS else theme.DEFAULT
+        for w in self._atoms:  # out of the old frames before those are thrown away
+            w.setParent(self._attic)
+        root = getattr(self, self.LAYOUTS[key])()
+        old = self.takeCentralWidget()
+        self.setCentralWidget(root)
+        if old is not None:
+            old.deleteLater()
+        self._layout_key = key
+        self.setMinimumSize(*self.MIN_SIZE[key])
+        self._refresh_chain()
+        self._fit_layout()
+
+    def _lang_row(self, labels: bool = True) -> QHBoxLayout:
+        h = QHBoxLayout()
+        if labels:
+            h.addWidget(QLabel("我说", objectName="muted"))
+        h.addWidget(self.my, 1)
+        h.addWidget(self.swap_btn)
+        if labels:
+            h.addWidget(QLabel("对方说", objectName="muted"))
+        h.addWidget(self.their, 1)
+        return h
+
+    def _card_lang(self) -> QFrame:
+        g, body = card("语言")
+        body.addLayout(self._lang_row())
+        return g
+
+    def _card_devices(self, title: str = "声音设备", plain: bool = False) -> QFrame:
+        """plain: the wording of 对话 — what each line is for, not what it is called."""
+        g, body = card()
+        tr_ = QHBoxLayout()
+        tr_.addWidget(QLabel(title, objectName="cardTitle"))
+        tr_.addStretch()
+        tr_.addWidget(self.test_btn)
+        tr_.addWidget(self.guide_btn)
+        tr_.addWidget(self.refresh_btn)
+        body.addLayout(tr_)
+        f = QFormLayout()
+        f.setHorizontalSpacing(16)
+        f.setVerticalSpacing(6)
+        names = ("我对着说", "翻译送到会议", "我自己也听", "从这里听对方") if plain else \
+            ("我的麦克风", "送进会议（虚拟麦克风）", "我自己监听（耳机）", "对方声音来源")
+        for name, combo in zip(names, (self.mic, self.call, self.mon, self.src)):
+            f.addRow(QLabel(name, objectName="muted"), combo)
+        body.addLayout(f)
+        body.addWidget(self.dev_warn)
+        body.addWidget(self.multi_fix)
+        return g
+
+    def _card_functions(self) -> QFrame:
+        from ..config import cuda_voice_ok, has_nvidia_gpu
+
+        g, v = card("功能")
+        for w in (self.speak, self.subs, self.passthru, self.quiet, self.stream):
+            v.addWidget(w)
+        mh = QHBoxLayout()
+        mh.addWidget(self.cont)
+        mh.addWidget(self.ptt)
+        mh.addWidget(self.ptt_key)
+        mh.addStretch()
+        v.addLayout(mh)
+        oh = QHBoxLayout()
+        oh.setSpacing(8)
+        oh.addWidget(QLabel("模型", objectName="muted"))
+        oh.addWidget(self.quality, 1)
+        oh.addWidget(QLabel("显示方式", objectName="muted"))
+        oh.addWidget(self.display, 1)
+        v.addLayout(oh)
+        oh = QHBoxLayout()
+        oh.addWidget(self.llm_btn)
+        oh.addStretch()
+        v.addLayout(oh)
+        oh = QHBoxLayout()  # voice options on their own row so the card never forces the window wider
+        oh.setSpacing(8)
+        if not IS_MAC and has_nvidia_gpu():
+            oh.addWidget(QLabel("GPU 音色", objectName="muted"))
+            oh.addWidget(self.gpu_voice, 1)
+        if not IS_MAC and not cuda_voice_ok(self.s.gpu_voice):  # Windows without a usable CUDA voice
+            oh.addWidget(QLabel("音色", objectName="muted"))
+            oh.addWidget(self.cpu_voice, 1)
+        if oh.count():
+            v.addLayout(oh)
+        v.addWidget(self.auto_upd)
+        v.addWidget(QLabel(self._hotkey_text, objectName="muted"))
+        return g
+
+    def _settings_column(self, *cards: QWidget) -> QScrollArea:
+        """The settings cards, scrolling on their own when the window is short."""
+        settings = QWidget(objectName="content")
+        cl = QVBoxLayout(settings)
+        cl.setContentsMargins(0, 0, 4, 0)
+        cl.setSpacing(12)
+        for c in cards:
+            if c is self.mascot:
+                cl.addWidget(c, 0, Qt.AlignmentFlag.AlignHCenter)
+            else:
+                cl.addWidget(c)
+        cl.addStretch()
+        scroll = QScrollArea(objectName="page")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(settings)
+        self._settings_scroll = scroll
+        return scroll
+
+    def _meter(self, name: str, bar: QProgressBar) -> QHBoxLayout:
+        h = QHBoxLayout()
+        h.setSpacing(8)
+        h.addWidget(QLabel(name, objectName="muted"))
+        h.addWidget(bar, 1)
+        return h
+
+    def _convo(self, meters: bool = True) -> QFrame:
+        """The conversation card: (title, both levels, the latency line) and the list of everything."""
+        g, tv = card()
+        if meters:
+            th = QHBoxLayout()
+            th.addWidget(QLabel("对话", objectName="cardTitle"))
+            th.addSpacing(16)
+            th.addLayout(self._meter("我", self.lv_me), 1)
+            th.addSpacing(8)
+            th.addLayout(self._meter("对方", self.lv_them), 1)
+            tv.addLayout(th)
+            tv.addWidget(self.lat_label)
+        tv.addWidget(self.log, 1)
+        return g
+
+    def _two_columns(self, into: QVBoxLayout | QHBoxLayout, convo: QWidget, settings: QScrollArea, chrome: int) -> None:
+        """The conversation with the settings beside it — or below it in a narrow window
+        (_fit_layout). chrome: the width the layout spends on everything else."""
+        self._convo_card, self._chrome_w = convo, chrome
+        self._body = QBoxLayout(QBoxLayout.Direction.LeftToRight)
+        self._body.setSpacing(16)
+        self._body.addWidget(convo, 6)
+        self._body.addWidget(settings, 5)
+        into.addLayout(self._body, 1)
+
+    def _side_row(self, *ws: QWidget, margins=(14, 0, 4, 0)) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setContentsMargins(*margins)
+        for w in ws:
+            if w is None:
+                row.addStretch(1)
+            else:
+                row.addWidget(w, 1 if isinstance(w, QComboBox) else 0)
+        return row
+
+    def _lay_quiet(self) -> QWidget:
+        """静场: the navigation at the left, the conversation in the middle, the settings at the right."""
+        root = QWidget()
+        outer = QHBoxLayout(root)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        side = QFrame(objectName="sidebar")
+        side.setFixedWidth(176)
+        v = QVBoxLayout(side)
+        v.setContentsMargins(14, 18, 14, 14)
+        v.setSpacing(4)
+        v.addWidget(self.mascot, 0, Qt.AlignmentFlag.AlignHCenter)
+        for lbl in (self.brand, self.brand_sub):
+            lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+            v.addWidget(lbl)
+        v.addSpacing(14)
+        for b in self.nav.values():
+            v.addWidget(b)
+        v.addStretch()
+        v.addLayout(self._side_row(self.theme_box, margins=(4, 0, 4, 6)))
+        v.addLayout(self._side_row(self.mascot_label, None, self.mascot_switch))
+        outer.addWidget(side)
+
+        content = QWidget(objectName="content")
+        lay = QVBoxLayout(content)
+        lay.setContentsMargins(28, 20, 28, 20)
+        lay.setSpacing(12)
+        top = QHBoxLayout()
+        top.setSpacing(12)
+        top.addWidget(self.h1)
+        top.addWidget(self.status)
+        top.addStretch()
+        top.addWidget(self.mute_btn)
+        top.addWidget(self.start_btn)
+        lay.addLayout(top)
+        lay.addWidget(self.banner)
+        self._two_columns(lay, self._convo(),
+                          self._settings_column(self._card_lang(), self._card_devices(), self._card_functions()),
+                          chrome=176 + 56)
+        outer.addWidget(content, 1)
+        return root
+
+    def _lay_studio(self) -> QWidget:
+        """调音台: everything across the top, the time of each stage under it, then my side and
+        theirs next to each other."""
+        root = QWidget()
+        v = QVBoxLayout(root)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
+        bar = QFrame(objectName="topbar")
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(20, 8, 20, 8)
+        h.setSpacing(4)
+        self.brand.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        h.addWidget(self.brand)
+        h.addSpacing(14)
+        tail = ("_wizard", "_check_updates")  # (these two go to the foot: the bar is for the pages)
+        for fn, b in self.nav.items():
+            if fn not in tail:
+                h.addWidget(b)
+        h.addStretch()
+        h.addWidget(self.status)
+        h.addSpacing(8)
+        h.addWidget(self.mute_btn)
+        h.addWidget(self.start_btn)
+        v.addWidget(bar)
+
+        content = QWidget(objectName="content")
+        lay = QVBoxLayout(content)
+        lay.setContentsMargins(20, 14, 20, 10)
+        lay.setSpacing(12)
+        lay.addWidget(self.chain)
+        lay.addWidget(self.banner)
+        both = QWidget(objectName="content")
+        bh = QHBoxLayout(both)
+        bh.setContentsMargins(0, 0, 0, 0)
+        bh.setSpacing(12)
+        for title, bar_, lst in (("我 → 会议", self.lv_me, self.log_me), ("对方 → 字幕", self.lv_them, self.log_them)):
+            g, tv = card()
+            th = QHBoxLayout()
+            th.addWidget(QLabel(title, objectName="cardTitle"))
+            th.addSpacing(12)
+            th.addWidget(bar_, 1)
+            tv.addLayout(th)
+            tv.addWidget(lst, 1)
+            bh.addWidget(g, 1)
+        self._two_columns(lay, both, self._settings_column(self.mascot, self._card_lang(), self._card_devices(),
+                                                           self._card_functions()), chrome=40)
+        foot = QHBoxLayout()
+        foot.setSpacing(8)
+        foot.addWidget(self.lat_label, 1)
+        foot.addStretch()
+        self.brand_sub.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        foot.addWidget(self.brand_sub)
+        for fn in tail:
+            foot.addWidget(self.nav[fn])
+        foot.addWidget(self.theme_box)
+        foot.addWidget(self.mascot_label)
+        foot.addWidget(self.mascot_switch)
+        lay.addLayout(foot)
+        v.addWidget(content, 1)
+        return root
+
+    def _lay_chat(self) -> QWidget:
+        """对话: the two languages at the top, the conversation in the middle with the controls
+        docked under it, the navigation as a rail at the left."""
+        root = QWidget(objectName="content")
+        v = QVBoxLayout(root)
+        v.setContentsMargins(20, 14, 20, 16)
+        v.setSpacing(12)
+        top = QHBoxLayout()
+        top.setSpacing(10)
+        self.brand.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.brand_sub.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        top.addWidget(self.brand)
+        top.addWidget(self.brand_sub)
+        top.addStretch(1)
+        pill = QFrame(objectName="card")
+        ph = self._lang_row(labels=False)
+        ph.setContentsMargins(8, 6, 8, 6)
+        pill.setLayout(ph)
+        pill.setMinimumWidth(380)
+        top.addWidget(pill)
+        top.addStretch(1)
+        top.addWidget(self.status)
+        v.addLayout(top)
+        v.addWidget(self.banner)
+
+        row = QHBoxLayout()
+        row.setSpacing(16)
+        rail = QFrame(objectName="rail")
+        rail.setFixedWidth(128)
+        rv = QVBoxLayout(rail)
+        rv.setContentsMargins(0, 0, 0, 0)
+        rv.setSpacing(6)
+        rv.addWidget(self.mascot, 0, Qt.AlignmentFlag.AlignHCenter)
+        for b in self.nav.values():
+            rv.addWidget(b)
+        rv.addStretch()
+        rv.addWidget(self.theme_box)
+        rv.addLayout(self._side_row(self.mascot_label, None, self.mascot_switch, margins=(8, 0, 4, 0)))
+        row.addWidget(rail)
+
+        mid = QWidget(objectName="content")
+        mv = QVBoxLayout(mid)
+        mv.setContentsMargins(0, 0, 0, 0)
+        mv.setSpacing(12)
+        mv.addWidget(self._convo(meters=False), 1)
+        dock, dv = card()
+        dh = QHBoxLayout()
+        dh.setSpacing(14)
+        dh.addLayout(self._meter("我", self.lv_me), 1)
+        dh.addWidget(self.mute_btn)
+        dh.addWidget(self.start_btn)
+        dh.addLayout(self._meter("对方", self.lv_them), 1)
+        dv.addLayout(dh)
+        dv.addWidget(self.lat_label)
+        mv.addWidget(dock)
+        self._two_columns(row, mid, self._settings_column(self._card_devices("声音怎么走", plain=True),
+                                                          self._card_functions()), chrome=40 + 128 + 16)
+        v.addLayout(row, 1)
+        return root
 
     CONVO_MIN_W = 420  # the conversation column needs at least this; narrower windows stack the two
 
@@ -352,13 +637,14 @@ class MainWindow(QMainWindow):
         rest beside them, or goes below when that would leave it narrower than CONVO_MIN_W."""
         settings = self._settings_scroll.widget()
         need = settings.minimumSizeHint().width() + self._settings_scroll.verticalScrollBar().sizeHint().width() + 8
-        room = self.centralWidget().width() - 176 - 56 - self._body.spacing()  # sidebar, page margins
+        # (the window's width: a layout just put in place has not been given its size yet)
+        room = self.width() - self._chrome_w - self._body.spacing()  # navigation, page margins
         wide = room - need >= self.CONVO_MIN_W
         want = QBoxLayout.Direction.LeftToRight if wide else QBoxLayout.Direction.TopToBottom
         if self._body.direction() != want:
             self._body.setDirection(want)
-        self._body.setStretch(0, 0 if wide else 3)
-        self._body.setStretch(1, 1 if wide else 2)
+        self._body.setStretch(0, 1 if wide else 2)  # the conversation, first; then the settings
+        self._body.setStretch(1, 0 if wide else 3)
         if wide:
             self._settings_scroll.setFixedWidth(need)
         else:
@@ -376,66 +662,16 @@ class MainWindow(QMainWindow):
         geo.moveCenter(scr.center())
         self.move(max(scr.left(), geo.left()), max(scr.top(), geo.top()))
 
-    def _sidebar(self) -> QFrame:
-        side = QFrame(objectName="sidebar")
-        side.setFixedWidth(176)
-        v = QVBoxLayout(side)
-        v.setContentsMargins(14, 18, 14, 14)
-        v.setSpacing(4)
-        # the owl girl: dozes while stopped, cheers on start, types / waves while people talk
-        self.mascot = Mascot(100, 120)
-        self.mascot.setVisible(self.s.mascot)
-        v.addWidget(self.mascot, 0, Qt.AlignmentFlag.AlignHCenter)
-        for text, name in (("翻了么", "brand"), (f"MirrorVoice · v{__version__}", "brandSub")):
-            lbl = QLabel(text, objectName=name)
-            lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-            v.addWidget(lbl)
-        v.addSpacing(14)
-        self.nav_main = None
-        self.nav = {}
-        for text, fn in self.NAV:
-            b = self.nav[fn] = QPushButton(text, objectName="nav")
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            if fn is None:
-                b.setCheckable(True)
-                b.setChecked(True)
-                self.nav_main = b
-            else:
-                b.clicked.connect(getattr(self, fn))
-            v.addWidget(b)
-        v.addStretch()
-        # bottom left: the look, and her on / off
-        look = QHBoxLayout()
-        look.setContentsMargins(4, 0, 4, 6)
-        self.theme_box = QComboBox()
-        self.theme_box.setAccessibleName("界面风格")
-        for t in theme.THEMES.values():
-            self.theme_box.addItem(f"风格 · {t.name}", t.key)
-        self.theme_box.setCurrentIndex(max(0, self.theme_box.findData(theme.current().key)))
-        self.theme_box.setToolTip("静场：极简浅色 · 调音台：深色专业 · 对话：亲和圆润（气泡）")
-        self.theme_box.currentIndexChanged.connect(self._use_theme)
-        look.addWidget(self.theme_box, 1)
-        v.addLayout(look)
-        row = QHBoxLayout()
-        row.setContentsMargins(14, 0, 4, 0)
-        self.mascot_label = QLabel("虚拟形象", objectName="sideOption")
-        self.mascot_switch = Switch(self.s.mascot)
-        self.mascot_switch.setToolTip("显示或隐藏左上角的虚拟形象（更新时的动画也跟着开关）")
-        self.mascot_switch.toggled.connect(self._show_mascot)
-        row.addWidget(self.mascot_label)
-        row.addStretch(1)
-        row.addWidget(self.mascot_switch)
-        v.addLayout(row)
-        return side
-
     def _use_theme(self, *_) -> None:
         key = self.theme_box.currentData()
         theme.use(QApplication.instance(), key)
         self.s.theme = key
         self.s.save()
-        if hasattr(self, "log"):  # sentences are laid out again: a bubble is not as tall as a row
-            self.log.doItemsLayout()
-            self.log.scrollToBottom()
+        if getattr(self, "_layout_key", key) != key:
+            self._arrange()
+        for lst in (self.log, self.log_me, self.log_them):  # laid out again: a bubble is not as tall as a row
+            lst.doItemsLayout()
+            lst.scrollToBottom()
 
     def _show_mascot(self, on: bool) -> None:
         self.mascot.setVisible(on)
@@ -717,6 +953,7 @@ class MainWindow(QMainWindow):
                 self.lat_stats.add(d)
             self.lat_label.setText(self.lat_stats.summary("online" if self.s.llm_mode == "online" else self.s.quality))
             self.lat_label.setVisible(bool(self.lat_label.text()))
+            self._refresh_chain()
             self.convo.add("me", d["src"], d["tgt"], d["passthrough"])
         elif kind == "them":
             same = d["tgt"] == d["src"]  # they spoke my language: nothing to translate
@@ -762,28 +999,32 @@ class MainWindow(QMainWindow):
              replace_live: bool = False, tip: str = "") -> None:
         """kind: me | them | live | note. data: what the row is made of, for the theme's way of
         drawing it (logview.entry). live: the other side's sentence still being translated — kept
-        in one row that later updates and finally the finished translation (replace_live) overwrite."""
+        in one row that later updates and finally the finished translation (replace_live) overwrite.
+        Every sentence goes into the list of everything and into its side's own list (调音台)."""
         t = theme.current()
         color = {"me": t.me, "them": t.them, "live": t.live}.get(kind, t.text_2)
-        it = getattr(self, "_live_item", None)
-        if it is not None and (live or replace_live) and self.log.row(it) >= 0:
-            it.setText(text)
+        if not hasattr(self, "_live_items"):
+            self._live_items: dict[int, QListWidgetItem | None] = {}
+        for lst in (self.log, self.log_me if kind in ("me", "note") else self.log_them):
+            it = self._live_items.get(id(lst))
+            if it is not None and (live or replace_live) and lst.row(it) >= 0:
+                it.setText(text)
+                it.setData(ROLE, data)
+                it.setToolTip(tip)
+                it.setForeground(QColor(color))
+                self._live_items[id(lst)] = None if replace_live else it
+                lst.scrollToBottom()
+                continue
+            it = QListWidgetItem(text)
             it.setData(ROLE, data)
             it.setToolTip(tip)
             it.setForeground(QColor(color))
-            self._live_item = None if replace_live else it
-            self.log.scrollToBottom()
-            return
-        it = QListWidgetItem(text)
-        it.setData(ROLE, data)
-        it.setToolTip(tip)
-        it.setForeground(QColor(color))
-        if live or replace_live:  # my own rows in between leave the provisional one where it is
-            self._live_item = it if live else None
-        self.log.addItem(it)
-        if self.log.count() > 300:
-            self.log.takeItem(0)
-        self.log.scrollToBottom()
+            if live or replace_live:  # my own rows in between leave the provisional one where it is
+                self._live_items[id(lst)] = it if live else None
+            lst.addItem(it)
+            if lst.count() > 300:
+                lst.takeItem(0)
+            lst.scrollToBottom()
 
     def _selftest(self) -> None:
         if self.engine.running:
