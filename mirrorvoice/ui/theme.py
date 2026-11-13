@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 from PySide6.QtCore import QEvent, QLibraryInfo, QLocale, QObject, Qt, QTimer, QTranslator
 from PySide6.QtGui import QColor, QPalette
@@ -76,6 +77,8 @@ class Theme:
     them_bubble: str
     on_them_bubble: str
     switch_off: str
+    chip_on_bg: str = ""  # a function switched on, drawn as a chip (调音台, 对话)
+    chip_on_fg: str = ""
     dark: bool = False
 
 
@@ -93,7 +96,7 @@ QUIET = Theme(
     r=8, r2=10, rc=12, rp=10, rs=6,
     convo="rows", me="#C9371F", them="#3A3F47", live="#5B6270",
     me_bubble="#FBECE8", on_me_bubble="#16181C", them_bubble="#EFEEEA", on_them_bubble="#16181C",
-    switch_off="#B9BDC6")
+    switch_off="#B9BDC6", chip_on_bg="#FBECE8", chip_on_fg="#A32C18")
 
 STUDIO = Theme(
     key="studio", name="调音台",
@@ -109,7 +112,7 @@ STUDIO = Theme(
     r=6, r2=8, rc=8, rp=6, rs=4,
     convo="cards", me="#5EE0A8", them="#7CC4FF", live="#F2C14E",
     me_bubble="#171B20", on_me_bubble="#E8ECF1", them_bubble="#171B20", on_them_bubble="#E8ECF1",
-    switch_off="#3A424D", dark=True)
+    switch_off="#3A424D", chip_on_bg="#14201C", chip_on_fg="#5EE0A8", dark=True)
 
 CHAT = Theme(
     key="chat", name="对话",
@@ -125,7 +128,7 @@ CHAT = Theme(
     r=15, r2=16, rc=22, rp=20, rs=8,
     convo="bubbles", me="#4B3FD6", them="#7A5A00", live="#4B3FD6",
     me_bubble="#4B3FD6", on_me_bubble="#FFFFFF", them_bubble="#FFF1D2", on_them_bubble="#1F1B3A",
-    switch_off="#C9C6E6")
+    switch_off="#C9C6E6", chip_on_bg="#4B3FD6", chip_on_fg="#FFFFFF")
 
 THEMES: dict[str, Theme] = {t.key: t for t in (QUIET, STUDIO, CHAT)}
 DEFAULT = QUIET.key
@@ -143,24 +146,23 @@ def _asset(name: str) -> str:
     return str(assets_dir() / name).replace("\\", "/")
 
 
-def _chevron(t: Theme) -> str:
-    """The drop-down arrow in the theme's secondary text colour. The bundled one is grey on white;
-    a recoloured copy is written to the data folder (a new image in the bundle would be a new
-    runtime, i.e. a full download for everyone)."""
-    if not t.dark:
-        return _asset("chevron-down.svg")
+def _tinted(name: str, drawn: str, color: str) -> str:
+    """A bundled one-colour mark (drawn in `drawn`) in `color`. A recoloured copy is written to the
+    data folder: a new image in the bundle would be a new runtime, i.e. a full download for everyone."""
+    if color.lower() == drawn.lower():
+        return _asset(name)
     try:
         from ..config import HOME
         from .icons import assets_dir
 
-        svg = (assets_dir() / "chevron-down.svg").read_text(encoding="utf-8").replace("#6B7280", t.text_2)
-        out = HOME / "ui" / f"chevron-{t.key}.svg"
+        svg = (assets_dir() / name).read_text(encoding="utf-8").replace(drawn, color)
+        out = HOME / "ui" / f"{Path(name).stem}-{color.lstrip('#').lower()}.svg"
         out.parent.mkdir(parents=True, exist_ok=True)
         if not out.is_file() or out.read_text(encoding="utf-8") != svg:
             out.write_text(svg, encoding="utf-8")
         return str(out).replace("\\", "/")
     except OSError:
-        return _asset("chevron-down.svg")
+        return _asset(name)
 
 
 # Only fonts that exist on this platform: a missing family made Qt search every alias at startup
@@ -252,6 +254,21 @@ QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox {{ background: {SURFACE}; border:
                                                    padding: 6px 8px; }}
 QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus {{ border-color: {ACCENT}; }}
 QCheckBox, QRadioButton {{ spacing: 8px; padding: 1px 0; }}
+QCheckBox::indicator {{ width: 15px; height: 15px; border: 1px solid {BORDER_HOVER}; border-radius: 4px;
+                        background: {SURFACE}; }}
+QCheckBox::indicator:hover {{ border-color: {ACCENT}; }}
+QCheckBox::indicator:checked {{ background: {ACCENT}; border-color: {ACCENT}; image: url("{CHECK}"); }}
+QCheckBox::indicator:disabled {{ border-color: {LINE}; }}
+QRadioButton::indicator {{ width: 15px; height: 15px; border: 1px solid {BORDER_HOVER}; border-radius: 8px;
+                           background: {SURFACE}; }}
+QRadioButton::indicator:hover {{ border-color: {ACCENT}; }}
+QRadioButton::indicator:checked {{ border: 5px solid {ACCENT}; width: 7px; height: 7px; background: {SURFACE}; }}
+QCheckBox[look="chip"] {{ spacing: 0; padding: 7px 12px; border: 1px solid {BORDER}; border-radius: {R}px;
+                          background: {SURFACE}; color: {NAV_TEXT}; }}
+QCheckBox[look="chip"]:hover {{ border-color: {BORDER_HOVER}; }}
+QCheckBox[look="chip"]:checked {{ background: {CHIP_ON_BG}; border-color: {ACCENT}; color: {CHIP_ON_FG}; font-weight: 600; }}
+QCheckBox[look="chip"]::indicator {{ width: 0; height: 0; border: none; background: transparent; image: none; }}
+QLabel#optionText {{ color: {TEXT}; }}
 QGroupBox {{ border: 1px solid {LINE}; border-radius: {RC}px; margin-top: 14px; padding: 12px 10px 8px 10px; font-weight: 600; }}
 QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 6px; background: {BG}; }}
 
@@ -283,7 +300,8 @@ QScrollArea#page, QScrollArea#page > QWidget > QWidget#content {{ background: {B
 
 def qss(t: Theme) -> str:
     tokens = {k.upper(): v for k, v in vars(t).items()}
-    return _QSS.format(FONTS=FONTS, CHEVRON=_chevron(t), CHECK=_asset("check-white.svg"), **tokens)
+    return _QSS.format(FONTS=FONTS, CHEVRON=_tinted("chevron-down.svg", "#6B7280", t.text_2),
+                       CHECK=_tinted("check-white.svg", "#fff", t.on_primary), **tokens)
 
 
 _translators: list[QTranslator] = []  # keep alive

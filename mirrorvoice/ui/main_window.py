@@ -8,7 +8,7 @@ import sys
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFormLayout, QFrame,
-                               QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
+                               QGridLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
                                QProgressBar, QPushButton, QRadioButton, QScrollArea, QVBoxLayout, QWidget, QBoxLayout)
 
 from .. import __version__, models
@@ -208,11 +208,21 @@ class MainWindow(QMainWindow):
         self.subs = keep(QCheckBox("对方说话显示翻译字幕"))
         self.passthru = keep(QCheckBox("我直接说对方的语言时，透传原声不翻译"))
         self.stream = keep(QCheckBox("边说边译（实验）：一句话说到逗号就先翻译，长句更快开口"))
+        self.speak.setToolTip("翻译好的话用你的声音合成，送进会议软件的麦克风。")
+        self.subs.setToolTip("听对方说话，把翻译显示成字幕。")
+        self.passthru.setToolTip("你直接说对方的语言时，把你的原声送进会议，不再翻译一遍。")
         self.stream.setToolTip("说话途中每 0.4 秒识别一次，稳定的分句先送去翻译。长句子明显更快，"
                                "但译文会碎一些，已经念出的部分不能改。全部在本机完成。")
         self.quiet = keep(QCheckBox("比我平时说话轻很多的声音不翻译（旁人说话、杂音不会被念进会议）"))
         self.quiet.setToolTip("翻了么会记住你平时说话的音量；明显更轻的声音（约低 14 分贝以上）不翻译、不出声。"
                               "连续几段都很轻时，会认为是你离麦克风远了，自动按新的音量重新学习。")
+        # (row wording, chip wording) — set by the layout in use; the tooltip always tells the whole of it
+        self._fn_names = {self.speak: (self.speak.text(), "用我的声音出声"), self.subs: (self.subs.text(), "对方字幕"),
+                          self.passthru: (self.passthru.text(), "透传原声"),
+                          self.quiet: ("比我平时说话轻很多的声音不翻译", "轻声不翻译"),
+                          self.stream: ("边说边译（实验）：说到逗号就先翻译", "边说边译")}
+        for cb, (row, _chip) in self._fn_names.items():
+            cb.setToolTip(f"{cb.text()}\n{cb.toolTip()}" if cb.toolTip() and cb.text() != row else cb.toolTip() or cb.text())
         self.cont, self.ptt = keep(QRadioButton("持续翻译"), QRadioButton("按住说话"))
         bg = QButtonGroup(self)
         bg.addButton(self.cont)
@@ -308,6 +318,7 @@ class MainWindow(QMainWindow):
 
     def _arrange(self) -> None:
         key = theme.current().key if theme.current().key in self.LAYOUTS else theme.DEFAULT
+        self._fn_switches: dict[QCheckBox, Switch] = {}
         for w in self._atoms:  # out of the old frames before those are thrown away
             w.setParent(self._attic)
         root = getattr(self, self.LAYOUTS[key])()
@@ -316,9 +327,22 @@ class MainWindow(QMainWindow):
         if old is not None:
             old.deleteLater()
         self._layout_key = key
+        if key != "chat":
+            self._nav_icons(False)
         self.setMinimumSize(*self.MIN_SIZE[key])
         self._refresh_chain()
         self._fit_layout()
+
+    def _nav_icons(self, on: bool) -> None:
+        from PySide6.QtCore import QSize
+        from PySide6.QtGui import QIcon
+
+        from .icons import nav_icon
+
+        t = theme.current()
+        for fn, b in self.nav.items():
+            b.setIcon(nav_icon(fn, t.nav_text, t.nav_on_fg) if on else QIcon())
+            b.setIconSize(QSize(20, 20))
 
     def _lang_row(self, labels: bool = True) -> QHBoxLayout:
         h = QHBoxLayout()
@@ -358,12 +382,40 @@ class MainWindow(QMainWindow):
         body.addWidget(self.multi_fix)
         return g
 
-    def _card_functions(self) -> QFrame:
+    def _card_functions(self, style: str = "switches") -> QFrame:
+        """style: 'switches' — a line of words and a sliding switch each (静场); 'chips' — short names
+        to click, lit while on (调音台, 对话). The check boxes themselves hold the state either way."""
         from ..config import cuda_voice_ok, has_nvidia_gpu
 
         g, v = card("功能")
-        for w in (self.speak, self.subs, self.passthru, self.quiet, self.stream):
-            v.addWidget(w)
+        boxes = (self.speak, self.subs, self.passthru, self.quiet, self.stream)
+        if style == "chips":
+            grid = QGridLayout()
+            grid.setSpacing(8)
+            for i, cb in enumerate(boxes):
+                cb.setText(self._fn_names[cb][1])
+                cb.setProperty("look", "chip")
+                cb.setCursor(Qt.CursorShape.PointingHandCursor)
+                repolish(cb)
+                grid.addWidget(cb, i // 3, i % 3)
+            v.addLayout(grid)
+        else:
+            for cb in boxes:
+                cb.setProperty("look", "")
+                cb.setText(self._fn_names[cb][0])
+                row = QHBoxLayout()
+                row.setSpacing(12)
+                name = QLabel(self._fn_names[cb][0], objectName="optionText", wordWrap=True)
+                name.setToolTip(cb.toolTip())
+                sw = Switch(cb.isChecked())
+                sw.setAccessibleName(self._fn_names[cb][0])
+                sw.setToolTip(cb.toolTip())
+                sw.toggled.connect(cb.setChecked)   # the box is the state (saved, read by the engine);
+                cb.toggled.connect(sw.setChecked)   # the switch is how it is shown here
+                row.addWidget(name, 1)
+                row.addWidget(sw)
+                v.addLayout(row)
+                self._fn_switches[cb] = sw
         mh = QHBoxLayout()
         mh.addWidget(self.cont)
         mh.addWidget(self.ptt)
@@ -518,7 +570,7 @@ class MainWindow(QMainWindow):
             if fn not in tail:
                 h.addWidget(b)
         h.addStretch()
-        h.addWidget(self.status)
+        h.addWidget(self.status, 0, Qt.AlignmentFlag.AlignVCenter)
         h.addSpacing(8)
         h.addWidget(self.mute_btn)
         h.addWidget(self.start_btn)
@@ -544,7 +596,7 @@ class MainWindow(QMainWindow):
             tv.addWidget(lst, 1)
             bh.addWidget(g, 1)
         self._two_columns(lay, both, self._settings_column(self.mascot, self._card_lang(), self._card_devices(),
-                                                           self._card_functions()), chrome=40)
+                                                           self._card_functions("chips")), chrome=40)
         foot = QHBoxLayout()
         foot.setSpacing(8)
         foot.addWidget(self.lat_label, 1)
@@ -581,7 +633,7 @@ class MainWindow(QMainWindow):
         pill.setMinimumWidth(380)
         top.addWidget(pill)
         top.addStretch(1)
-        top.addWidget(self.status)
+        top.addWidget(self.status, 0, Qt.AlignmentFlag.AlignVCenter)
         v.addLayout(top)
         v.addWidget(self.banner)
 
@@ -593,6 +645,7 @@ class MainWindow(QMainWindow):
         rv.setContentsMargins(0, 0, 0, 0)
         rv.setSpacing(6)
         rv.addWidget(self.mascot, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._nav_icons(True)
         for b in self.nav.values():
             rv.addWidget(b)
         rv.addStretch()
@@ -616,7 +669,7 @@ class MainWindow(QMainWindow):
         dv.addWidget(self.lat_label)
         mv.addWidget(dock)
         self._two_columns(row, mid, self._settings_column(self._card_devices("声音怎么走", plain=True),
-                                                          self._card_functions()), chrome=40 + 128 + 16)
+                                                          self._card_functions("chips")), chrome=40 + 128 + 16)
         v.addLayout(row, 1)
         return root
 

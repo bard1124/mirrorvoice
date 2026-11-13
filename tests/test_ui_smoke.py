@@ -717,7 +717,7 @@ def test_each_look_has_its_own_layout_made_of_the_same_controls(app, settings, n
                                  translate_s=0.5))
         assert (w.log.count(), w.log_me.count(), w.log_them.count()) == (2, 1, 1)  # the partial row became the sentence
         w.stream.setChecked(True)
-        controls = (w.start_btn, w.mute_btn, w.my, w.their, w.mic, w.call, w.speak, w.stream, w.theme_box, w.mascot_switch)
+        controls = (w.start_btn, w.mute_btn, w.my, w.their, w.mic, w.call, w.auto_upd, w.theme_box, w.mascot_switch)
         ids = [id(c) for c in controls]
 
         def use(key):
@@ -733,16 +733,29 @@ def test_each_look_has_its_own_layout_made_of_the_same_controls(app, settings, n
         assert w.chain.isVisible() and w._chain_vals["total"].text() == "1.2 s" and w._chain_vals["tr"].text() == "0.6 s"
         assert w.log_me.isVisible() and w.log_them.isVisible() and not w.log.isVisible()
         assert at(w.log_me).x() < at(w.log_them).x() < at(w.mic).x()  # my side, theirs, then the settings
+        # the functions are chips here: short names, lit while on; a click is the setting
+        assert w.stream.isVisible() and w.stream.text() == "边说边译" and w.stream.property("look") == "chip"
+        assert "说到逗号就先翻译" in w.stream.toolTip() and w.nav["_glossary"].icon().isNull()
+        w.stream.click()
+        assert not w.stream.isChecked() and settings.stream is False
+        w.stream.click()
 
         use("chat")
         assert at(w.my).y() < 70 and at(w.their).y() < 70  # the two languages head the window
         assert w.log.isVisible() and not w.log_me.isVisible() and not w.chain.isVisible()
         assert at(w.start_btn).y() > at(w.log).y() and at(w.start_btn).x() < at(w.mic).x()  # docked under the conversation
-        assert at(w.nav["_glossary"]).x() < at(w.log).x()
+        assert at(w.nav["_glossary"]).x() < at(w.log).x() and not w.nav["_glossary"].icon().isNull()  # a rail of icons
 
         use("quiet")
         assert at(w.nav["_glossary"]).x() < 176 and at(w.log).x() < at(w.mic).x()  # conversation first, settings right
         assert w.log.isVisible() and not w.chain.isVisible() and at(w.start_btn).y() < 80
+        # the functions are lines with sliding switches here; the check box behind each still holds the setting
+        sw = w._fn_switches[w.stream]
+        assert sw.isVisible() and sw.isChecked() and not w.stream.isVisible() and w.nav["_glossary"].icon().isNull()
+        sw.click()
+        assert not w.stream.isChecked() and settings.stream is False
+        w.stream.setChecked(True)  # set from elsewhere (the tray, a hot key): the switch follows
+        assert sw.isChecked()
         w.resize(820, 700)  # a narrow window: the settings go under the conversation
         app.processEvents()
         assert at(w.mic).y() > at(w.log).y()

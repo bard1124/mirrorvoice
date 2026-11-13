@@ -58,3 +58,50 @@ def tray_icon(state: str) -> QIcon:
     p.drawEllipse(QRectF(pm.width() - r - 1, pm.height() - r - 1, r, r))
     p.end()
     return QIcon(pm)
+
+
+# ---------------------------------------------------------------- line icons for the navigation
+# name -> strokes on a 24 x 24 grid: ("l", x1, y1, x2, y2) | ("r", x, y, w, h, radius) |
+# ("a", x, y, w, h, start°, span°): part of the ellipse in that box, angles as Qt counts them
+# (0 at three o'clock, anticlockwise)
+NAV_ICONS = {
+    None: (("r", 9, 3, 6, 11, 3), ("a", 5, 4, 14, 14, 180, 180), ("l", 12, 18, 12, 21)),                    # 同传: a microphone
+    "_glossary": (("r", 5, 4, 14, 16, 2.5), ("l", 9, 9, 15, 9), ("l", 9, 13, 15, 13)),                      # a page of terms
+    "_style": (("r", 3, 5, 18, 14, 3), ("l", 7, 14, 11, 14), ("l", 13, 14, 17, 14)),                        # captions
+    "_voice": (("l", 4, 10, 4, 14), ("l", 8, 6, 8, 18), ("l", 12, 3, 12, 21), ("l", 16, 7, 16, 17), ("l", 20, 10, 20, 14)),
+    "_online": (("a", 3, 10, 8, 8, 90, 180), ("a", 7, 5, 10, 10, 20, 160), ("a", 14, 10, 7, 8, 270, 180),   # a cloud
+                ("l", 7, 18, 17.5, 18)),
+    "_open_transcripts": (("l", 8, 6, 20, 6), ("l", 8, 12, 20, 12), ("l", 8, 18, 20, 18), ("l", 4, 6, 4.1, 6),
+                          ("l", 4, 12, 4.1, 12), ("l", 4, 18, 4.1, 18)),
+    "_wizard": (("l", 4, 7, 20, 7), ("l", 4, 17, 20, 17), ("r", 7, 4.5, 5, 5, 2.5), ("r", 13, 14.5, 5, 5, 2.5)),  # sliders
+    "_check_updates": (("a", 4, 4, 16, 16, 50, 290), ("l", 17.2, 2.8, 17.2, 6.9), ("l", 17.2, 6.9, 13.1, 6.9)),  # round again
+}
+
+
+def nav_icon(name, off: str, on: str, size: int = 20) -> QIcon:
+    """The navigation entry's icon, drawn in `off` (and in `on` while the entry is the chosen one)."""
+    from PySide6.QtCore import QPointF
+
+    def draw(color: str) -> QPixmap:
+        pm = QPixmap(size * 2, size * 2)
+        pm.setDevicePixelRatio(2)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.scale(size / 24, size / 24)
+        p.setPen(QPen(QColor(color), 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        for kind, *a in NAV_ICONS.get(name, ()):
+            if kind == "l":
+                p.drawLine(QPointF(a[0], a[1]), QPointF(a[2], a[3]))
+            elif kind == "r":
+                p.drawRoundedRect(QRectF(*a[:4]), a[4], a[4])
+            else:
+                p.drawArc(QRectF(*a[:4]), int(a[4] * 16), int(a[5] * 16))
+        p.end()
+        return pm
+
+    icon = QIcon()
+    icon.addPixmap(draw(off), QIcon.Mode.Normal, QIcon.State.Off)
+    icon.addPixmap(draw(on), QIcon.Mode.Normal, QIcon.State.On)
+    return icon
