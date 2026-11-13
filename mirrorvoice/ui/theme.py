@@ -46,6 +46,7 @@ QToolTip {{ background: {TEXT}; color: white; border: none; padding: 6px 8px; bo
 QFrame#sidebar {{ background: {BG_SIDE}; border: none; border-right: 1px solid {LINE}; }}
 QLabel#brand {{ font-size: 16px; font-weight: 700; }}
 QLabel#brandSub {{ font-size: 11px; color: {TEXT_2}; }}
+QLabel#sideOption {{ font-size: 13px; color: #3B414B; }}
 QPushButton#nav {{ text-align: left; padding: 9px 14px; border: none; border-radius: 10px; background: transparent;
                    font-size: 14px; color: #3B414B; }}
 QPushButton#nav:hover {{ background: #ECEEF2; }}

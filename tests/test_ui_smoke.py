@@ -626,3 +626,36 @@ def test_teams_one_click_asks_before_closing_teams_and_reopens_it(app, no_popups
     assert log == ["quit", "prepare", "launch"] and said[-1].startswith("!") and "格式" in said[-1]
     d.close()
 
+
+def test_the_switch_at_the_bottom_left_shows_and_hides_her_and_is_remembered(app, settings, no_popups, monkeypatch):
+    from mirrorvoice.config import Settings
+    from mirrorvoice.ui import main_window, update_ui
+
+    assert settings.mascot is False  # off unless asked for
+    w = _window(main_window, settings, monkeypatch)
+    try:
+        w.show()
+        sw = w.mascot_switch
+        assert not sw.isChecked() and w.mascot.isHidden() and sw.position() == 0.0
+        assert sw.mapTo(w, sw.rect().center()).y() > w.nav["_check_updates"].mapTo(w, w.rect().topLeft()).y()
+        assert sw.mapTo(w, sw.rect().center()).x() < 176  # in the sidebar, below the last entry
+        sw.click()
+        assert w.mascot.isVisible() and settings.mascot is True and Settings.load().mascot is True
+        import time
+
+        end = time.monotonic() + 10  # the knob glides over (waited for, however busy the machine)
+        while sw.position() != 1.0 and time.monotonic() < end:
+            app.processEvents()
+            time.sleep(0.01)
+        assert sw.position() == 1.0
+        sw.click()
+        assert w.mascot.isHidden() and Settings.load().mascot is False
+    finally:
+        w.close()
+    # her update routine follows the switch: without her nothing waits for the landing
+    assert update_ui.UpdateProgress(None, "正在下载…", False).mascot.isHidden()
+    assert not update_ui.UpdateProgress(None, "正在下载…").mascot.isHidden()
+    again = _window(main_window, Settings.load(), monkeypatch)  # the next start finds it as it was left
+    assert not again.mascot_switch.isChecked() and again.mascot.isHidden()
+    again.close()
+

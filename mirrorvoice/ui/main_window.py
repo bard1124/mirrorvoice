@@ -25,6 +25,7 @@ from .convo import ConversationWindow
 from .dialogs import GlossaryDialog, StyleDialog, VoiceDialog
 from .icons import app_icon
 from .mascot import Mascot
+from .switch import Switch
 from .theme import card, repolish
 from .overlay import Overlay
 from .tray import Tray
@@ -379,6 +380,7 @@ class MainWindow(QMainWindow):
         v.setSpacing(4)
         # the owl girl: dozes while stopped, cheers on start, types / waves while people talk
         self.mascot = Mascot(100, 120)
+        self.mascot.setVisible(self.s.mascot)
         v.addWidget(self.mascot, 0, Qt.AlignmentFlag.AlignHCenter)
         for text, name in (("翻了么", "brand"), (f"MirrorVoice · v{__version__}", "brandSub")):
             lbl = QLabel(text, objectName=name)
@@ -398,7 +400,23 @@ class MainWindow(QMainWindow):
                 b.clicked.connect(getattr(self, fn))
             v.addWidget(b)
         v.addStretch()
+        # bottom left: her on / off
+        row = QHBoxLayout()
+        row.setContentsMargins(14, 0, 4, 0)
+        self.mascot_label = QLabel("虚拟形象", objectName="sideOption")
+        self.mascot_switch = Switch(self.s.mascot)
+        self.mascot_switch.setToolTip("显示或隐藏左上角的虚拟形象（更新时的动画也跟着开关）")
+        self.mascot_switch.toggled.connect(self._show_mascot)
+        row.addWidget(self.mascot_label)
+        row.addStretch(1)
+        row.addWidget(self.mascot_switch)
+        v.addLayout(row)
         return side
+
+    def _show_mascot(self, on: bool) -> None:
+        self.mascot.setVisible(on)
+        self.s.mascot = on
+        self.s.save()
 
     def _check_updates(self) -> None:
         self.updates.check(manual=True)

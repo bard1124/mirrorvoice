@@ -204,6 +204,7 @@ class Settings:
     quality: str = "fast"           # "turbo" (smallest, weak machines) | "fast" | "quality" (bigger models)
     meeting_context: str = ""       # free-text background of the meeting, helps the translator pick terms
     quiet_gate: bool = True         # sounds far quieter than my usual speech are not translated
+    mascot: bool = False            # the owl girl in the sidebar (and her routine while updating)
     speech_level: float = 0.0       # my usual speech level on speech_level_mic (learned, engine.py)
     speech_level_mic: str = ""
     llm_mode: str = "local"         # translation: "local" (downloaded Qwen3) | "online" (API key, providers.py)

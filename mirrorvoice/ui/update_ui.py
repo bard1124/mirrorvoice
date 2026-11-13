@@ -154,13 +154,14 @@ class UpdateWindow(QDialog):
 class UpdateProgress(QDialog):
     """Download progress, with her floating, curling up and plugging in beside it."""
 
-    def __init__(self, parent: QWidget | None, text: str) -> None:
+    def __init__(self, parent: QWidget | None, text: str, mascot: bool = True) -> None:
         super().__init__(parent)
         self.setWindowTitle("更新翻了么")
         self.setWindowModality(Qt.WindowModality.WindowModal)
         self.canceled = threading.Event()
         self._locked = False
         self.mascot = UpdateMascot()
+        self.mascot.setVisible(mascot)  # 虚拟形象 switched off: just the bar
         self.label = QLabel(text)
         self.label.setWordWrap(True)
         self.bar = QProgressBar()
@@ -249,7 +250,7 @@ class UpdateController:
             __import__("webbrowser").open(rel.page)
 
     def _start(self, rel: updater.Release) -> None:
-        self._dlg = UpdateProgress(self.parent, f"正在下载 {rel.asset_name}（{mb(rel.size)}）…")
+        self._dlg = UpdateProgress(self.parent, f"正在下载 {rel.asset_name}（{mb(rel.size)}）…", self.s.mascot)
         self._dlg.show()
         cancel = self._dlg.canceled
         self._rel = rel
@@ -297,7 +298,7 @@ class UpdateController:
         # let her rise and land first: the hand-over waits for this process to exit, then switches
         # to the patch (or replaces the app) and relaunches it. Not the Windows installer — it
         # starts at once and closes the app itself.
-        landing = self._path.suffix.lower() == ".zip" or not updater.IS_WIN
+        landing = (self._path.suffix.lower() == ".zip" or not updater.IS_WIN) and not dlg.mascot.isHidden()
         QTimer.singleShot(int(1000 * dlg.mascot.finish()) + 300 if landing else 0, lambda: self._restart(dlg))
 
     @staticmethod
