@@ -79,6 +79,10 @@ class Theme:
     switch_off: str
     chip_on_bg: str = ""  # a function switched on, drawn as a chip (调音台, 对话)
     chip_on_fg: str = ""
+    seg_on_bg: str = ""   # the chosen half of a two-way choice (持续翻译 | 按住说话)
+    seg_on_fg: str = ""
+    log_bg: str = ""      # what the conversation lies on
+    brand: str = ""       # the name of the app
     dark: bool = False
 
 
@@ -96,7 +100,8 @@ QUIET = Theme(
     r=8, r2=10, rc=12, rp=10, rs=6,
     convo="rows", me="#C9371F", them="#3A3F47", live="#5B6270",
     me_bubble="#FBECE8", on_me_bubble="#16181C", them_bubble="#EFEEEA", on_them_bubble="#16181C",
-    switch_off="#B9BDC6", chip_on_bg="#FBECE8", chip_on_fg="#A32C18")
+    switch_off="#B9BDC6", chip_on_bg="#FBECE8", chip_on_fg="#A32C18",
+    seg_on_bg="#FFFFFF", seg_on_fg="#16181C", log_bg="#FFFFFF", brand="#16181C")
 
 STUDIO = Theme(
     key="studio", name="调音台",
@@ -112,7 +117,8 @@ STUDIO = Theme(
     r=6, r2=8, rc=8, rp=6, rs=4,
     convo="cards", me="#5EE0A8", them="#7CC4FF", live="#F2C14E",
     me_bubble="#171B20", on_me_bubble="#E8ECF1", them_bubble="#171B20", on_them_bubble="#E8ECF1",
-    switch_off="#3A424D", chip_on_bg="#14201C", chip_on_fg="#5EE0A8", dark=True)
+    switch_off="#3A424D", chip_on_bg="#14201C", chip_on_fg="#5EE0A8",
+    seg_on_bg="#E8ECF1", seg_on_fg="#0F1215", log_bg="#12161A", brand="#E8ECF1", dark=True)
 
 CHAT = Theme(
     key="chat", name="对话",
@@ -128,7 +134,8 @@ CHAT = Theme(
     r=15, r2=16, rc=22, rp=20, rs=8,
     convo="bubbles", me="#4B3FD6", them="#7A5A00", live="#4B3FD6",
     me_bubble="#4B3FD6", on_me_bubble="#FFFFFF", them_bubble="#FFF1D2", on_them_bubble="#1F1B3A",
-    switch_off="#C9C6E6", chip_on_bg="#4B3FD6", chip_on_fg="#FFFFFF")
+    switch_off="#C9C6E6", chip_on_bg="#4B3FD6", chip_on_fg="#FFFFFF",
+    seg_on_bg="#4B3FD6", seg_on_fg="#FFFFFF", log_bg="#FFFFFF", brand="#4B3FD6")
 
 THEMES: dict[str, Theme] = {t.key: t for t in (QUIET, STUDIO, CHAT)}
 DEFAULT = QUIET.key
@@ -176,7 +183,7 @@ QLabel#toast {{ background: rgba(32,36,44,0.92); color: white; padding: 9px 16px
 QToolTip {{ background: {TIP_BG}; color: {TIP_FG}; border: none; padding: 6px 8px; border-radius: {RS}px; }}
 
 QFrame#sidebar {{ background: {BG_SIDE}; border: none; border-right: 1px solid {LINE}; }}
-QLabel#brand {{ font-size: 16px; font-weight: 700; }}
+QLabel#brand {{ font-size: 17px; font-weight: 700; color: {BRAND}; }}
 QLabel#brandSub {{ font-size: 11px; color: {TEXT_2}; }}
 QLabel#sideOption {{ font-size: 13px; color: {NAV_TEXT}; }}
 QPushButton#nav {{ text-align: left; padding: 9px 14px; border: none; border-radius: {R2}px; background: transparent;
@@ -269,6 +276,12 @@ QCheckBox[look="chip"]:hover {{ border-color: {BORDER_HOVER}; }}
 QCheckBox[look="chip"]:checked {{ background: {CHIP_ON_BG}; border-color: {ACCENT}; color: {CHIP_ON_FG}; font-weight: 600; }}
 QCheckBox[look="chip"]::indicator {{ width: 0; height: 0; border: none; background: transparent; image: none; }}
 QLabel#optionText {{ color: {TEXT}; }}
+QFrame#seg {{ background: {CHIP}; border: none; border-radius: {R}px; }}
+QRadioButton[look="seg"] {{ spacing: 0; padding: 6px 14px; border-radius: {RS}px; color: {NAV_TEXT}; background: transparent; }}
+QRadioButton[look="seg"]:checked {{ background: {SEG_ON_BG}; color: {SEG_ON_FG}; font-weight: 600; }}
+QRadioButton[look="seg"]::indicator {{ width: 0; height: 0; border: none; background: transparent; }}
+QComboBox[look="title"] {{ border: none; background: transparent; font-size: 22px; font-weight: 700; padding: 2px 26px 2px 2px; }}
+QComboBox[look="title"]:hover {{ background: {CHIP}; }}
 QGroupBox {{ border: 1px solid {LINE}; border-radius: {RC}px; margin-top: 14px; padding: 12px 10px 8px 10px; font-weight: 600; }}
 QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 6px; background: {BG}; }}
 
@@ -280,7 +293,7 @@ QSlider::sub-page:horizontal {{ background: {ACCENT}; border-radius: 2px; }}
 QSlider::handle:horizontal {{ width: 16px; height: 16px; margin: -6px 0; border-radius: 8px; background: {SURFACE};
                               border: 2px solid {ACCENT}; }}
 
-QListWidget#log {{ background: {BG_SOFT}; border: none; border-radius: {R2}px; padding: 6px; outline: 0; }}
+QListWidget#log {{ background: {LOG_BG}; border: none; border-radius: {R2}px; padding: 6px; outline: 0; }}
 QListWidget#log::item {{ padding: 8px 10px; border-radius: {R}px; margin: 2px 0; background: {SURFACE}; }}
 QListWidget#log::item:selected {{ background: {ACCENT_SOFT}; }}
 QTableWidget {{ background: {SURFACE}; border: 1px solid {LINE}; border-radius: {R}px; gridline-color: {LINE}; }}

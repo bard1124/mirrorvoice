@@ -344,8 +344,20 @@ class MainWindow(QMainWindow):
             b.setIcon(nav_icon(fn, t.nav_text, t.nav_on_fg) if on else QIcon())
             b.setIconSize(QSize(20, 20))
 
-    def _lang_row(self, labels: bool = True) -> QHBoxLayout:
+    def _lang_row(self, labels: bool = True, title: bool = False) -> QHBoxLayout:
+        """title: the two languages large, as the page's heading (静场)."""
         h = QHBoxLayout()
+        for combo in (self.my, self.their):
+            combo.setProperty("look", "title" if title else "")
+            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents if title
+                                      else QComboBox.SizeAdjustPolicy.AdjustToContentsOnFirstShow)
+            repolish(combo)
+        if title:
+            h.setSpacing(6)
+            h.addWidget(self.my)
+            h.addWidget(self.swap_btn)
+            h.addWidget(self.their)
+            return h
         if labels:
             h.addWidget(QLabel("我说", objectName="muted"))
         h.addWidget(self.my, 1)
@@ -417,8 +429,16 @@ class MainWindow(QMainWindow):
                 v.addLayout(row)
                 self._fn_switches[cb] = sw
         mh = QHBoxLayout()
-        mh.addWidget(self.cont)
-        mh.addWidget(self.ptt)
+        mh.setSpacing(10)
+        seg = QFrame(objectName="seg")  # one control with two halves, the chosen one raised
+        sh = QHBoxLayout(seg)
+        sh.setContentsMargins(3, 3, 3, 3)
+        sh.setSpacing(2)
+        for rb in (self.cont, self.ptt):
+            rb.setProperty("look", "seg")
+            rb.setCursor(Qt.CursorShape.PointingHandCursor)
+            sh.addWidget(rb)
+        mh.addWidget(seg)
         mh.addWidget(self.ptt_key)
         mh.addStretch()
         v.addLayout(mh)
@@ -538,16 +558,15 @@ class MainWindow(QMainWindow):
         lay.setSpacing(12)
         top = QHBoxLayout()
         top.setSpacing(12)
-        top.addWidget(self.h1)
-        top.addWidget(self.status)
+        top.addLayout(self._lang_row(title=True))  # what is being interpreted is the page's title
         top.addStretch()
+        top.addWidget(self.status, 0, Qt.AlignmentFlag.AlignVCenter)
         top.addWidget(self.mute_btn)
         top.addWidget(self.start_btn)
         lay.addLayout(top)
         lay.addWidget(self.banner)
         self._two_columns(lay, self._convo(),
-                          self._settings_column(self._card_lang(), self._card_devices(), self._card_functions()),
-                          chrome=176 + 56)
+                          self._settings_column(self._card_devices(), self._card_functions()), chrome=176 + 56)
         outer.addWidget(content, 1)
         return root
 
@@ -595,8 +614,8 @@ class MainWindow(QMainWindow):
             tv.addLayout(th)
             tv.addWidget(lst, 1)
             bh.addWidget(g, 1)
-        self._two_columns(lay, both, self._settings_column(self.mascot, self._card_lang(), self._card_devices(),
-                                                           self._card_functions("chips")), chrome=40)
+        self._two_columns(lay, both, self._settings_column(self._card_lang(), self._card_devices(), self._card_functions("chips"),
+                                                           self.mascot), chrome=40)  # (she sits under the settings: above, she pushed them down)
         foot = QHBoxLayout()
         foot.setSpacing(8)
         foot.addWidget(self.lat_label, 1)

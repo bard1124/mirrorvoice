@@ -742,6 +742,7 @@ def test_each_look_has_its_own_layout_made_of_the_same_controls(app, settings, n
 
         use("chat")
         assert at(w.my).y() < 70 and at(w.their).y() < 70  # the two languages head the window
+        assert not w.my.property("look")  # (an ordinary box again after being 静场's title)
         assert w.log.isVisible() and not w.log_me.isVisible() and not w.chain.isVisible()
         assert at(w.start_btn).y() > at(w.log).y() and at(w.start_btn).x() < at(w.mic).x()  # docked under the conversation
         assert at(w.nav["_glossary"]).x() < at(w.log).x() and not w.nav["_glossary"].icon().isNull()  # a rail of icons
@@ -749,6 +750,8 @@ def test_each_look_has_its_own_layout_made_of_the_same_controls(app, settings, n
         use("quiet")
         assert at(w.nav["_glossary"]).x() < 176 and at(w.log).x() < at(w.mic).x()  # conversation first, settings right
         assert w.log.isVisible() and not w.chain.isVisible() and at(w.start_btn).y() < 80
+        assert at(w.my).y() < 80 and w.my.property("look") == "title"  # the two languages are the page's title
+        assert w.cont.property("look") == "seg" and w.cont.isVisible() and w.ptt.isVisible()  # one control, two halves
         # the functions are lines with sliding switches here; the check box behind each still holds the setting
         sw = w._fn_switches[w.stream]
         assert sw.isVisible() and sw.isChecked() and not w.stream.isVisible() and w.nav["_glossary"].icon().isNull()
