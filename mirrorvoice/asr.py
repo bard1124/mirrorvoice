@@ -30,6 +30,19 @@ def _plain(text: str) -> str:
     return re.sub(r"[\W_]+", "", text)
 
 
+CJK_LANGS = {"zh", "yue", "ja", "ko"}
+
+
+def reads_as_latin(text: str) -> bool:
+    """Words in Latin letters with (next to) no Chinese among them: speech in a Western language
+    that came out labelled Chinese ('呃 for eightight one one呃sevenf', 'using the。', '0686. Yeah,
+    one second.'). Chinese with a term or two of English in it stays Chinese ('但这个现在叫 job
+    document', 'bug他这个bug跟我跟他')."""
+    words = len(re.findall(r"[A-Za-z][A-Za-z']*", text))
+    cjk = len(re.findall(r"[\u3400-\u9fff]", text))
+    return (cjk == 0 and words >= 1) or (words >= 3 and cjk <= 4)
+
+
 @dataclass
 class Decoded:
     text: str
@@ -186,8 +199,13 @@ class Segmenter:
                  lang: str = "", alt: str = "", log: Callable[[str], None] | None = None,
                  on_level: Callable[[str, float], None] | None = None, recognizer=None, vad=None,
                  words: "QwenASR | None" = None, stream: bool = False,
-                 on_guess: Callable[[Utterance | None], None] | None = None) -> None:
+                 on_guess: Callable[[Utterance | None], None] | None = None, patient: bool = False) -> None:
+        """patient: whole sentences matter more than a fast start (subtitles) — long speech is cut
+        later and only at a clearer pause. 2026-11-13: with the settings made for my own voice, the
+        other side was cut 93 times in 23 minutes; 33 lines ended on "the", "to", "because"."""
         self.name, self.pause, self.on_utt = name, pause, on_utt
+        if patient:
+            self.LONG_S, self.DIP_S, self.HARD_S, self.HARD_DIP_S, self.MAX_S = 8.0, 0.45, 12.0, 0.25, 14.0
         self.on_guess = on_guess
         self.guess: tuple[int, str] | None = None  # (n, its words) of the guess not settled yet
         self.guess_n, self.guess_dip = 0, -1       # guesses made; the pause the last one was made in
@@ -216,8 +234,13 @@ class Segmenter:
     # ---------------------------------------------------------------- recognition
     def recognize(self, seg: np.ndarray) -> Decoded:
         d = self.asr.decode(seg)
-        if not self.lang or d.lang in (self.lang, self.alt) or not re.sub(r"[\W_]+", "", d.text):
+        if not self.lang or d.lang == self.lang or not re.sub(r"[\W_]+", "", d.text):
             return d
+        if d.lang == self.alt:
+            # The other side's language is welcome here (shown as it is) — unless the words say it
+            # is not that language at all: English labelled Chinese was shown untranslated.
+            if not (self.alt in CJK_LANGS and self.lang not in CJK_LANGS and reads_as_latin(d.text)):
+                return d
         if self._fixed is None:
             self._fixed = Recognizer(self.lang)
         fixed = self._fixed.decode(seg)
@@ -419,7 +442,8 @@ class Listener:
                  log: Callable[[str], None] | None = None, alt: str = "", online_key: str = "",
                  on_partial: Callable[[str], None] | None = None,
                  on_notice: Callable[[str], None] | None = None, words: "QwenASR | None" = None,
-                 stream: bool = False, on_guess: Callable[[Utterance | None], None] | None = None) -> None:
+                 stream: bool = False, on_guess: Callable[[Utterance | None], None] | None = None,
+                 patient: bool = False) -> None:
         """language: the language expected from this source ("auto" = any); alt: the other
         side's language, accepted as detected (passthrough / same-language subtitles).
         online_key: 阿里云百炼 key → streaming online recognition (online_asr.py) instead of
@@ -435,7 +459,8 @@ class Listener:
                                        on_partial, on_notice, detector=Recognizer("auto"), words=words)
         else:
             self.seg = Segmenter(name, pause, on_utt, lang, alt, self.log, on_level, words=words, stream=stream,
-                                 on_guess=None if words is not None else on_guess)  # (a second recognizer may reword it)
+                                 on_guess=None if words is not None else on_guess,  # (a second recognizer may reword it)
+                                 patient=patient)
         self.q: queue.Queue[np.ndarray] = queue.Queue()
         self.source = source
         self.capture = Capture(source, self.q.put, self.WINDOW)

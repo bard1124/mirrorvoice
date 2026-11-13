@@ -182,6 +182,22 @@ _TASK_WORDS = (
 )
 
 
+_PLAIN_WORD = re.compile(r"(?<![A-Za-z'])[a-z][a-z']+(?![A-Za-z'])")  # an ordinary word: not a Name, not an ACRONYM
+
+
+def left_untranslated(out: str, tgt: str) -> int:
+    """How much of a subtitle is still in the speaker's language, for a target written in Chinese
+    characters: 0 = fine. 2026-11-13, a 4B model: 22 of 327 English sentences came back in
+    English, 12 with three or more words left in the Chinese ("在评论下。yeah，please check.").
+    Names, acronyms and terms kept on purpose do not count (capitals), nor does a word or two."""
+    if tgt not in ("zh", "yue", "ja"):
+        return 0
+    words = len(_PLAIN_WORD.findall(out))
+    if not _CJK.search(out):
+        return words if words >= 2 else 0
+    return words if words >= 3 else 0
+
+
 def off_task(out: str, src_text: str, tgt: str) -> bool:
     """The output is reasoning about the sentence, not its translation: never speak or show it."""
     return looks_like_reasoning(out, tgt) or any(o.search(out) and not s.search(src_text) for o, s in _TASK_WORDS)
@@ -294,6 +310,15 @@ class Translator:
             out = last_line(self.backend.chat([msgs[0], {"role": "user", "content": user_prompt(text, []) + tag}]))
             if off_task(out, text, tgt):
                 return ""
+        left = left_untranslated(out, tgt) if subtitle else 0
+        if left:
+            # words of the speaker's language are still in it: once more, alone and told so. The
+            # better of the two stays (a transcript that is noise has no good answer either way).
+            ask = (f"{user_prompt(text, [])}\nWrite the whole answer in {LANGS[tgt].english}: "
+                   f"translate every word, including short replies like \"yeah\" or \"okay\".{tag}")
+            again = last_line(self.backend.chat([msgs[0], {"role": "user", "content": ask}]))
+            if again and not off_task(again, text, tgt) and left_untranslated(again, tgt) < left:
+                out = again
         return out
 
     @staticmethod

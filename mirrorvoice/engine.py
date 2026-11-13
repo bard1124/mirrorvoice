@@ -19,7 +19,7 @@ from typing import Callable
 import numpy as np
 
 from . import models
-from .asr import SENTENCE_END, Listener, Utterance
+from .asr import SENTENCE_END, Listener, Utterance, _plain
 from .audio import Player, find_device, speech_level, time_stretch, trim_silence
 from .config import LOG_FILE, Settings
 from . import hotkeys
@@ -27,7 +27,8 @@ from .hotkeys import Hotkeys
 from .languages import LANGS
 from .transcript import Transcript
 from .online_llm import FailoverChat, OnlineChat, TranslateError
-from .translate import Translator, correct_asr, is_filler, is_fragment, local_backend, spoken_en, tidy_asr
+from .translate import (Translator, correct_asr, is_filler, is_fragment, left_untranslated, local_backend, spoken_en,
+                        tidy_asr)
 from .tts import make_voice
 
 Emit = Callable[..., None]  # emit(kind: str, **data)
@@ -362,12 +363,19 @@ class Engine:
         self.emit("notice", text=f"翻译已切换为：{new.label or models.llm_name(s.quality)}")
         return new, new_them
 
+    THEM_PAUSE_S = 0.7  # their sentence ends at a pause this long (mine at s.pause: my voice must start soon)
+
     def _start_them(self, source: str) -> Listener:
+        """Subtitles want whole sentences: a longer pause ends one, long speech is cut late
+        (patient), and nothing is sent ahead in pieces (边说边译 is for my voice). What they have
+        said so far is shown, and translated when there is time, at every short pause instead
+        (_on_them_guess)."""
         s = self.s
-        them = Listener("them", source, s.their_lang, s.pause, self._on_them, self._on_level, self._them_gate,
-                        self.log, alt=s.my_lang, online_key=self._asr_key(s, "them"),
+        them = Listener("them", source, s.their_lang, max(s.pause, self.THEM_PAUSE_S), self._on_them, self._on_level,
+                        self._them_gate, self.log, alt=s.my_lang, online_key=self._asr_key(s, "them"),
                         on_partial=lambda t: self._on_partial("them", t), on_notice=self._notice,
-                        words=self._words if "them" in self._qwen_sides else None, stream=s.stream)
+                        words=self._words if "them" in self._qwen_sides else None, stream=False,
+                        on_guess=self._on_them_guess, patient=True)
         them.start()
         self._own(them.close)
         self._them = them
@@ -557,6 +565,8 @@ class Engine:
                 self._do_me(tr, utt)
             elif kind == "guess":
                 self._do_me(tr, utt.utt, utt)
+            elif kind == "them_guess":
+                self._do_them_guess(tr_them)
             else:
                 self._do_them(tr_them, utt)
 
@@ -827,8 +837,12 @@ class Engine:
             if t0 - utt.t_end > self.STALE_THEM_S:
                 raise TranslateError("timeout", "积压太多，已跳过这句")
             ctx = self._context("them", utt)
-            out = tr.translate(utt.text, src, s.my_lang, subtitle=True, context=ctx,
-                               history=self._history("them", utt, ctx, tr), on_text=self._live_them(utt))
+            ready = getattr(self, "_them_guess_done", None)
+            if ready and ready[0] == _plain(utt.text):  # translated at their last pause, and they stopped there
+                out = ready[1]
+            else:
+                out = tr.translate(utt.text, src, s.my_lang, subtitle=True, context=ctx,
+                                   history=self._history("them", utt, ctx, tr), on_text=self._live_them(utt))
         except TranslateError as e:
             self.log(f"[them] 未翻译 {e.kind}: {e}")
             self.emit("them", src=utt.text, tgt=f"⚠ {e}", latency=time.time() - utt.t_end, asr_s=utt.asr_s,
@@ -836,10 +850,53 @@ class Engine:
             return
         t_tr = time.time() - t0
         self.log(f"[them] 排队 {t0 - utt.t_end:.1f}s 翻译 {t_tr:.2f}s: {out[:40]!r}")
-        self._remember("them", utt.text, out, utt.t_end)
+        if not left_untranslated(out, s.my_lang):  # (a line left in English teaches the next one to stay so)
+            self._remember("them", utt.text, out, utt.t_end)
         self.emit("them", src=utt.text, tgt=out, latency=time.time() - utt.t_end, asr_s=utt.asr_s,
                   queue_s=max(0.0, t0 - utt.t_end - utt.asr_s), translate_s=t_tr)
         self._transcript.add("them", utt.text, out)
+
+    PREVIEW_MIN_WORDS = 4
+
+    def _on_them_guess(self, utt: Utterance | None) -> None:
+        """They paused for a moment: what they have said so far goes on screen at once, and is
+        translated as soon as the translator is free (the newest guess only). The finished
+        sentence replaces it. None: they went on — the line stays until there is a newer one."""
+        if utt is None or not self.running:
+            return
+        text = tidy_asr(utt.text)
+        same = utt.lang in SIMILAR.get(self.s.my_lang, {self.s.my_lang})
+        if same or is_filler(text) or len(re.findall(r"[A-Za-z0-9']+|[\u3400-\u9fff]", text)) < self.PREVIEW_MIN_WORDS:
+            return  # ("Okay." is on screen as a sentence a moment later: nothing to show ahead)
+        self.emit("partial", who="them", src=text, tgt="")
+        with self._lock:
+            self._them_guess = (self._them_gen, text, utt.lang)
+            queued, self._them_guess_queued = getattr(self, "_them_guess_queued", False), True
+        if not queued:
+            self._jobs.put((2, next(self._seq), "them_guess", None))  # after my speech (0) and their sentences (1)
+
+    def _do_them_guess(self, tr: Translator) -> None:
+        with self._lock:
+            g, self._them_guess_queued = getattr(self, "_them_guess", None), False
+        if g is None or g[0] != self._them_gen or not self.running:
+            return  # the sentence is finished: its own translation is on its way
+        gen, text, lang = g
+        s = self.s
+        text = correct_asr(text, tr.glossary, "them")
+        show = self._live_them(Utterance(text, lang, np.zeros(0, np.float32), time.time(), 0.0))
+
+        def still_wanted(so_far: str) -> None:
+            if gen != self._them_gen or (self._me is not None and self._me.speaking()):
+                raise _Void  # (my own words come first: a guess never keeps my voice waiting)
+            show(so_far)
+        try:
+            out = tr.translate(text, lang if lang in LANGS else s.their_lang, s.my_lang, subtitle=True,
+                               on_text=still_wanted)
+        except (_Void, TranslateError):
+            return
+        if out and gen == self._them_gen:
+            self._them_guess_done = (_plain(text), out)
+            self.emit("partial", who="them", src=text, tgt=out + " …", live=True)
 
     LIVE_EVERY_S, LIVE_MIN_CHARS = 0.12, 4
 
@@ -1062,7 +1119,8 @@ class Engine:
                 pass
 
     # ---- the other side: a short piece of a sentence waits for the rest
-    HOLD_S, HOLD_MAX_S = 0.8, 8.0
+    # (HOLD_MAX_S was 8 s: while they kept talking, "Everything is ok." waited 4-6 s for a sentence to join)
+    HOLD_S, HOLD_MAX_S = 0.8, 2.0
 
     def _take_held(self) -> Utterance | None:
         with self._lock:
