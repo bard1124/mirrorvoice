@@ -522,7 +522,8 @@ class Engine:
         me = Listener("me", s.mic, s.my_lang, s.pause, self._on_me, self._on_level, self._gate, self.log,
                       alt=s.their_lang, online_key=self._asr_key(s, "me"),
                       on_partial=lambda t: self._on_partial("me", t), on_notice=self._notice,
-                      words=words if "me" in sides else None, stream=s.stream, on_guess=self._on_me_guess)
+                      words=words if "me" in sides else None, stream=s.stream, on_guess=self._on_me_guess,
+                      clean=True)
         me.start()
         self._own(me.close)
         self._me = me

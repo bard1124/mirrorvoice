@@ -10,7 +10,7 @@ from typing import Callable
 
 import numpy as np
 
-from .audio import ASR_SR, Capture
+from .audio import ASR_SR, Capture, SpeechInput
 from .languages import sensevoice_lang_tag
 from .models import ASR, VAD
 
@@ -434,6 +434,7 @@ class Listener:
     """
 
     WINDOW = Segmenter.WINDOW
+    OVERLOAD = 1.5  # a 10 s window whose raw peak is beyond this (full scale = 1) counts as overloaded
 
     def __init__(self, name: str, source: str, language: str, pause: float,
                  on_utt: Callable[[Utterance], None],
@@ -443,8 +444,10 @@ class Listener:
                  on_partial: Callable[[str], None] | None = None,
                  on_notice: Callable[[str], None] | None = None, words: "QwenASR | None" = None,
                  stream: bool = False, on_guess: Callable[[Utterance | None], None] | None = None,
-                 patient: bool = False) -> None:
-        """language: the language expected from this source ("auto" = any); alt: the other
+                 patient: bool = False, clean: bool = False) -> None:
+        """clean: a real microphone — its signal goes through audio.SpeechInput first (rumble out,
+        never beyond full scale), and an overloaded input is told once (on_notice).
+        language: the language expected from this source ("auto" = any); alt: the other
         side's language, accepted as detected (passthrough / same-language subtitles).
         online_key: 阿里云百炼 key → streaming online recognition (online_asr.py) instead of
         SenseVoice, with partial text through on_partial."""
@@ -470,6 +473,9 @@ class Listener:
         self._flush = threading.Event()
         self._restart_at = 0.0
         self._hb = [time.time(), 0, 0.0, 0]  # window start, blocks, peak, segments
+        self.clean = SpeechInput() if clean else None
+        self.on_notice = on_notice
+        self._overloads, self._hb_clean = 0, 0.0  # 10 s windows far beyond full scale; peak after cleaning
 
     def speaking(self) -> bool:
         """Speech is being heard right now (a sentence is under way)."""
@@ -482,8 +488,15 @@ class Listener:
         if now - self._hb[0] < 10:
             return
         t0, blocks, peak, segs = self._hb
-        self.log(f"[{self.name}] 10s: 音频块={blocks} 峰值={peak:.3f} 片段={segs} 门开={self.gate()} {self.capture.health()}")
-        self._hb = [now, 0, 0.0, 0]
+        cleaned = f" 滤后峰值={self._hb_clean:.3f}" if self.clean is not None else ""
+        self.log(f"[{self.name}] 10s: 音频块={blocks} 峰值={peak:.3f} 片段={segs} 门开={self.gate()} "
+                 f"{self.capture.health()}{cleaned}")
+        if self.clean is not None and peak > self.OVERLOAD:
+            self._overloads += 1
+            if self._overloads == 2 and self.on_notice is not None:  # (twice: not for one knock on the desk)
+                self.on_notice("麦克风输入过载（输入音量太高，或有很强的低频噪声），已自动滤除后再识别。"
+                               "建议到 系统设置 → 声音 → 输入，把输入音量调低一些。")
+        self._hb, self._hb_clean = [now, 0, 0.0, 0], 0.0
 
     def start(self) -> None:
         self.capture.start()
@@ -538,6 +551,9 @@ class Listener:
             self._hb[1] += 1
             if len(block):
                 self._hb[2] = max(self._hb[2], float(np.abs(block).max()))
+                if self.clean is not None:
+                    block = self.clean(block)
+                    self._hb_clean = max(self._hb_clean, float(np.abs(block).max()))
             self._heartbeat()
             before = self.seg.count
             self.seg.feed(block, self.gate())

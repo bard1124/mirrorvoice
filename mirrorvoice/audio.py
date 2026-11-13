@@ -30,6 +30,43 @@ def speech_level(x: np.ndarray, sr: int = ASR_SR) -> float:
     return float(np.percentile(np.sqrt((frames * frames).mean(axis=1)), 90))
 
 
+class SpeechInput:
+    """What a microphone hands the recognisers: nothing below the voice, never beyond full scale.
+
+    2026-11-13, a headset microphone with the system input volume at 100: 96 % of its idle signal
+    lay between 20 and 60 Hz, at peaks of 18-58 times full scale while speaking. Under that rumble
+    the speech detector found no speech at all: one sentence was translated, then nothing (0 of 4
+    sentences in the replay, 4 of 4 through this). A linear-phase FIR high-pass (801 taps: down
+    ~50 dB at 60 Hz, flat from ~130 Hz, 25 ms late), then a limiter that turns the level down when
+    it still overshoots and lets it come back over a few seconds."""
+
+    CUTOFF_HZ, TAPS = 95.0, 801
+    LIMIT, RELEASE_S = 0.9, 2.0  # peaks above LIMIT are scaled down to it; the hold halves every RELEASE_S
+
+    def __init__(self, sr: int = ASR_SR) -> None:
+        n = np.arange(self.TAPS) - (self.TAPS - 1) / 2
+        low = np.sinc(2 * self.CUTOFF_HZ / sr * n) * np.hamming(self.TAPS)
+        high = -low / low.sum()
+        high[(self.TAPS - 1) // 2] += 1.0  # (everything) - (what is below the cut-off)
+        self.sr, self.h = sr, high.astype(np.float32)
+        self.tail = np.zeros(self.TAPS - 1, dtype=np.float32)
+        self.peak = 0.0  # the level the limiter is holding against
+
+    def __call__(self, block: np.ndarray) -> np.ndarray:
+        if not len(block):
+            return block
+        x = np.concatenate([self.tail, np.asarray(block, dtype=np.float32)])
+        self.tail = x[-(self.TAPS - 1):]
+        y = np.convolve(x, self.h, mode="valid").astype(np.float32)  # as long as the block
+        step = 512  # the limiter works in pieces of 32 ms, however much audio comes in one go
+        for i in range(0, len(y), step):
+            part = y[i:i + step]
+            self.peak = max(float(np.abs(part).max()), self.peak * 0.5 ** (len(part) / self.sr / self.RELEASE_S))
+            if self.peak > self.LIMIT:
+                part *= self.LIMIT / self.peak
+        return y
+
+
 SILENCE_FLOOR = 0.004  # |sample| below this is silence whatever the voice's level
 
 

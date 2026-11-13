@@ -222,3 +222,80 @@ def test_a_short_sentence_waits_two_seconds_at_most_for_one_to_join():
     from mirrorvoice.engine import Engine
 
     assert Engine.HOLD_MAX_S <= 2.0
+
+
+# ---------------------------------------------------------------- a microphone under rumble
+def _tone(hz, amp=1.0, sec=1.0):
+    return (amp * np.sin(2 * np.pi * hz * np.arange(int(16000 * sec)) / 16000)).astype(np.float32)
+
+
+def test_the_microphones_signal_loses_what_is_below_the_voice_and_never_overshoots():
+    """v0.8.25, input volume at 100: 96 % of the idle signal lay at 20-60 Hz, peaks at 18-58 times
+    full scale. The speech detector found nothing in it: one sentence was translated, then none."""
+    from mirrorvoice.audio import SpeechInput
+
+    settled = lambda x: float(np.abs(x[4000:]).max())  # noqa: E731  (past the filter's start)
+    for hz in (25, 40, 50, 60):
+        assert settled(SpeechInput()(_tone(hz, 30.0))) < 0.2, hz  # rumble 30 times full scale: next to nothing left
+    for hz in (160, 300, 1000, 4000):
+        assert 0.45 < settled(SpeechInput()(_tone(hz, 0.5))) < 0.55, hz  # the voice passes as it is
+    assert settled(SpeechInput()(_tone(300, 20.0))) <= 0.9 + 1e-3  # a voice far too hot is turned down, not clipped
+    quiet = SpeechInput()
+    quiet(_tone(300, 20.0))
+    later = quiet(np.concatenate([np.zeros(16000 * 12, np.float32), _tone(300, 0.5)]))
+    assert 0.45 < float(np.abs(later[-8000:]).max()) < 0.55  # and the level comes back when it is over
+
+    # block by block (as the audio arrives) is the same as all at once
+    x = (_tone(40, 8.0, 2.0) + _tone(300, 0.3, 2.0)).astype(np.float32)
+    whole, f = SpeechInput()(x), SpeechInput()
+    parts = np.concatenate([f(x[i:i + 512]) for i in range(0, len(x), 512)])
+    assert len(parts) == len(x) and float(np.abs(parts[8000:] - whole[8000:]).max()) < 0.05
+    assert len(SpeechInput()(np.zeros(0, np.float32))) == 0
+
+
+def test_my_microphone_is_cleaned_before_anything_listens_and_an_overload_is_told_once(monkeypatch):
+    from mirrorvoice import engine as eng
+
+    monkeypatch.setattr(asr, "Capture", lambda source, put, window: type("C", (), {
+        "label": source, "start": lambda s: None, "close": lambda s: None, "stalled": lambda s: False,
+        "health": lambda s: "ok"})())
+    fed, said, logged = [], [], []
+
+    class _Seg:
+        count = 0
+
+        def __init__(self, *a, **k):
+            pass
+
+        def feed(self, block, gate=True):
+            fed.append(block)
+
+    monkeypatch.setattr(asr, "Segmenter", _Seg)
+    mic = asr.Listener("me", "外置麦克风", "zh", 0.35, lambda u: None, log=logged.append, on_notice=said.append, clean=True)
+    line = asr.Listener("them", "BlackHole 16ch", "en", 0.7, lambda u: None)
+    assert mic.clean is not None and line.clean is None  # (a digital line needs none of it)
+
+    import threading
+
+    t = threading.Thread(target=mic._loop, daemon=True)
+    t.start()
+    rumble = (_tone(40, 30.0, 0.5) + _tone(300, 0.2, 0.5)).astype(np.float32)
+    for i in range(0, len(rumble), 512):
+        mic.q.put(rumble[i:i + 512])
+    end = time.monotonic() + 10
+    while mic.q.qsize() and time.monotonic() < end:
+        time.sleep(0.01)
+    time.sleep(0.05)
+    assert max(float(np.abs(b).max()) for b in fed if len(b)) <= 0.9 + 1e-3  # what the recognisers got
+    assert mic._hb[2] > 20  # the log still tells what the microphone really delivered
+    for _ in range(3):  # three 10 s windows of it
+        mic._hb[0] -= 11
+        mic._hb[2] = 30.0
+        mic._heartbeat()
+    mic.stop_evt.set()
+    assert len(said) == 1 and "输入音量" in said[0]  # told once, at the second such window
+    assert any("滤后峰值" in line for line in logged)
+
+    made = {}
+    monkeypatch.setattr(eng, "Listener", lambda name, *a, **k: made.setdefault(name, k) and None)
+    assert "clean=True" in __import__("inspect").getsource(eng.Engine._worker)  # my microphone asks for it
