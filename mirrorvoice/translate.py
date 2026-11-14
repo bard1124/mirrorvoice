@@ -182,6 +182,34 @@ _TASK_WORDS = (
 )
 
 
+def _echo_letters(text: str) -> str:
+    """The letters alone, lower case: "there's no problem any more" and "theres no problem anymore"
+    are the same thing heard twice."""
+    return "".join(re.findall(r"[a-z0-9\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]", text.lower()))
+
+
+def is_echo(heard: str, said: list[str], share: float = 0.7, just_said: list[str] | None = None) -> bool:
+    """`heard` is (a piece of) something in `said`: my own voice coming back on the other side's
+    line, to be dropped instead of translated back to me. Matched by containment — the copy is
+    heard a little differently and cut elsewhere: the share of the heard line's runs of letters
+    (four at a time; two for Chinese, Japanese, Korean) found in what was said. A word or two
+    ("OK", "Thank you") only when I said exactly that, and — given `just_said` — only a moment
+    ago: their "Okay." half a minute after mine is theirs. The idea is Cicada's EchoMatch."""
+    h = _echo_letters(heard)
+    lines = [_echo_letters(s) for s in said]
+    if not h or not lines:
+        return False
+    cjk = bool(_CJK.search(h))
+    if len(h) < (6 if cjk else 14):
+        return h in (lines if just_said is None else [_echo_letters(s) for s in just_said])
+    n = 2 if cjk else 4
+    mine = [h[i:i + n] for i in range(len(h) - n + 1)]
+    theirs = set()
+    for line in lines:
+        theirs.update(line[i:i + n] for i in range(len(line) - n + 1))
+    return sum(g in theirs for g in mine) >= share * len(mine)
+
+
 _PLAIN_WORD = re.compile(r"(?<![A-Za-z'])[a-z][a-z']+(?![A-Za-z'])")  # an ordinary word: not a Name, not an ACRONYM
 
 

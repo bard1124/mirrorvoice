@@ -27,8 +27,8 @@ from .hotkeys import Hotkeys
 from .languages import LANGS
 from .transcript import Transcript
 from .online_llm import FailoverChat, OnlineChat, TranslateError
-from .translate import (Translator, correct_asr, is_filler, is_fragment, left_untranslated, local_backend, spoken_en,
-                        tidy_asr)
+from .translate import (Translator, correct_asr, is_echo, is_filler, is_fragment, left_untranslated, local_backend,
+                        spoken_en, tidy_asr)
 from .tts import make_voice
 
 Emit = Callable[..., None]  # emit(kind: str, **data)
@@ -716,6 +716,7 @@ class Engine:
                       queue_s=max(0.0, waited - utt.asr_s), translate_s=t_tr, voice_s=None, passthrough=False)
             return
         job.out, job.t_tr = out, t_tr
+        self._said_now(out)
         head = first.get("text", "")
         if not head:
             job.t_first_text = time.time()
@@ -857,6 +858,33 @@ class Engine:
                   queue_s=max(0.0, t0 - utt.t_end - utt.asr_s), translate_s=t_tr)
         self._transcript.add("them", utt.text, out)
 
+    # ---- my own voice on their line: what I sent into the meeting, heard again as "the other side"
+    # (the meeting app plays me back, the monitor is on a speaker their source records, a second
+    # device in the room). It was shown as their sentence and translated back — at 4 s a sentence
+    # on a slow machine, doubling the queue.
+    ECHO_S = 45.0  # what I said this long ago can still come back (it is spoken late when speech piles up)
+    ECHO_SHORT_S = 8.0  # … but a word or two only right after (their "Okay." later on is their own)
+
+    def _said_now(self, text: str) -> None:
+        with self._lock:
+            if not hasattr(self, "_said"):
+                self._said = deque(maxlen=12)
+            self._said.append((time.time(), text))
+
+    def _is_echo(self, text: str) -> bool:
+        now = time.time()
+        with self._lock:
+            mine = [(at, t) for at, t in getattr(self, "_said", ()) if now - at < self.ECHO_S]
+        said = [t for _, t in mine]
+        if not said or not is_echo(text, said, just_said=[t for at, t in mine if now - at < self.ECHO_SHORT_S]):
+            return False
+        self.log(f"[them] 是我自己的发声传回来了，不翻译：{text!r}")
+        if now - getattr(self, "_echo_told", 0.0) > 120:
+            self._echo_told = now
+            self.emit("notice", text="对方的声音里听到了你自己的翻译（回声），这些句子不会再显示和翻译。"
+                                     "如果经常出现，检查“对方声音来源”是不是选到了会播放你的翻译的设备。")
+        return True
+
     PREVIEW_MIN_WORDS = 4
 
     def _on_them_guess(self, utt: Utterance | None) -> None:
@@ -869,6 +897,10 @@ class Engine:
         same = utt.lang in SIMILAR.get(self.s.my_lang, {self.s.my_lang})
         if same or is_filler(text) or len(re.findall(r"[A-Za-z0-9']+|[\u3400-\u9fff]", text)) < self.PREVIEW_MIN_WORDS:
             return  # ("Okay." is on screen as a sentence a moment later: nothing to show ahead)
+        with self._lock:
+            said = [t for at, t in getattr(self, "_said", ()) if time.time() - at < self.ECHO_S]
+        if said and is_echo(text, said):
+            return  # (my own voice coming back: the finished line says so once, nothing is previewed)
         self.emit("partial", who="them", src=text, tgt="")
         with self._lock:
             self._them_guess = (self._them_gen, text, utt.lang)
@@ -1017,6 +1049,7 @@ class Engine:
         if utt.lang == s.their_lang and s.passthrough and self._player and not self.muted:
             # I already speak their language: send my real voice, no translation
             self._player.outs[0].put(utt.audio, 16000)
+            self._said_now(utt.text)
             self.emit("me", src=utt.text, tgt=utt.text, latency=time.time() - utt.t_end,
                       translate_s=0.0, passthrough=True)
             self._transcript.add("me", utt.text, "（原声透传）")
@@ -1156,6 +1189,8 @@ class Engine:
     def _on_them(self, utt: Utterance) -> None:
         self._them_gen += 1  # provisional translations of this sentence are now out of date
         utt.text = tidy_asr(utt.text)
+        if self._is_echo(utt.text):
+            return
         same = utt.lang in SIMILAR.get(self.s.my_lang, {self.s.my_lang})
         held = self._take_held()
         if held is not None:

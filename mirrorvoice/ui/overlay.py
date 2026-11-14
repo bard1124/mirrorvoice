@@ -1,6 +1,7 @@
 """Always-on-top translucent subtitle bar (Qt; macOS + Windows)."""
 from __future__ import annotations
 
+import sys
 import time
 
 from PySide6.QtCore import QPoint, Qt, QTimer
@@ -149,6 +150,41 @@ class Overlay(QWidget):
         super().showEvent(e)
         if IS_MAC and QApplication.platformName() == "cocoa":
             _mac_float_over_fullscreen(self)
+        self.apply_sharing()
+
+    def apply_sharing(self) -> None:
+        if self.isVisible() and QApplication.platformName() != "offscreen":
+            keep_out_of_sharing(self, self.s.hide_from_share)
+
+
+WDA_NONE, WDA_EXCLUDEFROMCAPTURE = 0x0, 0x11  # SetWindowDisplayAffinity (Windows 10 2004+)
+
+
+def keep_out_of_sharing(w: QWidget, hide: bool) -> bool:
+    """Ask the system to leave this window out of screen sharing, recordings and screenshots
+    (hide=False: let it be seen again). True when the system took the request.
+
+    Windows 10 2004+: reliable. macOS: the window's sharing type — honoured by the older capture
+    path, but from macOS 15.4 a meeting app that records through ScreenCaptureKit may show the
+    window all the same (Apple: no public way to prevent that), so this is a request, not a promise."""
+    try:
+        if IS_MAC:
+            import ctypes
+
+            import AppKit
+            import objc
+
+            win = objc.objc_object(c_void_p=ctypes.c_void_p(int(w.winId()))).window()
+            win.setSharingType_(AppKit.NSWindowSharingNone if hide else AppKit.NSWindowSharingReadOnly)
+            return True
+        if sys.platform == "win32":
+            import ctypes
+
+            return bool(ctypes.windll.user32.SetWindowDisplayAffinity(
+                ctypes.c_void_p(int(w.winId())), WDA_EXCLUDEFROMCAPTURE if hide else WDA_NONE))
+    except Exception:  # noqa: BLE001 — never a reason not to show the window
+        pass
+    return False
 
 
 def _mac_float_over_fullscreen(w: QWidget) -> None:

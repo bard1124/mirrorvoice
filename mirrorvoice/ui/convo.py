@@ -164,3 +164,10 @@ class ConversationWindow(QWidget):
             from .overlay import _mac_float_over_fullscreen
 
             _mac_float_over_fullscreen(self)
+        self.apply_sharing()
+
+    def apply_sharing(self) -> None:
+        from .overlay import keep_out_of_sharing
+
+        if self.isVisible() and QApplication.platformName() != "offscreen":
+            keep_out_of_sharing(self, self.s.hide_from_share)

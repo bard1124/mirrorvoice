@@ -230,6 +230,7 @@ class Settings:
     overlay_y: int = -1
     overlay_pinned: bool = False    # keep the other side's subtitle bar on screen even when stopped
     convo_open: bool = False        # floating two-way conversation window shown
+    hide_from_share: bool = True    # the subtitle bar and conversation window stay out of screen sharing
     convo_font: int = 15
     convo_x: int = -1
     convo_y: int = -1

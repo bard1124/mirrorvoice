@@ -765,3 +765,29 @@ def test_each_look_has_its_own_layout_made_of_the_same_controls(app, settings, n
     finally:
         w.close()
         theme.use(app, "quiet")
+
+
+def test_the_subtitle_windows_ask_to_stay_out_of_screen_sharing(app, settings, no_popups, monkeypatch):
+    """The bar and the conversation window float over the meeting: whoever watches my shared screen
+    read my subtitles. (A request to the system: reliable on Windows, not on macOS 15.4+.)"""
+    from mirrorvoice.ui import convo, dialogs, overlay
+
+    assert settings.hide_from_share is True
+    asked = []
+    monkeypatch.setattr(overlay, "keep_out_of_sharing", lambda w, hide: asked.append((type(w).__name__, hide)) or True)
+    monkeypatch.setattr(overlay.QApplication, "platformName", staticmethod(lambda: "cocoa"))
+    monkeypatch.setattr(overlay, "IS_MAC", False)
+    monkeypatch.setattr(convo, "IS_MAC", False)
+    bar, win = overlay.Overlay(settings), convo.ConversationWindow(settings)
+    try:
+        bar.show()
+        win.show()
+        assert ("Overlay", True) in asked and ("ConversationWindow", True) in asked
+        del asked[:]
+        d = dialogs.StyleDialog(settings, lambda: (bar.apply_sharing(), win.apply_sharing()))
+        assert d.private.isChecked() and "15.4" in d.private.toolTip()
+        d.private.setChecked(False)  # a demo: let them see it
+        assert settings.hide_from_share is False and asked == [("Overlay", False), ("ConversationWindow", False)] and overlay.WDA_EXCLUDEFROMCAPTURE == 0x11
+    finally:
+        bar.close()
+        win.close()

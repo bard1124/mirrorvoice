@@ -1144,7 +1144,8 @@ class MainWindow(QMainWindow):
             self._style_dlg.activateWindow()
             return
         self.overlay.show()  # preview
-        d = StyleDialog(self.s, lambda: (self.overlay.apply_style(), self.convo.apply_style()), self,
+        d = StyleDialog(self.s, lambda: (self.overlay.apply_style(), self.convo.apply_style(),
+                                         self.overlay.apply_sharing(), self.convo.apply_sharing()), self,
                         toggle_bar=self.toggle_overlay_pin, toggle_convo=self.toggle_convo,
                         bar_visible=self.overlay.isVisible)
         d.setModal(False)

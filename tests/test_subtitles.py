@@ -299,3 +299,63 @@ def test_my_microphone_is_cleaned_before_anything_listens_and_an_overload_is_tol
     made = {}
     monkeypatch.setattr(eng, "Listener", lambda name, *a, **k: made.setdefault(name, k) and None)
     assert "clean=True" in __import__("inspect").getsource(eng.Engine._worker)  # my microphone asks for it
+
+
+# ---------------------------------------------------------------- my own voice on their line
+@pytest.mark.parametrize("heard", ["It seems there's no problem anymore.", "it seems theres no problem any more",
+                                   "There's no problem anymore.", "You take a screenshot and give it to me."])
+def test_my_own_sentence_heard_back_is_an_echo(heard):
+    from mirrorvoice.translate import is_echo
+
+    said = ["It seems there's no problem anymore.", "You take a screenshot and give it to me."]
+    assert is_echo(heard, said)
+
+
+@pytest.mark.parametrize("heard", ["Take a screenshot? Sure, give me a second.", "No problem, I will do it tomorrow.",
+                                   "Yes.", "Okay.", "It seems we have another problem with the release.", "Is there a problem?"])
+def test_an_answer_that_shares_words_with_mine_is_not(heard):
+    from mirrorvoice.translate import is_echo
+
+    assert not is_echo(heard, ["It seems there's no problem anymore.", "You take a screenshot and give it to me."])
+
+
+def test_a_word_or_two_is_an_echo_only_when_i_said_exactly_that_and_chinese_goes_by_characters():
+    from mirrorvoice.translate import is_echo
+
+    assert is_echo("Thank you.", ["Thank you."]) and not is_echo("Thank you.", ["Thank you all for coming."])
+    assert is_echo("我们今天讨论一下发布计划", ["我们今天讨论一下发布计划。"])
+    assert not is_echo("我们明天再看发布的问题", ["我们今天讨论一下发布计划。"])
+    assert not is_echo("", ["anything"]) and not is_echo("Hello there everyone.", [])
+
+
+def test_my_voice_coming_back_is_not_shown_translated_or_previewed():
+    e, events = _engine()
+    tr = _Tr("看起来问题已经解决了。")
+    e._said_now("It seems there's no problem anymore.")
+    e._on_them(_utt("It seems there's no problem anymore."))
+    assert e._jobs.empty()  # nothing to translate
+    notices = [d["text"] for k, d in events if k == "notice"]
+    assert len(notices) == 1 and "回声" in notices[0]
+    n = len(events)
+    e._on_them_guess(_utt("It seems there's no problem anymore."))
+    e._on_them(_utt("It seems there's no problem any more."))  # again: dropped, and not told a second time
+    assert len(events) == n and e._jobs.empty()
+
+    e._on_them(_utt("We still need the sign-off from QA before Thursday."))  # their own sentence goes through
+    assert not e._jobs.empty()
+    _, _, kind, utt = e._jobs.get_nowait()
+    e._do_them(tr, utt)
+    assert events[-1][0] == "them"
+
+    # a word or two is an echo only right after I said it: "Okay." half a minute later is their own
+    e._said_now("Okay.")
+    e._on_them(_utt("Okay."))
+    assert e._jobs.empty()
+    e._said[-1] = (time.time() - 20, "Okay.")
+    e._on_them(_utt("Okay."))
+    assert not e._jobs.empty()
+    e._jobs.get_nowait()
+
+    e._said[0] = (time.time() - 100, e._said[0][1])  # long ago: no longer an echo
+    e._on_them(_utt("It seems there's no problem anymore."))
+    assert not e._jobs.empty()

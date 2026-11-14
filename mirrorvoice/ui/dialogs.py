@@ -100,9 +100,14 @@ class StyleDialog(QDialog):
         self.convo_btn = QPushButton()
         self.convo_btn.clicked.connect(self._convo)
         form.addRow("", self.convo_btn)
+        self.private = QCheckBox("共享屏幕时不让对方看到这两个窗口", checked=s.hide_from_share)
+        self.private.setToolTip("字幕条和对话悬浮窗不出现在屏幕共享、录屏和截图里。Windows 10 2004 以上有效；"
+                                "macOS 15.4 起部分会议软件仍可能拍到，建议共享前先自己确认一次。")
+        form.addRow("", self.private)
         for w in (self.font, self.op, self.cfont):
             w.valueChanged.connect(self._apply)
         self.orig.toggled.connect(self._apply)
+        self.private.toggled.connect(self._apply)
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         bb.rejected.connect(self.accept)
         form.addRow(bb)
@@ -127,6 +132,7 @@ class StyleDialog(QDialog):
         self._labels()
 
     def _apply(self) -> None:
+        self.s.hide_from_share = self.private.isChecked()
         self.s.overlay_font = self.font.value()
         self.s.overlay_opacity = self.op.value() / 100
         self.s.overlay_show_original = self.orig.isChecked()
