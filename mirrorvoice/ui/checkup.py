@@ -80,8 +80,9 @@ class TeamsOneClick(QWidget):
              "other": "ℹ️ Teams 现在用的不是翻了么的线路。",
              "unknown": "ℹ️ 还读不到 Teams 的设置（没装新版 Teams，或还没打开过）。"}
 
-    def __init__(self) -> None:
+    def __init__(self, system_audio: bool = False) -> None:
         super().__init__()
+        self.system_audio = system_audio  # the other side is heard from what the Mac plays: no meeting-speaker device
         self.status = QLabel(wordWrap=True)
         self.set_btn = QPushButton("一键设置 Teams", objectName="primary")
         self.back_btn = QPushButton("一键还原")
@@ -89,6 +90,8 @@ class TeamsOneClick(QWidget):
         self.back_btn.setToolTip("改回一键设置之前的麦克风和扬声器（没有记录时改回 Teams 默认：跟随系统）。")
         self.set_btn.clicked.connect(lambda: self._change(self._apply))
         self.back_btn.clicked.connect(lambda: self._change(teams_devices.restore))
+        if system_audio:
+            self.STATE = dict(self.STATE, set="✅ Teams 现在用的是翻了么的线路（麦克风 BlackHole 2ch，扬声器跟随系统）。")
         row = QHBoxLayout()
         row.addWidget(self.set_btn)
         row.addWidget(self.back_btn)
@@ -100,14 +103,13 @@ class TeamsOneClick(QWidget):
         self.refresh()
 
     def refresh(self) -> None:
-        self.status.setText(self.STATE[teams_devices.state()])
+        self.status.setText(self.STATE[teams_devices.state(self.system_audio)])
 
-    @staticmethod
-    def _apply() -> str:
+    def _apply(self) -> str:
         from ..audio import default_output_name
 
-        made = teams_devices.prepare(default_output_name())
-        return (made + "\n\n" if made else "") + teams_devices.apply()
+        made = teams_devices.prepare(default_output_name(), self.system_audio)
+        return (made + "\n\n" if made else "") + teams_devices.apply(self.system_audio)
 
     def _change(self, change) -> None:
         reopen = False
@@ -140,7 +142,7 @@ class TeamsOneClick(QWidget):
 
 
 class MeetingGuideDialog(QDialog):
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, system_audio: bool = False) -> None:
         super().__init__(parent)
         self.setWindowTitle("会议软件设置")
         self.resize(600, 500)
@@ -150,13 +152,14 @@ class MeetingGuideDialog(QDialog):
         for app in meeting_apps.APPS:
             page = QWidget()
             v = QVBoxLayout(page)
-            text = QLabel("<br><br>".join(f"{i}. {t}" for i, t in enumerate(meeting_apps.steps(app), 1)),
+            text = QLabel("<br><br>".join(f"{i}. {t}" for i, t in enumerate(
+                              meeting_apps.steps(app, system_audio=system_audio), 1)),
                           wordWrap=True, textFormat=Qt.TextFormat.RichText)
             text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             text.setStyleSheet("font-size: 14px;")
             v.addWidget(text)
             if app == "Teams" and teams_devices.supported():
-                v.addWidget(TeamsOneClick())
+                v.addWidget(TeamsOneClick(system_audio))
             v.addStretch()
             tabs.addTab(page, app)
         lay.addWidget(tabs, 1)

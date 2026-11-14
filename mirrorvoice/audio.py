@@ -1,14 +1,17 @@
 """Audio devices: callback-driven outputs, mic/virtual inputs, Windows loopback capture."""
 from __future__ import annotations
 
+import os
+import subprocess
 import threading
 import time
+from pathlib import Path
 from typing import Callable, Iterable, Iterator
 
 import numpy as np
 import sounddevice as sd
 
-from .config import IS_WIN
+from .config import IS_MAC, IS_WIN, resource_dir
 
 ASR_SR = 16000
 
@@ -152,7 +155,30 @@ def list_devices(kind: str) -> list[str]:
             names.append(d["name"])
     if kind == "input" and IS_WIN:
         names += [f"loopback:{n}" for n in list_loopback_speakers()]
+    if kind == "input" and system_audio_available():
+        names.append(SYSTEM_AUDIO)
     return names
+
+
+# ------------------------------------------------------------------ the Mac's own sound (macOS 14.4+)
+SYSTEM_AUDIO = "system:audio"  # a source like Windows' "loopback:…": whatever the computer is playing
+
+
+def system_audio_helper() -> Path:
+    """packaging/mac/system_audio.swift, compiled: in the bundle, or packaging/vendor/ from source."""
+    return resource_dir() / "system_audio"
+
+
+def system_audio_available() -> bool:
+    if not IS_MAC:
+        return False
+    import platform
+
+    try:
+        version = tuple(int(x) for x in platform.mac_ver()[0].split(".")[:2])
+    except ValueError:
+        return False
+    return version >= (14, 4) and system_audio_helper().exists()
 
 
 def find_device(name: str | None, kind: str) -> int | None:
@@ -300,7 +326,11 @@ class Capture:
         self.stop_evt = threading.Event()
         self.last_cb, self.overflows, self.error = 0.0, 0, None
         self.loopback = name.startswith("loopback:")
-        if self.loopback:
+        self.system = name.startswith("system:")
+        self.proc: subprocess.Popen | None = None
+        if self.system:
+            self.label = name
+        elif self.loopback:
             self.label = name
             self._spk = name.split(":", 1)[1]
         else:
@@ -310,6 +340,9 @@ class Capture:
             self.channels = min(2, int(info["max_input_channels"]))
 
     def start(self) -> None:
+        if self.system:
+            self._system_start()
+            return
         if self.loopback:
             threading.Thread(target=self._loopback_loop, daemon=True, name="loopback").start()
             return
@@ -327,15 +360,67 @@ class Capture:
             self.error = e
 
     def stalled(self, seconds: float = 3.0) -> bool:
-        """No callback for `seconds` although the stream should be running (loopback has its own loop)."""
+        """No callback for `seconds` although the stream should be running (loopback has its own loop).
+        The system-audio helper leaves when the output device changes: that counts, so it is started again."""
+        if self.system:  # (silence is handed on while it lives: only its leaving is a stall)
+            return self.proc is not None and self.proc.poll() is not None and not self.stop_evt.is_set()
         return (not self.loopback and self.last_cb > 0 and time.time() - self.last_cb > seconds)
 
     def health(self) -> str:
         if self.loopback:
             return "loopback"
+        if self.system:
+            code = self.proc.poll() if self.proc else None
+            return (f"system-audio {'running' if self.proc and code is None else f'exited {code}'} "
+                    f"last={time.time() - self.last_cb:.1f}s ago err={self.error!r}")
         st = getattr(self, "stream", None)
         return (f"active={st.active if st else None} stopped={st.stopped if st else None} "
                 f"overflows={self.overflows} last_cb={time.time() - self.last_cb:.1f}s ago err={self.error!r}")
+
+    def _system_cmd(self) -> list[str]:
+        return [str(system_audio_helper()), str(os.getpid())]  # (my own sound — the monitor — is left out)
+
+    def _system_start(self) -> None:
+        """The helper writes what the Mac plays as mono float32. Without the 系统音频录制 grant it
+        runs all the same and delivers only silence."""
+        self.proc = subprocess.Popen(self._system_cmd(), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                     stdin=subprocess.DEVNULL, bufsize=0)
+        self.last_cb = time.time()
+        threading.Thread(target=self._system_loop, args=(self.proc,), daemon=True, name="system-audio").start()
+
+    SYSTEM_GAP_S = 0.1  # nothing from the helper for this long: that much silence is handed on instead
+
+    def _system_loop(self, proc: subprocess.Popen) -> None:
+        """The tap gives nothing at all while no app is playing (and for a moment before the first
+        sound), then keeps giving, silence included. The recogniser needs the silence too — a
+        sentence ends on it — so gaps are filled with it at the pace of the clock."""
+        import select
+
+        try:
+            first = proc.stderr.readline().decode("utf-8", "replace").split()
+            if len(first) < 2 or first[0] != "format":  # "error: …" (an older macOS, no output device)
+                self.error = RuntimeError(" ".join(first) or "system audio helper said nothing")
+                return
+            sr, fd, buf = int(first[1]), proc.stdout.fileno(), b""
+            chunk = max(1, sr * self.block // ASR_SR) * 4  # as much as one block of 16 kHz audio
+            while not self.stop_evt.is_set():
+                ready, _, _ = select.select([fd], [], [], self.SYSTEM_GAP_S)
+                if not ready:
+                    if proc.poll() is not None:
+                        break
+                    self.last_cb = time.time()
+                    self.on_audio(np.zeros(int(self.SYSTEM_GAP_S * ASR_SR), dtype=np.float32))
+                    continue
+                data = os.read(fd, 65536)
+                if not data:
+                    break  # it left: another output device, or it was stopped
+                buf += data
+                self.last_cb = time.time()
+                while len(buf) >= chunk:
+                    piece, buf = buf[:chunk], buf[chunk:]
+                    self.on_audio(resample(np.frombuffer(piece, dtype=np.float32), sr, ASR_SR))
+        except Exception as e:  # noqa: BLE001 — told through health(); the listener opens it again
+            self.error = e
 
     def _loopback_loop(self) -> None:  # Windows only
         import soundcard as sc
@@ -349,6 +434,10 @@ class Capture:
 
     def close(self) -> None:
         self.stop_evt.set()
+        if self.system:
+            if self.proc is not None and self.proc.poll() is None:
+                self.proc.terminate()
+            return
         if not self.loopback:
             try:
                 self.stream.abort()

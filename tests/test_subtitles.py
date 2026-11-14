@@ -359,3 +359,66 @@ def test_my_voice_coming_back_is_not_shown_translated_or_previewed():
     e._said[0] = (time.time() - 100, e._said[0][1])  # long ago: no longer an echo
     e._on_them(_utt("It seems there's no problem anymore."))
     assert not e._jobs.empty()
+
+
+# ---------------------------------------------------------------- the Mac's own sound as their source
+_FAKE_HELPER = r"""
+import struct, sys, time
+sys.stderr.write("format 48000 2\n"); sys.stderr.flush()
+time.sleep(0.5)                                   # nothing is playing yet: the tap gives nothing at all
+tone = b"".join(struct.pack("<f", 0.25 if (i // 24) % 2 else -0.25) for i in range(48000))   # 1 s at 1 kHz
+sys.stdout.buffer.write(tone); sys.stdout.buffer.flush()
+time.sleep(float(sys.argv[1]) if len(sys.argv) > 1 else 30)
+"""
+
+
+@pytest.mark.skipif(__import__("sys").platform == "win32", reason="the system-audio helper is a macOS thing (select on pipes)")
+def test_the_macs_own_sound_is_read_from_the_helper_with_silence_where_it_gives_nothing(tmp_path, monkeypatch):
+    """Taken from Cicada: a Core Audio tap instead of BlackHole 16ch plus a multi-output device in
+    the meeting app. It delivers nothing while no app plays; a sentence ends on silence, so the
+    gaps are handed on as silence."""
+    import sys
+
+    from mirrorvoice import audio
+
+    script = tmp_path / "fake_helper.py"
+    script.write_text(_FAKE_HELPER)
+    got = []
+    cap = audio.Capture(audio.SYSTEM_AUDIO, got.append, 512)
+    monkeypatch.setattr(cap, "_system_cmd", lambda: [sys.executable, str(script), "0.6"])
+    cap.start()
+    end = time.monotonic() + 15
+    while cap.proc.poll() is None and time.monotonic() < end:
+        time.sleep(0.05)
+    time.sleep(0.3)
+    x = np.concatenate(got)
+    loud = np.abs(x) > 0.1
+    assert 0.9 < loud.sum() / 16000 < 1.1  # the helper's second of sound, at 16 kHz
+    first = int(np.argmax(loud))
+    assert first >= 0.3 * 16000 and not np.abs(x[:first - 400]).any()  # silence handed on before it …
+    assert not np.abs(x[first + 17000:]).any() and len(x) - first > 16000 + 0.3 * 16000  # … and after
+    assert cap.stalled() and "exited" in cap.health()  # it left (another output device): to be started again
+    cap.close()
+    assert not cap.stalled()  # stopped on purpose is not a stall
+
+
+def test_the_macs_own_sound_is_offered_as_their_source_only_and_the_meeting_keeps_its_speaker(monkeypatch):
+    from mirrorvoice import audio, meeting_apps, teams_devices
+    from mirrorvoice import device_hints as dh
+
+    ctx = dh.Context("BlackHole 2ch", audio.SYSTEM_AUDIO, "外置耳机")
+    h = dh.hint("source", audio.SYSTEM_AUDIO, ctx)
+    assert h.rank == dh.NORMAL and "耳机" in h.warning and "仅系统录音" in h.warning  # where to allow it, said up front
+    assert dh.label(audio.SYSTEM_AUDIO, h).startswith("电脑正在播放的声音")
+    assert dh.hint("mic", audio.SYSTEM_AUDIO, ctx).rank == dh.UNSUITED  # never my microphone
+    assert dh.hint("source", "BlackHole 16ch", ctx).rank == dh.RECOMMENDED  # the proven line stays the recommended one
+
+    plain, tapped = meeting_apps.steps("Teams", mac=True), meeting_apps.steps("Teams", mac=True, system_audio=True)
+    assert "Teams 扬声器 (耳机+字幕)" in plain[2] and "照常选你的耳机" in tapped[2] and plain[1] == tapped[1]
+    want = teams_devices.wanted(system_audio=True)
+    assert want[teams_devices.MIC_KEY] == {"Microphone": "BlackHole2ch_UID"} and want[teams_devices.SPEAKER_KEY] == {}
+    monkeypatch.setattr(teams_devices.virtual_audio, "mac_multi_output_state", lambda: 1 / 0)
+    assert teams_devices.prepare("外置耳机", system_audio=True) == ""  # no meeting-speaker device to make
+
+    monkeypatch.setattr(audio, "IS_MAC", False)
+    assert not audio.system_audio_available()  # Windows has its loopback

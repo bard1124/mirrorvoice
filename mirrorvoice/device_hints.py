@@ -48,6 +48,8 @@ def kind(name: str, direction: str) -> str:
     n = name.lower()
     if n.startswith("loopback:"):
         return "loopback"
+    if n.startswith("system:"):
+        return "system"
     if n == MULTI_OUTPUT_NAME.lower():
         return "multi"
     if "blackhole 2ch" in n:
@@ -97,6 +99,11 @@ def feeds_source(name: str, ctx: Context) -> bool:
 TEAMS_AUDIO = ("Microsoft Teams Audio 是 Teams 自带的虚拟声卡，只在共享屏幕并勾选“包含电脑声音”时用来传电脑声音，"
                "平时放进去对方听不到。")
 ECHO_SUBTITLE = "放进这里的声音会进入“对方声音来源”，你的翻译会被当成对方说的话再翻译成字幕（回声）。"
+
+
+SYSTEM_AUDIO_NOTE = ("直接听电脑正在播放的声音：会议软件的扬声器照常选你的耳机即可，不需要“Teams 扬声器 (耳机+字幕)”。"
+                     "第一次使用系统会询问“录制系统音频”，请允许；如果一直没有字幕，到 系统设置 → 隐私与安全性 → "
+                     "录屏与系统录音 里给翻了么打开“仅系统录音”，然后重新打开翻了么。电脑上其他声音（视频、提示音）也会出字幕。")
 
 
 def _virtual_mic() -> str:
@@ -155,6 +162,8 @@ def _source(name: str, k: str, ctx: Context) -> Hint:
                     "对方声音来源请选 " + _their_line() + "。")
     if k == "bh16":
         return Hint(RECOMMENDED, "推荐")
+    if k == "system":
+        return Hint(NORMAL, "免配置，实验", SYSTEM_AUDIO_NOTE)
     if k == "loopback":
         target = loopback_target(name, ctx.default_out)
         if ctx.call_out and _same(target, ctx.call_out):
@@ -174,7 +183,7 @@ def _source(name: str, k: str, ctx: Context) -> Hint:
 def _mic(name: str, k: str, ctx: Context) -> Hint:
     if k in ("bh2", "cable_out"):
         return Hint(CONFLICT, "⚠️ 这是你的翻译线路", "这里传的是你自己的翻译语音，选它会把翻译再翻译一遍（死循环）。请选你的真实麦克风。")
-    if k in ("bh16", "teams", "virtual", "loopback"):
+    if k in ("bh16", "teams", "virtual", "loopback", "system"):
         return Hint(UNSUITED, "虚拟声卡，不是麦克风", "这是虚拟声卡，收到的是电脑或会议里的声音，不是你说的话。请选你的真实麦克风。")
     return Hint(NORMAL)
 
@@ -183,6 +192,8 @@ def label(name: str, h: Hint) -> str:
     shown = ("扬声器回采：" + name.split(":", 1)[1]) if name.startswith("loopback:") else name
     if name == "loopback:default":
         shown = "扬声器回采：系统默认扬声器"
+    if name.startswith("system:"):
+        shown = "电脑正在播放的声音"
     return f"{shown}（{h.tag}）" if h.tag else shown
 
 

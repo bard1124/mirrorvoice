@@ -49,9 +49,12 @@ def settings_file() -> Path:
             / "Data/Library/Application Support/Microsoft/MSTeams/cmd_settings.json")
 
 
-def wanted() -> dict[str, dict[str, str]]:
+def wanted(system_audio: bool = False) -> dict[str, dict[str, str]]:
     """Teams hears my translated voice as its microphone, and plays the meeting to my headphones
-    and to the line the subtitles listen on."""
+    and to the line the subtitles listen on. system_audio: the subtitles listen to what the Mac
+    plays — the speaker is Teams' own default (the system's), nothing to route."""
+    if system_audio:
+        return {MIC_KEY: {"Microphone": BLACKHOLE_2CH_UID}, SPEAKER_KEY: {}, CHOSEN_KEY: {"Microphone": BLACKHOLE_2CH_UID}}
     return {MIC_KEY: {"Microphone": BLACKHOLE_2CH_UID}, SPEAKER_KEY: {"Speaker": MULTI_OUTPUT_UID},
             CHOSEN_KEY: {"Speaker": MULTI_OUTPUT_UID, "Microphone": BLACKHOLE_2CH_UID}}
 
@@ -95,20 +98,22 @@ def _devices(data: dict) -> dict[str, dict[str, str]]:
     return {k: dict(data.get(k, {})) for k in KEYS}
 
 
-def state() -> str:
+def state(system_audio: bool = False) -> str:
     """'set' (Teams uses the app's lines) | 'other' | 'unknown' (no Teams, or its settings are unreadable)."""
     try:
         d = _devices(_read())
     except TeamsError:
         return "unknown"
-    want = wanted()
+    want = wanted(system_audio)
     return "set" if d[MIC_KEY] == want[MIC_KEY] and d[SPEAKER_KEY] == want[SPEAKER_KEY] else "other"
 
 
-def prepare(default_out: str) -> str:
+def prepare(default_out: str, system_audio: bool = False) -> str:
     """Before apply(): the speaker Teams is pointed at must exist. Makes the multi-output when it
     was never made (the wizard step is easy to skip: then Teams on the headphones gave no
     subtitles, and Teams on BlackHole 16ch no sound). Returns a line to add to the answer."""
+    if system_audio:
+        return ""  # (no meeting-speaker device in this set-up)
     state, _ = virtual_audio.mac_multi_output_state()
     if state != "missing":
         return ""
@@ -125,17 +130,18 @@ def has_backup() -> bool:
     return BACKUP.is_file()
 
 
-def apply() -> str:
+def apply(system_audio: bool = False) -> str:
     """Point Teams at the app's lines, remembering what it had. Returns what to tell the user."""
     data = _read()
-    now, want = _devices(data), wanted()
+    now, want = _devices(data), wanted(system_audio)
+    speaker = "扬声器跟随系统（你的耳机）" if system_audio else "扬声器“Teams 扬声器 (耳机+字幕)”"
     if now[MIC_KEY] == want[MIC_KEY] and now[SPEAKER_KEY] == want[SPEAKER_KEY]:
-        return "Teams 已经是这样设置的：麦克风 BlackHole 2ch，扬声器“Teams 扬声器 (耳机+字幕)”。"
+        return f"Teams 已经是这样设置的：麦克风 BlackHole 2ch，{speaker}。"
     BACKUP.parent.mkdir(parents=True, exist_ok=True)
     BACKUP.write_text(json.dumps(now, ensure_ascii=False), encoding="utf-8")
     data.update(want)
     _write(data)
-    return "已设置好：Teams 的麦克风是 BlackHole 2ch（对方听到你的翻译），扬声器是“Teams 扬声器 (耳机+字幕)”。"
+    return f"已设置好：Teams 的麦克风是 BlackHole 2ch（对方听到你的翻译），{speaker}。"
 
 
 def restore() -> str:

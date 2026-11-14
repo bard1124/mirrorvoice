@@ -61,10 +61,10 @@ if IS_MAC:
     hiddenimports += collect_submodules("transformers.models.qwen3")
     datas += collect_data_files("transformers", include_py_files=False)
     hiddenimports += ["AppKit", "Foundation", "HIServices", "objc", "PyObjCTools.AppHelper"]
-    for f in ("BlackHole2ch-0.7.1.pkg", "BlackHole16ch-0.7.1.pkg", "multi_output"):
+    for f in ("BlackHole2ch-0.7.1.pkg", "BlackHole16ch-0.7.1.pkg", "multi_output", "system_audio"):
         p = VENDOR / f
         if p.exists():
-            (binaries if f == "multi_output" else datas).append((str(p), "."))
+            (binaries if f in ("multi_output", "system_audio") else datas).append((str(p), "."))
 if IS_WIN:
     take("soundcard")
     for sub in ("llama", "uv.exe"):
@@ -102,6 +102,7 @@ if IS_MAC:
             "LSMinimumSystemVersion": "14.0",
             "NSMicrophoneUsageDescription": "翻了么需要麦克风来识别你说的话并实时翻译。",
             "NSAppleEventsUsageDescription": "命令行模式需要打开“终端”窗口。",
+            "NSAudioCaptureUsageDescription": "翻了么可以直接听电脑正在播放的声音（会议里对方说的话），用来显示翻译字幕。声音只在本机处理。",
             "NSHighResolutionCapable": True,
         },
     )

@@ -593,12 +593,12 @@ def test_teams_one_click_asks_before_closing_teams_and_reopens_it(app, no_popups
 
     log, running, answer = [], [True], [QtWidgets.QMessageBox.StandardButton.No]
     monkeypatch.setattr(td, "supported", lambda: True)
-    monkeypatch.setattr(td, "state", lambda: "other")
+    monkeypatch.setattr(td, "state", lambda *a: "other")
     monkeypatch.setattr(td, "running", lambda: running[0])
     monkeypatch.setattr(td, "quit", lambda: log.append("quit") or running.__setitem__(0, False) or True)
     monkeypatch.setattr(td, "launch", lambda: log.append("launch"))
-    monkeypatch.setattr(td, "prepare", lambda out: log.append("prepare") or "")
-    monkeypatch.setattr(td, "apply", lambda: log.append("apply") or "已设置好")
+    monkeypatch.setattr(td, "prepare", lambda out, *a: log.append("prepare") or "")
+    monkeypatch.setattr(td, "apply", lambda *a: log.append("apply") or "已设置好")
     monkeypatch.setattr(td, "restore", lambda: log.append("restore") or "已还原")
     monkeypatch.setattr(checkup.QMessageBox, "question", lambda *a, **k: answer[0])
     said = []
@@ -617,7 +617,7 @@ def test_teams_one_click_asks_before_closing_teams_and_reopens_it(app, no_popups
     w.back_btn.click()  # Teams is closed now: no question, no relaunch
     assert log == ["restore"] and said[-1] == "已还原"
 
-    def broken():
+    def broken(*a):
         raise td.TeamsError("格式和预期不一样")
     running[0] = True
     monkeypatch.setattr(td, "apply", broken)

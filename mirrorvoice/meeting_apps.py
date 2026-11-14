@@ -28,10 +28,16 @@ def speaker_name(mac: bool = IS_MAC) -> str:
     return MULTI_OUTPUT_NAME if mac else "你的耳机（系统默认扬声器）"
 
 
-def steps(app: str, mac: bool = IS_MAC) -> list[str]:
+def steps(app: str, mac: bool = IS_MAC, system_audio: bool = False) -> list[str]:
+    """system_audio: the other side is heard straight from what the Mac plays — the meeting's speaker
+    is simply the headphones, no multi-output device."""
+    if mac and system_audio:
+        speaker = "扬声器：照常选你的耳机（翻了么直接听电脑播放的声音，不需要“Teams 扬声器”）"
+    else:
+        speaker = f"扬声器：选“{speaker_name(mac)}”" + ("（名字带 Teams，其他会议软件也用它）" if mac and app != "Teams" else "")
     s = [f"打开 {app}：{_PATH[app]}",
          f"麦克风：选“{mic_name(mac)}”（对方听到的是你的翻译）",
-         f"扬声器：选“{speaker_name(mac)}”" + ("（名字带 Teams，其他会议软件也用它）" if mac and app != "Teams" else ""),
+         speaker,
          f"降噪：{_NOISE[app]}，否则合成的翻译语音可能被当成噪音削弱"]
     if not mac:
         s.append("Windows 的系统默认扬声器保持为你的耳机，不要设成 CABLE Input")

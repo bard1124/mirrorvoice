@@ -185,7 +185,8 @@ class MainWindow(QMainWindow):
         self.test_btn.setToolTip("不用开会，检查对方能否听到翻译、字幕能否出来（翻译运行时不可用）")
         self.test_btn.clicked.connect(self._selftest)
         self.guide_btn = keep(QPushButton("会议软件设置"))
-        self.guide_btn.clicked.connect(lambda: MeetingGuideDialog(self).exec())
+        self.guide_btn.clicked.connect(
+            lambda: MeetingGuideDialog(self, system_audio=self.s.their_source.startswith("system:")).exec())
         self.refresh_btn = keep(QPushButton("刷新设备"))
         self.refresh_btn.clicked.connect(self._load_devices)
         self.mic, self.call, self.mon, self.src = keep(QComboBox(), QComboBox(), QComboBox(), QComboBox())
@@ -781,7 +782,7 @@ class MainWindow(QMainWindow):
         ins, outs = list_devices("input"), list_devices("output")
         self._default_out = default_output_name()
         ctx = self._device_ctx(self.s.call_out, self.s.their_source)
-        mics = [n for n in ins if not n.startswith("loopback:")]
+        mics = [n for n in ins if not n.startswith(("loopback:", "system:"))]
         fill(self.mic, [("系统默认", "")] + [(n, n) for n in dh.ordered("mic", mics, ctx)], self.s.mic)
         fill(self.call, [(n, n) for n in dh.ordered("call", outs, ctx)], self.s.call_out)
         fill(self.mon, [("不监听", "")] + [(n, n) for n in dh.ordered("monitor", outs, ctx)], self.s.monitor)
