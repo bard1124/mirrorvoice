@@ -1,8 +1,8 @@
-"""Make the app icon from packaging/art/owl-source.jpg (the owl with headphones on a white
-page with a lavender disc):
+"""The app's first icon, from packaging/art/owl-source.jpg (the owl with headphones on a white
+page with a lavender disc): the owl on a lavender rounded tile, written to packaging/art/owl-icon.png.
 
-packaging/assets/icon.png: the owl on a lavender rounded tile (then run packaging/mac/make_icon.py
-for the Dock / .icns / .ico versions).
+The icon in use is the two speech bubbles of packaging/art/make_bubbles.py; the owl stays as the
+mascot inside the app. This script no longer writes into packaging/assets.
 
     .venv/bin/python packaging/art/make_owl.py      (needs Pillow, NumPy and SciPy)
 """
@@ -61,8 +61,8 @@ def main() -> None:
     src = Image.open(ART / "owl-source.jpg").convert("RGB")
     a = np.asarray(src).astype(float)
     owl = owl_mask(a)
-    icon(src, owl).save(ASSETS / "icon.png")
-    print("wrote", ASSETS / "icon.png")
+    icon(src, owl).save(ART / "owl-icon.png")
+    print("wrote", ART / "owl-icon.png")
 
 
 if __name__ == "__main__":

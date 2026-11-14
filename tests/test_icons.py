@@ -38,3 +38,18 @@ def test_dock_icon_is_the_padded_one_on_macos_only(app, monkeypatch):
     win = icons.app_icon().pixmap(256, 256).toImage()
     assert mac.pixelColor(128, 2).alpha() == 0  # margin
     assert win.pixelColor(128, 2).alpha() == 255  # Windows keeps the full-bleed tile
+
+
+def test_the_artwork_and_its_small_drawing_share_the_tile_and_the_menu_bar_mask_is_only_a_shape(app):
+    """The 16–32 px entries of the .icns / .ico come from icon-small.png (packaging/mac/make_icon.py):
+    the glass and thin strokes of the full artwork blur when scaled that far."""
+    from mirrorvoice.ui.icons import assets_dir
+
+    for name in ("icon.png", "icon-small.png"):
+        img = QtGui.QImage(str(assets_dir() / name))
+        assert (img.width(), img.height()) == (1024, 1024), name
+        assert img.pixelColor(6, 6).alpha() == 0 and img.pixelColor(512, 6).alpha() == 255, name  # the rounded tile, full-bleed
+    mask = QtGui.QImage(str(assets_dir() / "menubar-template.png"))
+    assert mask.width() == mask.height() == 64 and mask.pixelColor(1, 1).alpha() == 0
+    opaque = sum(mask.pixelColor(x, y).alpha() > 128 for x in range(64) for y in range(64))
+    assert 0.15 < opaque / 64 ** 2 < 0.6  # two bubbles on nothing: macOS tints it for a light or a dark bar
