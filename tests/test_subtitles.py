@@ -363,12 +363,15 @@ def test_my_voice_coming_back_is_not_shown_translated_or_previewed():
 
 # ---------------------------------------------------------------- the Mac's own sound as their source
 _FAKE_HELPER = r"""
-import struct, sys, time
+import os, struct, sys, time
+def wait(name):                                   # the test says when: nothing here depends on how fast the machine is
+    while not os.path.exists(os.path.join(sys.argv[1], name)):
+        time.sleep(0.02)
 sys.stderr.write("format 48000 2\n"); sys.stderr.flush()
-time.sleep(0.5)                                   # nothing is playing yet: the tap gives nothing at all
+wait("play")                                      # nothing is playing yet: the tap gives nothing at all
 tone = b"".join(struct.pack("<f", 0.25 if (i // 24) % 2 else -0.25) for i in range(48000))   # 1 s at 1 kHz
 sys.stdout.buffer.write(tone); sys.stdout.buffer.flush()
-time.sleep(float(sys.argv[1]) if len(sys.argv) > 1 else 30)
+wait("leave")
 """
 
 
@@ -385,17 +388,34 @@ def test_the_macs_own_sound_is_read_from_the_helper_with_silence_where_it_gives_
     script.write_text(_FAKE_HELPER)
     got = []
     cap = audio.Capture(audio.SYSTEM_AUDIO, got.append, 512)
-    monkeypatch.setattr(cap, "_system_cmd", lambda: [sys.executable, str(script), "0.6"])
+    monkeypatch.setattr(cap, "_system_cmd", lambda: [sys.executable, str(script), str(tmp_path)])
+
+    def heard():
+        return np.concatenate(list(got)) if got else np.zeros(0, dtype=np.float32)
+
+    def until(what, s=30.0):
+        end = time.monotonic() + s
+        while not what() and time.monotonic() < end:
+            time.sleep(0.02)
+        assert what()
+
     cap.start()
-    end = time.monotonic() + 15
-    while cap.proc.poll() is None and time.monotonic() < end:
-        time.sleep(0.05)
-    time.sleep(0.3)
-    x = np.concatenate(got)
+    until(lambda: len(heard()) >= 0.3 * 16000)  # nothing from the helper yet: silence is handed on
+    (tmp_path / "play").touch()
+
+    def since_the_sound_began():
+        x = heard()
+        loud = np.abs(x) > 0.1
+        return len(x) - int(np.argmax(loud)) if loud.any() else 0
+
+    until(lambda: since_the_sound_began() >= (1 + 0.4) * 16000)  # … and again once it gives nothing more
+    (tmp_path / "leave").touch()
+    until(lambda: cap.proc.poll() is not None and cap.stalled())
+    x = heard()
     loud = np.abs(x) > 0.1
     assert 0.9 < loud.sum() / 16000 < 1.1  # the helper's second of sound, at 16 kHz
     first = int(np.argmax(loud))
-    assert first >= 0.3 * 16000 and not np.abs(x[:first - 400]).any()  # silence handed on before it …
+    assert first >= 0.3 * 16000 and not np.abs(x[:first - 400]).any()  # silence before it …
     assert not np.abs(x[first + 17000:]).any() and len(x) - first > 16000 + 0.3 * 16000  # … and after
     assert cap.stalled() and "exited" in cap.health()  # it left (another output device): to be started again
     cap.close()
