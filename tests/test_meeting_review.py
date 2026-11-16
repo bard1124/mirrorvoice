@@ -62,6 +62,7 @@ def _engine(**settings):
     e.s, e.running = Settings(my_lang="zh", their_lang="en", **settings), True
     e.s.save = lambda: events.append(("saved", {}))
     e._transcript, e._them = _Rows(), _Listener()
+    e.TELL_AFTER = 99  # (these pieces come one right after the other; tests/test_long_talk.py is about that)
     return e, events
 
 

@@ -55,7 +55,7 @@ class OnlineModelDialog(QDialog):
     def __init__(self, s: Settings, parent=None) -> None:
         super().__init__(parent)
         self.s = s
-        self.setWindowTitle("在线模型")
+        self.setWindowTitle("模型设置")
         self.resize(620, 0)
         self._typed: dict[str, str] = {}  # keys typed in this dialog, per provider (saved on 保存)
         self._busy = False

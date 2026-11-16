@@ -132,6 +132,7 @@ def _engine(**settings):
     e = Engine(lambda kind, **d: events.append((kind, d)))
     e.s, e.running = Settings(my_lang="zh", their_lang="en", quiet_gate=False, **settings), True
     e._transcript, e._them, e._me, e._player = _Rows(), _Listener(), _Listener(), _Player()
+    e.TELL_AFTER = 99  # (these pieces come one right after the other: the tests of that say so themselves)
     return e, events
 
 

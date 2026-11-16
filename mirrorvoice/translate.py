@@ -149,19 +149,41 @@ def own_voice(text: str, their_lang: str, seconds: float) -> str:
     """What a piece of my speech recognised as the other side's language is — my real voice goes
     into the meeting when it is theirs. 2026-11-16: five sounds under 0.9 s went in that way
     ("H.", "え.", "S more dear.", and a Chinese "对." labelled English).
-    'pass': I said something in their language. 'mine': not a letter of it is in their script —
-    my own language under the wrong label, to be translated as usual. 'noise': too little to be
-    speech (a reply or a hesitation — "Yeah.", "Um." — is mine as it is; anything else needs two
-    words and a second)."""
+    'pass': I said something in their language. 'mine': it is in my own script — my language under
+    the wrong label, to be translated as usual. 'noise': too little to be speech (a reply or a
+    hesitation — "Yeah.", "Um." — is mine as it is; anything else needs two words and a second).
+    The same day, later: "因我." (0.9 s, labelled English) was translated and spoken as "Because I.",
+    and "O, youll外." went in as my voice — a sound the recogniser could not place in one language
+    is no sentence in either: two letters of mine under their label, or a few of each."""
     words = _WORDS.findall(text.lower())
     theirs = [w for w in words if w.isascii() == (their_lang == "en")] if their_lang in ("en", "zh", "yue") else words
-    if words and not theirs:
-        return "mine"
-    if not theirs:
+    own = len(words) - len(theirs)
+    if not words:
         return "noise"
+    if not theirs:
+        if all(w in _REPLY_WORDS or w in _REPLY_CHARS for w in words) or is_filler(text):
+            return "mine"
+        return "noise" if own <= 2 and seconds < 1.0 else "mine"
+    if own:
+        if own >= 3 and own > len(theirs):
+            return "mine"
+        if len(theirs) <= 3:
+            return "noise"
     if is_filler(text) or all(w in _REPLY_WORDS or w in _REPLY_CHARS for w in theirs):
         return "pass"
     return "pass" if len(theirs) >= 2 and seconds >= 1.0 else "noise"
+
+
+def without_repeat(first: str, rest: str) -> str:
+    """`first` without the words at its end that `rest` begins with again — whoever is cut at a
+    pause often starts over ("What." / "What was it two days ago." was joined as "What What was
+    it…"). Latin words: one is enough; other scripts: two letters or more ("那个" / "那个你打开")."""
+    a, b = list(_WORDS.finditer(first.lower())), _WORDS.findall(rest.lower())
+    words = [m.group() for m in a]
+    for n in range(min(len(words), len(b), 6), 0, -1):
+        if words[-n:] == b[:n] and (n >= 2 or words[-1].isascii()):
+            return first[:a[-n].start()]
+    return first
 
 
 _LONE_O = re.compile(r"(?<![A-Za-z'])O{1,2}(?![A-Za-z'])")
@@ -194,7 +216,7 @@ def system_prompt(src: str, tgt: str, subtitle: bool, meeting: str = "", concise
     return p + f"Output ONLY the {t} translation, no notes, no quotes."
 
 
-def user_prompt(text: str, glossary: list[tuple[str, str]], continuation: bool = False) -> str:
+def user_prompt(text: str, glossary: list[tuple[str, str]], continuation: bool = False, passage: bool = False) -> str:
     g = ""
     keep = [a for a, b in glossary if a.lower() == b.lower()]  # names, product terms: the same on both sides
     fixed = [(a, b) for a, b in glossary if a.lower() != b.lower()]
@@ -206,6 +228,10 @@ def user_prompt(text: str, glossary: list[tuple[str, str]], continuation: bool =
     if continuation:
         return (f"{g}The speaker continues the same sentence. Translate ONLY this new part so that it reads "
                 f"naturally right after your previous output; do not repeat what you already said: {text}")
+    if passage:
+        return (f"{g}These are consecutive pieces of what one speaker said, cut wherever the speaker paused: "
+                "a full stop between two pieces is often not the end of a sentence. Translate them together as "
+                f"one coherent passage, in a single paragraph: {text}")
     return f"{g}Translate ONLY this sentence: {text}"
 
 
@@ -378,13 +404,15 @@ class Translator:
 
     def translate(self, text: str, src: str, tgt: str, subtitle: bool = False,
                   context: tuple[str, str] | None = None,
-                  history: list[tuple[str, str]] | tuple = (), concise: int = 0,
+                  history: list[tuple[str, str]] | tuple = (), concise: int = 0, passage: bool = False,
                   on_clause: Callable[[str], None] | None = None,
                   on_text: Callable[[str], None] | None = None) -> str:
         """context = (previous part's source, its translation) when `text` continues that part
         (a long sentence cut early): shown to the model as the preceding exchange.
         history = the same speaker's last few (source, translation) pairs, oldest first: earlier
         turns of the conversation, so pronouns, terms and tone carry over between sentences.
+        passage = `text` is several pieces the speaker said in a row (each translated alone before):
+        translated as one, so that what a pause cut apart reads as the sentence it was.
         concise = a length budget (words, or characters for zh/ja) when speech is backing up. on_clause(text) is called once with
         the first clause while the model is still writing, when the backend streams — so speech
         can start before the sentence is translated; the return value is always the whole text.
@@ -398,9 +426,9 @@ class Translator:
             msgs += [{"role": "user", "content": user_prompt(context[0], glossary_hits(context[0], self.glossary))},
                      {"role": "assistant", "content": context[1]}]
         msgs.append({"role": "user", "content": user_prompt(text, glossary_hits(text, self.glossary),
-                                                            continuation=context is not None) + tag})
+                                                            continuation=context is not None, passage=passage) + tag})
         if hasattr(self.backend, "max_tokens"):  # local models: stop a runaway answer early
-            self.backend.max_tokens = token_budget(text)
+            self.backend.max_tokens = token_budget(text) * (2 if passage else 1)
         stream = getattr(self.backend, "stream_chat", None)
         if (on_clause is not None or on_text is not None) and stream is not None:
             out = last_line(self._streamed(stream(msgs), text, tgt, on_clause, on_text))

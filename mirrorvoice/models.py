@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import tarfile
 import threading
 import time
@@ -421,7 +422,10 @@ def download(model: Model, progress: Progress, cancel: threading.Event | None = 
         _fetch(model.url, tar, bump, cancel)  # size from the response headers (approx_mb is a guess)
         progress(model.title + "（解压中）", state["done"], state["total"])
         with tarfile.open(tar) as t:
-            t.extractall(MODELS, filter="data")
+            for member in t:  # (one by one: 暂停 takes effect here too; the archive stays for the next try)
+                if cancel.is_set():
+                    raise Cancelled()
+                t.extract(member, MODELS, filter="data")
         tar.unlink()
         (model.path / ".complete").touch()
     elif model.url:
@@ -465,6 +469,39 @@ def download(model: Model, progress: Progress, cancel: threading.Event | None = 
                 raise RuntimeError(f"{model.title} 有文件下载后校验不通过（{'、'.join(bad)}），已删除，请重试")
             (model.path / ".complete").touch()
     progress(model.title, state["total"], state["total"])
+
+
+def partial_paths(model: Model) -> list[Path]:
+    """What a download of this model that did not finish left on disk (取消下载 deletes it): the
+    folder without its done marker, the archive, and the .part files beside them. Exact names
+    only — "Qwen3-TTS-…-Base" must never match "Qwen3-TTS-…-Base-8bit"."""
+    if model.ready():
+        return []
+    found = []
+    for base in (model.path, MODELS / (model.dest + ".tar.bz2")):
+        found += [p for p in (base, base.with_name(base.name + ".part")) if p.exists()]
+        found += [p for p in base.parent.glob(base.name + ".part[0-9]*") if p.name[len(base.name) + 5:].isdigit()]
+    return found
+
+
+def partial_bytes(model: Model) -> int:
+    total = 0
+    for p in partial_paths(model):
+        files = [f for f in p.rglob("*") if f.is_file()] if p.is_dir() else [p]
+        for f in files:
+            try:
+                total += f.stat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def discard_partial(model: Model) -> None:
+    for p in partial_paths(model):
+        if p.is_dir():
+            shutil.rmtree(p, ignore_errors=True)
+        else:
+            p.unlink(missing_ok=True)
 
 
 def damaged_files(model: Model) -> list[Path]:

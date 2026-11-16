@@ -64,7 +64,7 @@ With everything on (translation + cloned voice + subtitles) it uses about **5 GB
 
 ### Online translation (optional)
 
-Open "在线模型" (Online models) in the sidebar, or "use online translation" in the setup wizard: pick a provider, paste an API key, pick a model; "测试" (Test) translates one sentence and shows the time it took.
+Open "模型设置" (Model settings) in the sidebar, or "use online translation" in the setup wizard: pick a provider, paste an API key, pick a model; "测试" (Test) translates one sentence and shows the time it took.
 
 - With online translation the local translation model is not downloaded (saves about 1–5 GB), useful on machines with little memory or no strong GPU.
 - The API key is stored in the macOS Keychain / Windows Credential Manager, never in the settings file; `MIRRORVOICE_<PROVIDER>_API_KEY` (e.g. `MIRRORVOICE_DEEPSEEK_API_KEY`) works too. On macOS the first read after each update shows a keychain prompt; choose "Always Allow".
@@ -73,14 +73,14 @@ Open "在线模型" (Online models) in the sidebar, or "use online translation" 
 
 ### Online speech recognition (optional)
 
-"在线模型" → "语音识别" (Speech recognition): choose online streaming recognition, paste the Alibaba Cloud Model Studio API key (the same key as Qwen translation), choose whether it is used for your speech and/or the other side's, and press "测试连接" (Test connection).
+"模型设置" → "语音识别" (Speech recognition): choose online streaming recognition, paste the Alibaba Cloud Model Studio API key (the same key as Qwen translation), choose whether it is used for your speech and/or the other side's, and press "测试连接" (Test connection).
 
 - While the other side speaks, the subtitle bar shows the words recognised so far; with online translation a long sentence also gets a provisional translation half-way, replaced by the final one when the sentence ends.
 - Audio is only uploaded while the local voice detector hears speech (billed by audio duration); the recognition task is closed after 15 s of quiet.
 - Long speech without pauses is split at a sentence end that stayed the same in two partial results in a row, instead of a hard cut every 5 s.
 - After 3 failures in a row (or an invalid key) the rest of the meeting uses local recognition.
 
-On a Mac, local recognition can use **Qwen3-ASR 1.7B** ("在线模型" → "语音识别" → local model): clearly better on English and mixed Chinese/English (a noisy mixed sentence: 36 % → 2 % errors); a 2.4 GB download, about 2.4 GB more memory while running and 1.5–3 s more per sentence, so "subtitles only" is recommended. Glossary terms are passed as hotwords.
+On a Mac, local recognition can use **Qwen3-ASR 1.7B** ("模型设置" → "语音识别" → local model): clearly better on English and mixed Chinese/English (a noisy mixed sentence: 36 % → 2 % errors); a 2.4 GB download, about 2.4 GB more memory while running and 1.5–3 s more per sentence, so "subtitles only" is recommended. Glossary terms are passed as hotwords.
 
 Local recognition improved too: when long speech has to be cut early, the cut moves back to the last full stop or comma and the rest joins the next sentence; Mandarin misheard as Cantonese or Japanese is recognised again in your language; the translator gets the same speaker's last three turns as context.
 

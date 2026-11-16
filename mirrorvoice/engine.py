@@ -12,6 +12,7 @@ import threading
 import time
 import re
 import traceback
+from difflib import SequenceMatcher
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable
@@ -19,7 +20,7 @@ from typing import Callable
 import numpy as np
 
 from . import models
-from .asr import SENTENCE_END, Listener, Utterance, _plain
+from .asr import CJK_LANGS, SENTENCE_END, Listener, Utterance, _plain
 from .audio import Player, find_device, speech_level, time_stretch, trim_silence
 from .config import LOG_FILE, Settings
 from . import hotkeys
@@ -28,7 +29,7 @@ from .languages import LANGS
 from .transcript import Transcript
 from .online_llm import FailoverChat, OnlineChat, TranslateError
 from .translate import (Translator, correct_asr, goes_on, is_echo, is_filler, is_fragment, left_untranslated,
-                        local_backend, own_voice, spoken_en, tidy_asr)
+                        local_backend, own_voice, spoken_en, tidy_asr, without_repeat)
 from .tts import make_voice
 
 Emit = Callable[..., None]  # emit(kind: str, **data)
@@ -57,8 +58,10 @@ class _Speech:
 def _join(first: Utterance, rest: Utterance) -> Utterance:
     """Two pieces of one sentence as one: the pause between them was no full stop. The time, and the
     guess it may confirm, are those of the second."""
-    head = first.text.rstrip(" .。,，")
-    if head[-1:].isascii():
+    head = without_repeat(first.text, rest.text).rstrip(" .。,，")
+    if not head:
+        sep = ""
+    elif head[-1:].isascii():
         sep = " "
     else:  # (after "然后那个" the sentence simply goes on; between two short pieces there was a breath)
         sep = "" if goes_on(first.text) == "open" or rest.text[:1].isascii() else "，"
@@ -129,6 +132,10 @@ class Engine:
         self._held_me: Utterance | None = None  # a piece of my own sentence, waiting to see whether I go on
         self._held_me_timer: threading.Timer | None = None
         self._held_me_more, self._held_me_idle = False, 0.0  # I did go on; since when I have been silent again
+        self._me_run, self._me_cut = 0, 0.0     # pieces of mine in a row with hardly a pause; when the last was cut
+        self._run: list[tuple[int, str, str, str]] = []  # (row, source, translation, language) they said in one go
+        self._run_at, self._run_gen, self._run_timer = 0.0, 0, None  # when the last was added; which timer counts
+        self._rows = itertools.count(1)
         self._ready = False
         self.ptt_down = False
         self._jobs: queue.PriorityQueue = queue.PriorityQueue()
@@ -156,6 +163,8 @@ class Engine:
         self._quiet_hits, self._quiet_told = [], 0.0
         self._take_held()
         self._take_held_me()
+        self._me_run, self._me_cut = 0, 0.0
+        self._run_drop()
         self._prev = {"me": None, "them": None}  # (source, translation, t_end) of the last part
         self._hist = {"me": deque(maxlen=self.HISTORY_N + 1), "them": deque(maxlen=self.HISTORY_N + 1)}
         # A fresh queue per session: the previous worker may still be busy (and the previous
@@ -193,6 +202,7 @@ class Engine:
             closers, self._closers = self._closers, []
         self._take_held()
         self._take_held_me()
+        self._run_drop()
         self._save_level()
         self._jobs.put((99, next(self._seq), "stop", None))
         for close in reversed(closers):
@@ -588,6 +598,8 @@ class Engine:
                 self._do_them_guess(tr_them)
             elif kind == "them_part":
                 self._do_them_part(tr_them, utt)
+            elif kind == "them_run":
+                self._do_them_run(tr_them, *utt)
             else:
                 self._do_them(tr_them, utt)
 
@@ -612,7 +624,7 @@ class Engine:
         try:
             online = OnlineChat.from_settings(s)
         except TranslateError as e:
-            raise RuntimeError(f"在线翻译设置不完整：{e}（左侧“在线模型”里设置）") from None
+            raise RuntimeError(f"在线翻译设置不完整：{e}（左侧“模型设置”里设置）") from None
         fallback = local if models.LLM[s.quality].ready() else None
         mine = Translator(FailoverChat(online, fallback, lambda m: self.emit("notice", text=m)), s.meeting_context)
         if s.online_their or not (s.subtitles and s.their_source):
@@ -878,8 +890,102 @@ class Engine:
     def _them_done(self, utt: Utterance, out: str, **timing) -> None:
         if not left_untranslated(out, self.s.my_lang):  # (a line left in English teaches the next one to stay so)
             self._remember("them", utt.text, out, utt.t_end)
-        self.emit("them", src=utt.text, tgt=out, **timing)
+        row = next(self._rows)
+        self.emit("them", src=utt.text, tgt=out, row=row, **timing)
         self._transcript.add("them", utt.text, out)
+        self._run_add(row, utt.text, out, utt.lang if utt.lang in LANGS else self.s.their_lang)
+
+    # ---- the other side: what was said in one go is translated once more, as a whole
+    # 2026-11-16 (the second meeting): 45 s of explaining a bug arrived as ten pieces, each translated
+    # alone — "And this bug is the user." / "Someone who loves rain." / "Should do not become in,
+    # should become." A pause is no full stop, and no piece carries what the others said. When they
+    # stop (or I answer), the pieces are translated together and the one passage replaces their rows.
+    # Subtitles only, and after my own speech: nobody waits for it.
+    RUN_GAP_S, RUN_WAIT_MAX_S = 3.0, 15.0  # this long without a word ends it (longer while they are still talking)
+    RUN_POLL_S = 0.5
+    RUN_MAX_S = 20.0                       # of speech in one passage: more is a new one
+    RUN_TRIES, RUN_RETRY_S = 4, 2.0        # put off while I am talking, or a sentence waits for the translator
+    # A passage that reads like its pieces changes nothing: rows that were read stay as they are
+    # (replayed on a meeting of fluent speakers, most passages only moved a word or two).
+    RUN_SAME = 0.8
+
+    def _run_add(self, row: int, src: str, out: str, lang: str) -> None:
+        full = None
+        with self._lock:
+            if self._run and sum(speech_seconds(a) for _, a, _, _ in self._run) + speech_seconds(src) > self.RUN_MAX_S:
+                full, self._run = self._run, []
+            self._run.append((row, src, out, lang))
+            self._run_at = time.time()
+            self._run_gen += 1
+            self._run_wait(self.RUN_GAP_S, self._run_gen)
+        if full:
+            self._run_redo(full)
+
+    def _run_wait(self, wait: float, gen: int) -> None:
+        if self._run_timer is not None:
+            self._run_timer.cancel()
+        self._run_timer = threading.Timer(wait, self._run_over, (gen,))
+        self._run_timer.daemon = True
+        self._run_timer.start()
+
+    def _run_take(self) -> list:
+        with self._lock:
+            run, self._run = self._run, []
+            self._run_gen += 1
+            if self._run_timer is not None:
+                self._run_timer.cancel()
+                self._run_timer = None
+        return run
+
+    def _run_drop(self) -> None:
+        self._run_take()
+
+    def _run_over(self, gen: int) -> None:
+        with self._lock:
+            if gen != self._run_gen or not self.running:
+                return  # (a timer of an earlier piece)
+            more = (self._them is not None and self._them.speaking()) or self._held is not None
+            if more and time.time() - self._run_at < self.RUN_WAIT_MAX_S:
+                self._run_wait(self.RUN_POLL_S, gen)  # (the piece they are saying, or the one that waits, belongs to it)
+                return
+        self._run_close()
+
+    def _run_close(self) -> None:
+        """They stopped, or I speak: what they said in a row is complete."""
+        self._run_redo(self._run_take())
+
+    def _run_redo(self, run: list, tries: int = 0) -> None:
+        if len(run) >= 2 and self.running:
+            self._jobs.put((2, next(self._seq), "them_run", (run, tries)))  # after my speech (0) and their sentences (1)
+
+    def _do_them_run(self, tr: Translator, run: list, tries: int) -> None:
+        s = self.s
+        lang = run[0][3]
+        text = ("" if lang in CJK_LANGS else " ").join(src for _, src, _, _ in run)
+        t0 = time.time()
+
+        def still_wanted(_so_far: str) -> None:
+            if (self._me is not None and self._me.speaking()) or not self._jobs.empty():
+                raise _Void  # (my own words and their next sentence come first: a passage took up to 4 s)
+        try:
+            still_wanted("")
+            out = tr.translate(text, lang, s.my_lang, subtitle=True, passage=True, on_text=still_wanted)
+        except _Void:
+            if tries + 1 < self.RUN_TRIES:
+                t = threading.Timer(self.RUN_RETRY_S, self._run_redo, (run, tries + 1))
+                t.daemon = True
+                t.start()
+            return
+        except TranslateError:
+            return  # (the pieces stay as they are)
+        if not out or left_untranslated(out, s.my_lang):
+            return
+        pieces = _plain("".join(o for _, _, o, _ in run))
+        if SequenceMatcher(None, _plain(out), pieces).ratio() >= self.RUN_SAME:
+            return
+        self.log(f"[them] 整段重译 {len(run)} 段 {time.time() - t0:.2f}s: {out[:60]!r}")
+        self.emit("them_run", rows=[r for r, _, _, _ in run], src=text, tgt=out)
+        self._transcript.add("them_run", text, out)
 
     def _do_them_part(self, tr: Translator, utt: Utterance) -> None:
         """A piece nothing followed in time: its own translation, on screen as not final — what
@@ -1058,7 +1164,7 @@ class Engine:
 
         key = keystore.get("dashscope")
         if not key:
-            raise RuntimeError("在线语音识别还没填阿里云百炼的 API key（左侧“在线模型”→“语音识别”里设置）")
+            raise RuntimeError("在线语音识别还没填阿里云百炼的 API key（左侧“模型设置”→“语音识别”里设置）")
         return key
 
     def _notice(self, text: str) -> None:
@@ -1105,6 +1211,7 @@ class Engine:
         if mine == "pass":
             # I already speak their language: send my real voice, no translation
             self._flush_held_me()
+            self._run_close()
             self._player.outs[0].put(utt.audio, 16000)
             self._said_now(utt.text)
             self.emit("me", src=utt.text, tgt=utt.text, latency=time.time() - utt.t_end,
@@ -1121,6 +1228,8 @@ class Engine:
             self._settle_guess(None)
             return
         self._note_level(utt)
+        self._run_close()  # (I answer: what they said is complete)
+        telling = self._telling(utt)
         held = self._take_held_me()
         if held is not None:
             utt = _join(held, utt)
@@ -1128,6 +1237,8 @@ class Engine:
         wait = 0.0  # (push-to-talk ends a sentence where I let go; and without a way to tell that I go on, no wait)
         if s.mode != "ptt" and getattr(self._me, "tells_speaking", True):
             wait = self.MORE_S.get(goes_on(utt.text), 0.0)
+            if not wait and telling and len(utt.audio) / 16000 < self.TELL_MAX_S:
+                wait = self.TELL_S
         if wait:
             self._hold_me(utt, wait)
         elif not self._settle_guess(utt):
@@ -1141,6 +1252,23 @@ class Engine:
     # was a sentence loses less than it: only its first sound waits for the verdict.
     MORE_S = {"open": 0.8, "short": 0.5}  # by what goes_on() says of the piece
     HOLD_ME_MAX_S, HOLD_ME_POLL_S = 4.0, 0.2  # once I do go on: how long it waits for the rest
+
+    # Explaining something at length is one piece after another with hardly a pause, and the pieces
+    # end anywhere ("按现在的逻辑。" / "他会被直接拒绝。"): nothing in the words says that more follows.
+    # 2026-11-16, the other side's 45 s about a bug reached me as ten sentences that had nothing to
+    # do with each other. Once pieces follow each other that closely, each waits TELL_S more for
+    # the next (0.7 s of silence ends a sentence instead of 0.35 s), until TELL_MAX_S are together.
+    TELL_GAP_S, TELL_AFTER = 0.7, 2    # this soon after the last piece was cut, this many times in a row
+    TELL_S, TELL_MAX_S = 0.35, 6.0
+
+    def _telling(self, utt: Utterance) -> bool:
+        began = utt.t_end - len(utt.audio) / 16000
+        with self._lock:
+            last, self._me_cut = self._me_cut, utt.t_end
+            self._me_run = self._me_run + 1 if last and began - last < self.TELL_GAP_S else 0
+            if self._me_run == self.TELL_AFTER:
+                self.log(f"[me] 连续讲述：这一轮每段多等 {self.TELL_S}s 看是否接着说")
+            return self._me_run >= self.TELL_AFTER
 
     def _hold_me(self, utt: Utterance, wait: float) -> None:
         with self._lock:

@@ -14,7 +14,7 @@ from ..config import IS_MAC, Settings, cpu_voice_reason, gpu_pack_installed, has
 from ..languages import LANGS
 from ..tts import has_voice_sample
 from .dialogs import VoiceDialog
-from .downloads import DownloadManager, fmt_bytes, fmt_eta
+from .downloads import CANCELLED, PAUSED, DownloadManager, fmt_bytes, fmt_eta
 
 
 def _title(text: str) -> QLabel:
@@ -117,7 +117,7 @@ class Wizard(QDialog):
                           "该模型仅限非商业用途）。",
                 "kokoro": f"{cpu_voice_reason()}：使用标准音色（不是你的声音）。"}[backend]
         lay.addWidget(QLabel(note + "\n进入本页会自动开始下载（来源 ModelScope / GitHub，支持断点续传）。"
-                             "可以先去做下一步，关掉向导也会在后台继续下载。", wordWrap=True))
+                             "可以先去做下一步，关掉向导也会在后台继续下载；要让出网速（比如正在开会）可以先暂停。", wordWrap=True))
         self.dl_total = QProgressBar(maximum=1000)
         self.dl_total.setMinimumHeight(26)
         self.dl_status = QLabel("准备下载…")
@@ -128,9 +128,19 @@ class Wizard(QDialog):
         lay.addLayout(self.m_box)
         row = QHBoxLayout()
         self.dl_btn = QPushButton("重试")
-        self.dl_btn.clicked.connect(lambda: self.dm.start(self.s.quality))
+        self.dl_btn.clicked.connect(self._dl_start)
         self.dl_btn.hide()
+        self.dl_pause = QPushButton("暂停")
+        self.dl_pause.setToolTip("已下载的部分会保留，之后点“继续下载”接着下")
+        self.dl_pause.clicked.connect(lambda: self.dm.pause())
+        self.dl_pause.hide()
+        self.dl_cancel = QPushButton("取消下载")
+        self.dl_cancel.setToolTip("删除没下完的模型文件（已下完的保留）")
+        self.dl_cancel.clicked.connect(self._dl_cancel)
+        self.dl_cancel.hide()
         row.addWidget(self.dl_btn)
+        row.addWidget(self.dl_pause)
+        row.addWidget(self.dl_cancel)
         row.addStretch()
         lay.addLayout(row)
         lay.addStretch()
@@ -180,12 +190,39 @@ class Wizard(QDialog):
             hl.addWidget(pb, 1)
             self.m_box.addWidget(box)
             self.m_rows[m.title] = pb
-        if DownloadManager.missing(self.s.quality):
-            self.dl_btn.hide()
-            self.dm.start(self.s.quality)  # auto-start; no-op if already running
-            self.dl_status.setText("下载中…")
-        else:
+        if not DownloadManager.missing(self.s.quality):
             self._on_dl_done("")
+        elif self.dm.paused and not self.dm.running:
+            self._on_dl_done(self.dm.error or CANCELLED)  # stopped by the user: only the user starts it again
+        else:
+            self._dl_start()  # auto-start; no-op if already running
+
+    def _refresh_rows(self) -> None:
+        by = {m.title: m for m in models.required(self.s.quality)}
+        for title, pb in self.m_rows.items():
+            ready = title in by and by[title].ready()
+            pb.setValue(1000 if ready else 0)
+            pb.setFormat("✅ 已就绪" if ready else "等待中")
+
+    def _dl_start(self) -> None:
+        self.dl_btn.hide()
+        self.dl_cancel.hide()
+        self.dl_pause.show()
+        self.dl_status.setStyleSheet("font-size: 14px;")
+        self.dl_status.setText("下载中…")
+        self.dm.start(self.s.quality)
+
+    def _dl_cancel(self) -> None:
+        from PySide6.QtWidgets import QMessageBox
+
+        have = DownloadManager.partial_bytes(self.s.quality)
+        if QMessageBox.question(self, "取消下载", f"没下完的模型文件会被删除（{fmt_bytes(have)}），已下完的保留。\n"
+                                              "以后再下载要从头开始。确定取消吗？") != QMessageBox.StandardButton.Yes:
+            return
+        self.dl_cancel.setEnabled(False)
+        self.dl_btn.setEnabled(False)
+        self.dl_status.setText("正在取消…")
+        self.dm.discard(self.s.quality)
 
     def _on_model_progress(self, title: str, done: int, total: int) -> None:
         for key, pb in self.m_rows.items():
@@ -197,17 +234,39 @@ class Wizard(QDialog):
                               + (f"  · {src.group(1)}" if src else "")))
 
     def _on_overall(self, done: int, total: int, speed: float) -> None:
+        if not self.dm.running:
+            return  # (a last word from the download that was just stopped)
+        self.dl_pause.show()
         self.dl_total.setValue(int(1000 * done / max(total, 1)))
         self.dl_total.setFormat(f"总进度 %p%  {fmt_bytes(done)} / {fmt_bytes(total)}")
         eta = fmt_eta((total - done) / speed) if speed > 0 else ""
         self.dl_status.setText(f"下载中  {speed / (1 << 20):.1f} MB/s  {('剩余 ' + eta) if eta else ''}")
 
     def _on_dl_done(self, err: str) -> None:
-        if err:
-            self.dl_status.setText(f"❌ 下载中断：{err[:160]}\n已下载的部分会保留，检查网络后点“重试”继续。")
-            self.dl_status.setStyleSheet(f"font-size: 14px; color: {theme.current().danger_fg};")
+        self.dl_pause.hide()
+        self.dl_btn.setEnabled(True)
+        self.dl_cancel.setEnabled(True)
+        if err == CANCELLED:
+            self._refresh_rows()
+            self.dl_total.setValue(0)
+            self.dl_total.setFormat("")
+            self.dl_status.setStyleSheet("font-size: 14px;")
+            self.dl_status.setText("已取消，没下完的文件已删除。需要时点“下载”。")
+            self.dl_btn.setText("下载")
             self.dl_btn.show()
+            self.dl_cancel.hide()
             return
+        if err:
+            paused = err == PAUSED
+            self.dl_status.setText("⏸ 已暂停，已下载的部分会保留。" if paused else
+                                   f"❌ 下载中断：{err[:160]}\n已下载的部分会保留，检查网络后点“重试”继续。")
+            self.dl_status.setStyleSheet("font-size: 14px;" if paused else
+                                         f"font-size: 14px; color: {theme.current().danger_fg};")
+            self.dl_btn.setText("继续下载" if paused else "重试")
+            self.dl_btn.show()
+            self.dl_cancel.show()
+            return
+        self.dl_cancel.hide()
         if not DownloadManager.missing(self.s.quality):
             self.dl_total.setValue(1000)
             self.dl_total.setFormat("全部就绪")

@@ -24,7 +24,9 @@ class Transcript:
 
     def add(self, speaker: str, original: str, translation: str) -> None:
         t = time.strftime("%H:%M:%S")
-        who = "我" if speaker == "me" else "对方"
+        # them_run: what the other side said in one go, translated once more as a whole (the pieces
+        # are above it, as they were shown)
+        who = {"me": "我", "them_run": "对方（整段）"}.get(speaker, "对方")
         with self.lock:
             with open(self.md, "a", encoding="utf-8") as f:
                 f.write(f"**{who}** `{t}`  \n{original}  \n> {translation}\n\n")

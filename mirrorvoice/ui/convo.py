@@ -30,7 +30,7 @@ class ConversationWindow(QWidget):
         # macOS hides tool windows whenever the app is not frontmost — i.e. during the meeting, and
         # right away when opened from the menu-bar icon (the app is in the background then)
         self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)
-        self.entries: deque[tuple[str, str, str, bool]] = deque(maxlen=MAX_ENTRIES)
+        self.entries: deque[tuple[str, str, str, bool, int]] = deque(maxlen=MAX_ENTRIES)  # (…, the engine's row)
         self.on_closed = None  # set by the control panel to keep its toggles in sync
 
         lay = QVBoxLayout(self)
@@ -86,9 +86,24 @@ class ConversationWindow(QWidget):
             self.move(x, y)
 
     # ---------------------------------------------------------------- content
-    def add(self, who: str, src: str, tgt: str, passthrough: bool = False) -> None:
-        self.entries.append((who, src, tgt, passthrough))
+    def add(self, who: str, src: str, tgt: str, passthrough: bool = False, row: int = 0) -> None:
+        self.entries.append((who, src, tgt, passthrough, row))
         self._render()
+
+    def merge(self, rows: list[int], src: str, tgt: str) -> None:
+        """What the other side said in several pieces, translated once more as a whole: the passage
+        takes the place of the first piece, and the others go."""
+        kept, done = [], False
+        for e in self.entries:
+            if e[4] and e[4] in rows:
+                if not done:
+                    kept.append(("them", src, tgt, False, e[4]))
+                    done = True
+            else:
+                kept.append(e)
+        if done:
+            self.entries = deque(kept, maxlen=MAX_ENTRIES)
+            self._render()
 
     def clear(self) -> None:
         self.entries.clear()
@@ -109,7 +124,7 @@ class ConversationWindow(QWidget):
             return
         small = max(9, int(self.s.convo_font * 0.8))
         parts = []
-        for who, src, tgt, passthrough in self.entries:
+        for who, src, tgt, passthrough, _row in self.entries:
             tag = TAGS.get(who, who) + ("·原声" if passthrough else "")
             color = COLORS.get(who, "#ffffff")
             line = (f'<div style="margin: 0 0 7px 0;">'

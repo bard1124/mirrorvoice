@@ -72,7 +72,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(3000, lambda: self.updates.check(manual=False))
 
     # ---------------------------------------------------------------- layout
-    NAV = (("同传", None), ("术语表", "_glossary"), ("字幕样式", "_style"), ("音色", "_voice"), ("在线模型", "_online"),
+    NAV = (("同传", None), ("术语表", "_glossary"), ("字幕样式", "_style"), ("音色", "_voice"), ("模型设置", "_online"),
            ("会议记录", "_open_transcripts"), ("设置向导", "_wizard"), ("检查更新", "_check_updates"))
 
     def _build(self) -> None:
@@ -164,10 +164,18 @@ class MainWindow(QMainWindow):
         self.banner_bar.setMaximumHeight(8)
         self.banner_bar.setTextVisible(False)
         self.banner_btn = QPushButton("下载模型")
-        self.banner_btn.clicked.connect(lambda: self.dm.start(self.s.quality))
+        self.banner_btn.clicked.connect(self._dl_start)
+        self.banner_pause = QPushButton("暂停")
+        self.banner_pause.setToolTip("已下载的部分会保留，之后点“继续下载”接着下（开会时可以先暂停，让出网速）")
+        self.banner_pause.clicked.connect(lambda: self.dm.pause())
+        self.banner_cancel = QPushButton("取消下载")
+        self.banner_cancel.setToolTip("删除没下完的模型文件（已下完的保留）")
+        self.banner_cancel.clicked.connect(self._dl_cancel)
         bl.addWidget(self.banner_text, 1)
         bl.addWidget(self.banner_bar, 1)
         bl.addWidget(self.banner_btn)
+        bl.addWidget(self.banner_pause)
+        bl.addWidget(self.banner_cancel)
 
         # languages
         self.my, self.their = keep(QComboBox(), QComboBox())
@@ -241,7 +249,7 @@ class MainWindow(QMainWindow):
         self.display.addItem("命令行风格", "cli")
         self.llm_btn = keep(QPushButton(objectName="link"))  # 翻译：本地模型 / 翻译：在线 · DeepSeek
         self.llm_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.llm_btn.setToolTip("用本地模型，或填 API key 改用在线模型翻译")
+        self.llm_btn.setToolTip("翻译用本地模型还是在线模型；语音识别用哪个（Mac 可选更准的 Qwen3-ASR）")
         self.llm_btn.clicked.connect(self._online)
         self._refresh_llm_label()
         self.gpu_voice = keep(QComboBox())
@@ -937,9 +945,7 @@ class MainWindow(QMainWindow):
             return
         self._save()
         if self.dm.missing(self.s.quality):
-            self.dm.start(self.s.quality)
-            self._refresh_banner()
-            QMessageBox.information(self, "模型下载中", "模型还没下载完整，已在后台继续下载，进度见窗口顶部。下载完成后再点“开始”。")
+            self._models_first()
             return
         self.start_btn.setText("停止")
         self.start_btn.setProperty("running", True)
@@ -1032,9 +1038,15 @@ class MainWindow(QMainWindow):
             same = d["tgt"] == d["src"]  # they spoke my language: nothing to translate
             took = f"{d['latency']:.1f}s" if d.get("latency") else ""
             self._add(f"对方  {d['src']}\n→ {d['tgt']}   ({breakdown(d)})", "them",
-                      entry("them", "" if same else d["src"], d["tgt"], took), replace_live=True, tip=breakdown(d))
+                      entry("them", "" if same else d["src"], d["tgt"], took), replace_live=True, tip=breakdown(d),
+                      row=d.get("row", 0))
             self.overlay.show_text(d["tgt"], d["src"] if d["tgt"] != d["src"] else "")
-            self.convo.add("them", d["src"], d["tgt"])
+            self.convo.add("them", d["src"], d["tgt"], row=d.get("row", 0))
+        elif kind == "them_run":  # several pieces of theirs, translated once more as a whole
+            self._merge_rows(d["rows"], f"对方  {d['src']}\n→ {d['tgt']}   (整段重译)",
+                             entry("them", d["src"], d["tgt"], "整段重译"))
+            self.overlay.show_text(d["tgt"], d["src"])
+            self.convo.merge(d["rows"], d["src"], d["tgt"])
         elif kind == "partial":
             if d["who"] == "them":  # online recognition: the sentence as it is being spoken
                 self.overlay.show_partial(d["src"], d.get("tgt", ""))
@@ -1068,8 +1080,24 @@ class MainWindow(QMainWindow):
                 self.overlay.hide()
             self.tray.refresh()
 
+    def _merge_rows(self, rows: list[int], text: str, data: dict) -> None:
+        """The passage takes the place of the first of these rows in each list, and the others go."""
+        done: set[int] = set()
+        for row in rows:
+            for lst, it in getattr(self, "_row_items", {}).pop(row, ()):
+                if lst.row(it) < 0:
+                    continue  # (scrolled out of the 300 kept)
+                if id(lst) in done:
+                    lst.takeItem(lst.row(it))
+                    continue
+                done.add(id(lst))
+                it.setText(text)
+                it.setData(ROLE, data)
+                it.setToolTip("对方连续说的几段，合在一起重新翻译")
+                lst.scrollToBottom()
+
     def _add(self, text: str, kind: str, data: dict | None = None, live: bool = False,
-             replace_live: bool = False, tip: str = "") -> None:
+             replace_live: bool = False, tip: str = "", row: int = 0) -> None:
         """kind: me | them | live | note. data: what the row is made of, for the theme's way of
         drawing it (logview.entry). live: the other side's sentence still being translated — kept
         in one row that later updates and finally the finished translation (replace_live) overwrite.
@@ -1086,6 +1114,7 @@ class MainWindow(QMainWindow):
                 it.setToolTip(tip)
                 it.setForeground(QColor(color))
                 self._live_items[id(lst)] = None if replace_live else it
+                self._note_row(row, lst, it)
                 lst.scrollToBottom()
                 continue
             it = QListWidgetItem(text)
@@ -1095,9 +1124,20 @@ class MainWindow(QMainWindow):
             if live or replace_live:  # my own rows in between leave the provisional one where it is
                 self._live_items[id(lst)] = it if live else None
             lst.addItem(it)
+            self._note_row(row, lst, it)
             if lst.count() > 300:
                 lst.takeItem(0)
             lst.scrollToBottom()
+
+    def _note_row(self, row: int, lst, it) -> None:
+        """Which list items show the engine's row (a finished sentence of the other side)."""
+        if not row:
+            return
+        if not hasattr(self, "_row_items"):
+            self._row_items: dict[int, list] = {}
+        self._row_items.setdefault(row, []).append((lst, it))
+        for old in [r for r in self._row_items if r < row - 60]:  # (a passage is a few rows back, never sixty)
+            del self._row_items[old]
 
     def _selftest(self) -> None:
         if self.engine.running:
@@ -1183,22 +1223,102 @@ class MainWindow(QMainWindow):
         self.banner.show()
         if self.dm.running:
             self.banner_btn.hide()
+            self.banner_cancel.hide()
             self.banner_bar.show()
+            self.banner_pause.show()
             if not self.banner_text.text().startswith("模型下载中"):
                 self.banner_text.setText("模型下载中…")
         else:
+            from .downloads import PAUSED, fmt_bytes
+
             mb = sum(m.approx_mb for m in missing)
-            err = f"（上次中断：{self.dm.error[:60]}）" if self.dm.error else ""
-            self.banner_text.setText(f"⚠️ 还有 {len(missing)} 个模型未下载（约 {mb / 1024:.1f} GB）{err}")
+            have = self.dm.partial_bytes(self.s.quality)
+            paused = self.dm.error == PAUSED
+            err = "" if paused or not self.dm.error else f"（上次中断：{self.dm.error[:60]}）"
+            kept = f"，已下载 {fmt_bytes(have)}" if have else ""
+            self.banner_text.setText(f"⏸ 模型下载已暂停（还差 {len(missing)} 个，约 {mb / 1024:.1f} GB{kept}）" if paused else
+                                     f"⚠️ 还有 {len(missing)} 个模型未下载（约 {mb / 1024:.1f} GB{kept}）{err}")
             self.banner_bar.hide()
-            self.banner_btn.setText("继续下载" if self.dm.error else "下载模型")
+            self.banner_pause.hide()
+            self.banner_btn.setText("继续下载" if have or self.dm.error else "下载模型")
+            self.banner_btn.setEnabled(True)
             self.banner_btn.show()
+            self.banner_cancel.setEnabled(True)
+            self.banner_cancel.setVisible(bool(have))
+
+    def _dl_start(self) -> None:
+        self.dm.start(self.s.quality)
+        self._refresh_banner()
+
+    def _dl_cancel(self) -> None:
+        from .downloads import fmt_bytes
+
+        have = self.dm.partial_bytes(self.s.quality)
+        if QMessageBox.question(self, "取消下载", f"没下完的模型文件会被删除（{fmt_bytes(have)}），已下完的保留。\n"
+                                              "以后再下载要从头开始。确定取消吗？") != QMessageBox.StandardButton.Yes:
+            return
+        self.banner_btn.setEnabled(False)
+        self.banner_cancel.setEnabled(False)
+        self.banner_text.setText("正在取消下载…")
+        self.dm.discard(self.s.quality)
+
+    def _ready_quality(self) -> str:
+        """A model choice that needs no download ('' = none): what 取消下载 goes back to."""
+        for q in ("fast", "turbo", "quality"):
+            if q != self.s.quality and not self.dm.missing(q):
+                return q
+        return ""
+
+    BIG_DOWNLOAD_MB = 1024
+
+    def _models_first(self) -> None:
+        """开始 with models missing. A small rest just downloads; gigabytes are asked about first
+        (高质量 chosen in a meeting began 4 GB at once, with no way to stop it)."""
+        if self.dm.running:
+            QMessageBox.information(self, "模型下载中", "模型还没下载完整，进度见窗口顶部。下载完成后再点“开始”。")
+            return
+        missing = self.dm.missing(self.s.quality)
+        mb = sum(m.approx_mb for m in missing)
+        if mb < self.BIG_DOWNLOAD_MB:
+            self._dl_start()
+            QMessageBox.information(self, "模型下载中", "模型还没下载完整，已在后台继续下载，进度见窗口顶部。下载完成后再点“开始”。")
+            return
+        ready = self._ready_quality()
+        answer = self._ask_download(missing, mb, ready)
+        if answer == "go":
+            self._dl_start()
+        elif answer == "back":
+            self._use_quality(ready)
+
+    def _ask_download(self, missing: list, mb: int, ready: str) -> str:
+        """'go' (download) | 'back' (use the choice that is already here) | '' (not now)"""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("需要先下载模型")
+        box.setText(f"“{models.QUALITY_LABEL[self.s.quality]}”还差 {len(missing)} 个模型，约 {mb / 1024:.1f} GB："
+                    + "、".join(m.title for m in missing) + "。\n下载可以随时暂停，下完后再点“开始”。")
+        go = box.addButton("下载", QMessageBox.ButtonRole.AcceptRole)
+        back = box.addButton(f"改用“{models.QUALITY_LABEL[ready]}”（已下载）", QMessageBox.ButtonRole.ActionRole) if ready else None
+        box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is go:
+            return "go"
+        return "back" if back is not None and box.clickedButton() is back else ""
+
+    def _use_quality(self, q: str) -> None:
+        self.quality.setCurrentIndex(self.quality.findData(q))
+        self._save()
+        self._refresh_banner()
 
     def _dl_overall(self, done: int, total: int, speed: float) -> None:
         from .downloads import fmt_bytes, fmt_eta
 
+        if not self.dm.running:
+            return  # (a last word from the download that was just stopped)
         self.banner.show()
         self.banner_btn.hide()
+        self.banner_cancel.hide()
+        self.banner_pause.show()
         self.banner_bar.show()
         self.banner_bar.setValue(int(1000 * done / max(total, 1)))
         eta = fmt_eta((total - done) / speed) if speed > 0 else ""
@@ -1206,6 +1326,13 @@ class MainWindow(QMainWindow):
                                  f"  {speed / (1 << 20):.1f} MB/s  {eta}")
 
     def _dl_finished(self, err: str) -> None:
+        from .downloads import CANCELLED
+
+        if err == CANCELLED:  # back to a choice that works without downloading, when there is one
+            ready = self._ready_quality()
+            if ready:
+                self._use_quality(ready)
+                self.status.setText(f"● 已取消下载，模型改回“{models.QUALITY_LABEL[ready]}”")
         self._refresh_banner()
         if not err and not self.dm.missing(self.s.quality):
             self.status.setText("● 模型已就绪，可以开始")

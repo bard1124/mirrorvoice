@@ -70,6 +70,11 @@ def run_cli(app: QApplication) -> int:
                 out("→", f"{d['tgt']}   {C['dim']}({breakdown(d)}){C['off']}", C["bold"])
             if overlay:
                 overlay.show_text(d["tgt"], d["src"] if d["tgt"] != d["src"] else "")
+        elif kind == "them_run":  # several pieces of theirs, translated once more as a whole
+            out("对方·整段", d["src"], C["mag"])
+            out("→", d["tgt"], C["bold"])
+            if overlay:
+                overlay.show_text(d["tgt"], d["src"])
         elif kind == "notice":
             out("提示", d["text"], C["yellow"])
         elif kind == "mute":
