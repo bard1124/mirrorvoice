@@ -200,6 +200,7 @@ class Settings:
     mode: str = "continuous"        # "continuous" | "ptt"
     ptt_key: str = "alt_r"          # pynput key name held for push-to-talk
     mute_hotkey: str = "<ctrl>+<alt>+m"
+    direct_hotkey: str = "<ctrl>+<alt>+d"  # 原声直说 on / off
     pause: float = 0.35             # silence that ends a sentence (0.5 before 0.8.4: 0.15 s slower)
     quality: str = "fast"           # "turbo" (smallest, weak machines) | "fast" | "quality" (bigger models)
     meeting_context: str = ""       # free-text background of the meeting, helps the translator pick terms

@@ -111,6 +111,7 @@ class Engine:
         self._lock = threading.RLock()
         self._boot_thread: threading.Thread | None = None
         self.muted = False
+        self.direct = False  # 原声直说: my real voice goes into the meeting, nothing is translated for me
         # exist before the first start(): the UI may call set_voice_speed / set_monitor / reload_voice early
         self._player = self._voice = self._transcript = self._me = self._them = None
         self._qwen_sides = set()
@@ -154,6 +155,7 @@ class Engine:
             self.running = True
         self.s = s
         self.muted = False
+        self.direct = False
         self._player = self._voice = self._transcript = self._me = self._them = None
         self._qwen_sides: set = set()
         self._ready = False
@@ -200,6 +202,9 @@ class Engine:
                 return
             self.running = False
             closers, self._closers = self._closers, []
+        if self.direct:
+            self.direct = False
+            self.emit("direct", on=False)
         self._take_held()
         self._take_held_me()
         self._run_drop()
@@ -245,6 +250,31 @@ class Engine:
     def set_muted(self, muted: bool) -> None:
         self.muted = muted
         self.emit("mute", muted=muted)
+
+    # ---- 原声直说
+    # 2026-11-16, a meeting of Chinese and Indian colleagues: I asked a question in Chinese, the
+    # translation started only when my 5 s sentence was over, and what the others said was "没声音，
+    # 你是不是在说？" — then "你直接用中文说". There was no way to: whatever I said was translated.
+    # With this on, the microphone goes to the meeting as it is, live; what I say is still
+    # recognised for the record, and their subtitles go on.
+    def set_direct(self, on: bool) -> None:
+        on = bool(on) and self.running and self._ready
+        if on:
+            try:
+                self._ensure_player()
+            except Exception as e:  # noqa: BLE001 — no call device: said, and it stays off
+                self.emit("notice", text=f"原声直说打不开：找不到送进会议的声音设备（{e}）")
+                on = False
+        changed, self.direct = on != self.direct, on
+        if changed:
+            self.log(f"[me] 原声直说：{'开' if on else '关'}")
+            if on:
+                self._flush_held_me()  # (what still waits is translated: it was said before)
+        self.emit("direct", on=on)
+
+    def _on_my_audio(self, block: np.ndarray) -> None:
+        if self.direct and not self.muted and self._player is not None:
+            self._player.outs[0].put_live(np.clip(block * self.s.gain, -1, 1), 16000)
 
     def reload_glossary(self) -> None:
         self._jobs.put((0, next(self._seq), "glossary", None))
@@ -355,7 +385,8 @@ class Engine:
                 self._closers.remove(old.stop)
         hotkeys.prime_layout()
         s = self.s
-        hk = Hotkeys(s.ptt_key, s.mute_hotkey, self._on_ptt, lambda: self.set_muted(not self.muted))
+        hk = Hotkeys(s.ptt_key, s.mute_hotkey, self._on_ptt, lambda: self.set_muted(not self.muted),
+                     s.direct_hotkey, lambda: self.set_direct(not self.direct))
         try:
             hk.start()
             self._own(hk.stop)
@@ -551,7 +582,7 @@ class Engine:
                       alt=s.their_lang, online_key=self._asr_key(s, "me"),
                       on_partial=lambda t: self._on_partial("me", t), on_notice=self._notice,
                       words=words if "me" in sides else None, stream=s.stream, on_guess=self._on_me_guess,
-                      clean=True)
+                      clean=True, on_audio=self._on_my_audio)
         me.start()
         self._own(me.close)
         self._me = me
@@ -1057,6 +1088,8 @@ class Engine:
         if said and is_echo(text, said):
             return  # (my own voice coming back: the finished line says so once, nothing is previewed)
         self.emit("partial", who="them", src=text, tgt="")
+        self._preview_at = (time.time(), len(utt.audio) / 16000)
+        self.log(f"[them] 预览原文：已说 {len(utt.audio) / 16000:.1f}s，{len(text.split())} 词")
         with self._lock:
             self._them_guess = (self._them_gen, text, utt.lang)
             queued, self._them_guess_queued = getattr(self, "_them_guess_queued", False), True
@@ -1085,6 +1118,8 @@ class Engine:
         if out and gen == self._them_gen:
             self._them_guess_done = (_plain(text), out)
             self.emit("partial", who="them", src=text, tgt=out + " …", live=True)
+            at, said = getattr(self, "_preview_at", (time.time(), 0.0))
+            self.log(f"[them] 预览译文：已说 {said:.1f}s，停顿后 {time.time() - at:.2f}s 显示")
 
     LIVE_EVERY_S, LIVE_MIN_CHARS = 0.12, 4
 
@@ -1201,6 +1236,17 @@ class Engine:
 
     def _on_me(self, utt: Utterance) -> None:
         s = self.s
+        if self.direct:  # it went into the meeting as I said it: only the record is left to do
+            self._settle_guess(None)
+            if is_filler(utt.text) or not _plain(utt.text) or self.muted:
+                return
+            self.log(f"[me] 原声直说：{utt.text!r}")
+            self._run_close()
+            self._said_now(utt.text)
+            self.emit("me", src=utt.text, tgt=utt.text, latency=0.0, translate_s=0.0, passthrough=True)
+            self._transcript.add("me", utt.text, "（原声直说）")
+            self._note_level(utt)
+            return
         mine = ""
         if utt.lang == s.their_lang and s.passthrough and self._player and not self.muted:
             mine = own_voice(utt.text, s.their_lang, len(utt.audio) / 16000)
@@ -1235,12 +1281,16 @@ class Engine:
             utt = _join(held, utt)
             self.log(f"[me] 接上一小段：{utt.text!r}")
         wait = 0.0  # (push-to-talk ends a sentence where I let go; and without a way to tell that I go on, no wait)
+        longest = self.HOLD_ME_MAX_S
         if s.mode != "ptt" and getattr(self._me, "tells_speaking", True):
-            wait = self.MORE_S.get(goes_on(utt.text), 0.0)
+            kind = goes_on(utt.text)
+            wait = self.MORE_S.get(kind, 0.0)
             if not wait and telling and len(utt.audio) / 16000 < self.TELL_MAX_S:
                 wait = self.TELL_S
+            if kind != "open":  # (it may be a sentence as it is: what follows has less time to show up)
+                longest = self.HOLD_ME_SHORT_S
         if wait:
-            self._hold_me(utt, wait)
+            self._hold_me(utt, wait, longest)
         elif not self._settle_guess(utt):
             self._queue_me("me", utt, utt)
 
@@ -1252,6 +1302,10 @@ class Engine:
     # was a sentence loses less than it: only its first sound waits for the verdict.
     MORE_S = {"open": 0.8, "short": 0.5}  # by what goes_on() says of the piece
     HOLD_ME_MAX_S, HOLD_ME_POLL_S = 4.0, 0.2  # once I do go on: how long it waits for the rest
+    # … when it stops on a word that asks for more ("然后那个。"). A piece that may be a sentence
+    # waits half as long: 2026-11-16, "对，是我在说。" waited the full 4 s for a sentence of mine that
+    # took longer, was spoken 5.1 s late in the middle of it, and the next three 2.4–5.1 s late behind it.
+    HOLD_ME_SHORT_S = 2.0
 
     # Explaining something at length is one piece after another with hardly a pause, and the pieces
     # end anywhere ("按现在的逻辑。" / "他会被直接拒绝。"): nothing in the words says that more follows.
@@ -1270,9 +1324,10 @@ class Engine:
                 self.log(f"[me] 连续讲述：这一轮每段多等 {self.TELL_S}s 看是否接着说")
             return self._me_run >= self.TELL_AFTER
 
-    def _hold_me(self, utt: Utterance, wait: float) -> None:
+    def _hold_me(self, utt: Utterance, wait: float, longest: float | None = None) -> None:
         with self._lock:
             self._held_me, self._held_me_more, self._held_me_idle = utt, False, 0.0
+            self._held_me_max = self.HOLD_ME_MAX_S if longest is None else longest
             self._held_me_timer = threading.Timer(wait, self._more_or_go, (utt,))
             self._held_me_timer.daemon = True
             self._held_me_timer.start()
@@ -1300,7 +1355,7 @@ class Engine:
                 return
             talking = self._me is not None and self._me.speaking()
             again = False
-            if now - utt.t_end < self.HOLD_ME_MAX_S:
+            if now - utt.t_end < getattr(self, "_held_me_max", self.HOLD_ME_MAX_S):
                 if talking:
                     if not self._held_me_more:
                         self._held_me_more = True
@@ -1346,8 +1401,8 @@ class Engine:
         sentence does end there. None: I went on — the guess is void."""
         self._settle_guess(None)
         s = self.s
-        if utt is None or s.mode == "ptt" or (utt.lang == s.their_lang and s.passthrough) or is_filler(utt.text) \
-                or self._too_quiet(utt, verdict=False):
+        if utt is None or self.direct or s.mode == "ptt" or (utt.lang == s.their_lang and s.passthrough) \
+                or is_filler(utt.text) or self._too_quiet(utt, verdict=False):
             return
         with self._lock:
             held = self._held_me
@@ -1484,12 +1539,12 @@ class Engine:
             else:
                 utt = _join(held, utt)
                 self.log(f"[them] 并入上一小段：{utt.text!r}")
+        if is_filler(utt.text):  # ("呃。" was a row of its own 11 times in one meeting when they spoke my language)
+            self.log(f"[them] 语气词，不翻译：{utt.text!r}")
+            return
         if same:
             self.emit("them", src=utt.text, tgt=utt.text, latency=0.0)  # same language: show as-is
             self._transcript.add("them", utt.text, utt.text)
-            return
-        if is_filler(utt.text):
-            self.log(f"[them] 语气词，不翻译：{utt.text!r}")
             return
         if is_fragment(utt.text) or goes_on(utt.text, loose=True) == "open":
             self._hold(utt)

@@ -120,7 +120,8 @@ def test_an_untranslated_subtitle_is_asked_for_once_more_and_the_better_answer_s
     assert len(again) == 2 and "Chinese" in again[1]["content"] and "Okay." not in str(again)  # alone, and told so
 
     b = _Backend("在评论下。 yeah， please check.", "yeah please check under the comment okay")  # the retry is worse
-    assert Translator(b).translate("Under the comment. Yeah, please check.", "en", "zh", subtitle=True) == "在评论下。 yeah， please check."
+    out = Translator(b).translate("Under the comment. Yeah, please check.", "en", "zh", subtitle=True)
+    assert out == "在评论下。嗯， please check."  # (the first answer stays; its "yeah" is said in Chinese either way)
     b = _Backend("把它退回给报告人。")  # nothing left over: one call
     assert Translator(b).translate("Just set it back.", "en", "zh", subtitle=True) and len(b.asked) == 1
     b = _Backend("Set it back to the reporter.")  # my own voice into English is not judged by this

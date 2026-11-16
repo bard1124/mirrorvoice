@@ -28,6 +28,7 @@ Runs entirely on your machine · works offline · no API keys · macOS (Apple Si
 | 🎧 **Device guard rails** | Every audio device is labelled with what it is for and the recommended one; combinations that echo or that the other side cannot hear are flagged; on macOS the meeting speaker follows new headphones in one click |
 | 📝 **Meeting transcripts** | Every session is saved as a bilingual Markdown file + CSV |
 | 🎛️ **Push-to-talk / mute** | Global hotkeys: hold Right Option/Alt to talk, or ⌃⌥M (Ctrl+Alt+M) to mute |
+| 🗣️ **Speak directly** | When someone in the meeting understands your language, click "原声直说" (or ⌃⌥D / Ctrl+Alt+D): your own voice goes into the meeting untranslated; click again to go back to translating |
 | 🔁 **Passthrough** | When you already speak their language, your real voice is sent untranslated |
 | 🌏 **Languages** | Chinese / English / Japanese / Korean in any direction (Cantonese as input) |
 | 🪟 **Floating windows & tray** | Two-way conversation window (both sides' original + translation, always on top, drag / resize), pinnable subtitle bar; tray / menu-bar icon and macOS Dock menu with Start/Stop, Pause/Resume, Quit |

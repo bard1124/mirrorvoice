@@ -444,14 +444,16 @@ class Listener:
                  on_partial: Callable[[str], None] | None = None,
                  on_notice: Callable[[str], None] | None = None, words: "QwenASR | None" = None,
                  stream: bool = False, on_guess: Callable[[Utterance | None], None] | None = None,
-                 patient: bool = False, clean: bool = False) -> None:
-        """clean: a real microphone — its signal goes through audio.SpeechInput first (rumble out,
+                 patient: bool = False, clean: bool = False,
+                 on_audio: Callable[[np.ndarray], None] | None = None) -> None:
+        """on_audio: every block that is listened to (gate open), as it goes to recognition.
+        clean: a real microphone — its signal goes through audio.SpeechInput first (rumble out,
         never beyond full scale), and an overloaded input is told once (on_notice).
         language: the language expected from this source ("auto" = any); alt: the other
         side's language, accepted as detected (passthrough / same-language subtitles).
         online_key: 阿里云百炼 key → streaming online recognition (online_asr.py) instead of
         SenseVoice, with partial text through on_partial."""
-        self.name, self.on_utt = name, on_utt
+        self.name, self.on_utt, self.on_audio = name, on_utt, on_audio
         self.gate = gate or (lambda: True)
         self.log = log or (lambda *_: None)
         lang = "" if language == "auto" else language
@@ -561,6 +563,8 @@ class Listener:
                     self._hb_clean = max(self._hb_clean, float(np.abs(block).max()))
             self._heartbeat()
             before = self.seg.count
+            if self.on_audio is not None and len(block) and self.gate():
+                self.on_audio(block)
             self.seg.feed(block, self.gate())
             if self._flush.is_set():
                 self._flush.clear()

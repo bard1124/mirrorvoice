@@ -152,6 +152,12 @@ class MainWindow(QMainWindow):
         self.mute_btn.setCheckable(True)
         self.mute_btn.setMinimumHeight(40)
         self.mute_btn.toggled.connect(self.engine.set_muted)
+        self.direct_btn = keep(QPushButton("原声直说"))
+        self.direct_btn.setCheckable(True)
+        self.direct_btn.setMinimumHeight(40)
+        self.direct_btn.setToolTip("打开后，你的原声直接进会议，不翻译也不合成（对方的字幕照常）。\n"
+                                   "适合会议里有人听得懂你的语言、让你直接说的时候。再点一次回到翻译。")
+        self.direct_btn.toggled.connect(lambda on: self.engine.set_direct(on))
         self.start_btn = keep(QPushButton("开始", objectName="primary"))
         self.start_btn.clicked.connect(self._toggle)
 
@@ -270,8 +276,12 @@ class MainWindow(QMainWindow):
         self.auto_upd = keep(QCheckBox("启动时检查更新（离线时自动跳过）"))
         self.auto_upd.setChecked(self.s.auto_check_update)
         self.auto_upd.toggled.connect(lambda on: (setattr(self.s, "auto_check_update", on), self.s.save()))
-        hk = self.s.mute_hotkey.replace("<ctrl>", "⌃" if IS_MAC else "Ctrl+").replace("<alt>", "⌥" if IS_MAC else "Alt+").replace("+", "").upper() if IS_MAC else self.s.mute_hotkey.replace("<", "").replace(">", "").title()
-        self._hotkey_text = f"静音快捷键：{hk}　（全局快捷键需要系统“辅助功能/输入监控”权限）"
+        def shown(combo: str) -> str:
+            if IS_MAC:
+                return combo.replace("<ctrl>", "⌃").replace("<alt>", "⌥").replace("+", "").upper()
+            return combo.replace("<", "").replace(">", "").title()
+        self._hotkey_text = (f"静音快捷键：{shown(self.s.mute_hotkey)}　原声直说：{shown(self.s.direct_hotkey)}"
+                             "　（全局快捷键需要系统“辅助功能/输入监控”权限）")
 
         # the conversation: one list of everything, and (调音台) one per side
         self.lv_me, self.lv_them = keep(QProgressBar(maximum=100, textVisible=False),
@@ -570,6 +580,7 @@ class MainWindow(QMainWindow):
         top.addLayout(self._lang_row(title=True))  # what is being interpreted is the page's title
         top.addStretch()
         top.addWidget(self.status, 0, Qt.AlignmentFlag.AlignVCenter)
+        top.addWidget(self.direct_btn)
         top.addWidget(self.mute_btn)
         top.addWidget(self.start_btn)
         lay.addLayout(top)
@@ -600,6 +611,7 @@ class MainWindow(QMainWindow):
         h.addStretch()
         h.addWidget(self.status, 0, Qt.AlignmentFlag.AlignVCenter)
         h.addSpacing(8)
+        h.addWidget(self.direct_btn)
         h.addWidget(self.mute_btn)
         h.addWidget(self.start_btn)
         v.addWidget(bar)
@@ -690,6 +702,7 @@ class MainWindow(QMainWindow):
         dh = QHBoxLayout()
         dh.setSpacing(14)
         dh.addLayout(self._meter("我", self.lv_me), 1)
+        dh.addWidget(self.direct_btn)
         dh.addWidget(self.mute_btn)
         dh.addWidget(self.start_btn)
         dh.addLayout(self._meter("对方", self.lv_them), 1)
@@ -960,6 +973,9 @@ class MainWindow(QMainWindow):
     def toggle_mute(self) -> None:
         self.mute_btn.setChecked(not self.mute_btn.isChecked())
 
+    def toggle_direct(self) -> None:
+        self.direct_btn.setChecked(not self.direct_btn.isChecked())
+
     def toggle_convo(self) -> None:
         if self.convo.isVisible():
             self.convo.hide()
@@ -1061,6 +1077,17 @@ class MainWindow(QMainWindow):
             self.mute_btn.setChecked(d["muted"])
             self.mute_btn.blockSignals(False)
             self.mute_btn.setText("已静音" if d["muted"] else "静音")
+            self.tray.refresh()
+        elif kind == "direct":
+            was = self.direct_btn.text() == "直说中"
+            self.direct_btn.blockSignals(True)
+            self.direct_btn.setChecked(d["on"])
+            self.direct_btn.blockSignals(False)
+            self.direct_btn.setText("直说中" if d["on"] else "原声直说")
+            if d["on"] != was:
+                text = ("提示  已切到原声直说：你的声音直接进会议，不翻译。再点一次“直说中”回到翻译。" if d["on"]
+                        else "提示  已回到翻译：你说的话会翻译后再送进会议。")
+                self._add(text, "note", entry("note", text))
             self.tray.refresh()
         elif kind == "voice":
             self.status.setText(f"● 运行中 · {d['voice']}")

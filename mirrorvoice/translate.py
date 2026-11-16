@@ -189,10 +189,42 @@ def without_repeat(first: str, rest: str) -> str:
 _LONE_O = re.compile(r"(?<![A-Za-z'])O{1,2}(?![A-Za-z'])")
 
 
+_GLUED_O = re.compile(r"(?<=[a-z])O+(?![A-Za-z'])")
+_HUMS = "嗯呃额啊哦噢唔诶欸唉哎"
+_HUM = re.compile(rf"\s*[{_HUMS}]+[，,、]?\s*")
+
+
 def tidy_asr(text: str) -> str:
-    """SenseVoice writes a spoken "OK" as a lone capital O ("It should be O.", 22 times in one
-    meeting, translated as "哦" or left as "O")."""
-    return _LONE_O.sub("OK", text)
+    """What the recogniser writes that nobody said.
+    SenseVoice writes a spoken "OK" as a lone capital O ("It should be O.", 22 times in one
+    meeting, translated as "哦" or left as "O") — and glues the same O to the word before it
+    ("OkayO sure", "Yeah, sureO.": 6 times on 2026-11-16, kept as "yeahsO" in the subtitle).
+    A hesitation in an English sentence comes out as a Chinese character ("the 嗯The displaying
+    logic of this呃 bar chart", 17 lines that day), which the translator then keeps or explains."""
+    text = _LONE_O.sub("OK", _GLUED_O.sub("", text))
+    other = re.findall(r"[\u3400-\u9fff]", text)
+    if other and all(c in _HUMS for c in other) and re.search(r"[A-Za-z]{2,}", text):
+        text = re.sub(r"\s+([.,?!。，？！])", r"\1", _HUM.sub(" ", text)).strip()
+        text = re.sub(r"^[.,。，]\s*", "", text)
+    return text
+
+
+_NO_LATIN_BEFORE, _NO_LATIN_AFTER = r"(?<![A-Za-z]\s)(?<![A-Za-z'-])", r"(?![A-Za-z'-])(?!\s[A-Za-z])"
+_KEPT_YEAH = re.compile(rf"{_NO_LATIN_BEFORE}\b(?:yeah|yep|yup)\b{_NO_LATIN_AFTER}", re.I)
+_KEPT_YES = re.compile(rf"{_NO_LATIN_BEFORE}\byes\b{_NO_LATIN_AFTER}", re.I)
+_KEPT_OKAY = re.compile(rf"{_NO_LATIN_BEFORE}\b(?:okay|ok|sure|alright)\b{_NO_LATIN_AFTER}", re.I)
+_CJK_GAP = re.compile(r"(?<=[\u3400-\u9fff，。、；：！？])\s+(?=[\u3400-\u9fff，。、；：！？])")
+
+
+def tidy_subtitle(out: str, tgt: str) -> str:
+    """A Chinese subtitle with the speaker's "yeah" / "okay" / "sure" still in it ("好的， sure，
+    谢谢。", "是的， yeah，这个。": 21 of 194 lines on 2026-11-16 — asking the model again did not
+    help, it keeps them as often). Said in Chinese, where they stand alone; a word that belongs
+    to a phrase left in English ("make sure", "OK Google") is not touched."""
+    if tgt not in ("zh", "yue") or not re.search(r"[A-Za-z]", out):
+        return out
+    out = _KEPT_OKAY.sub("好的", _KEPT_YES.sub("是的", _KEPT_YEAH.sub("嗯", out)))
+    return _CJK_GAP.sub("", out).strip()
 
 
 def system_prompt(src: str, tgt: str, subtitle: bool, meeting: str = "", concise: int = 0) -> str:
@@ -434,6 +466,8 @@ class Translator:
             out = last_line(self._streamed(stream(msgs), text, tgt, on_clause, on_text))
         else:
             out = last_line(self.backend.chat(msgs))
+        if subtitle:
+            out = tidy_subtitle(out, tgt)
         if off_task(out, text, tgt):
             # small models sometimes explain the sentence instead of translating it: one plain retry,
             # and never speak the explanation to the other side
@@ -446,7 +480,7 @@ class Translator:
             # better of the two stays (a transcript that is noise has no good answer either way).
             ask = (f"{user_prompt(text, [])}\nWrite the whole answer in {LANGS[tgt].english}: "
                    f"translate every word, including short replies like \"yeah\" or \"okay\".{tag}")
-            again = last_line(self.backend.chat([msgs[0], {"role": "user", "content": ask}]))
+            again = tidy_subtitle(last_line(self.backend.chat([msgs[0], {"role": "user", "content": ask}])), tgt)
             if again and not off_task(again, text, tgt) and left_untranslated(again, tgt) < left:
                 out = again
         return out

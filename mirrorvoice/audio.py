@@ -227,6 +227,7 @@ class DeviceOut:
         self.src_sr = src_sr
         self.buf = np.zeros(0, dtype=np.float32)
         self.lock = threading.Lock()
+        self._live_last, self._live_pos = 0.0, 1.0  # put_live: the sample before the block, where the next one falls
         self.stream = sd.OutputStream(samplerate=self.sr, channels=self.ch, dtype="float32",
                                       device=device, callback=self._cb)
         self.stream.start()
@@ -242,6 +243,28 @@ class DeviceOut:
     def put(self, chunk: np.ndarray, sr: int) -> None:
         y = resample(chunk, sr, self.sr)
         with self.lock:  # cap backlog at 60 s so a dead device can't grow memory forever
+            self.buf = np.concatenate([self.buf, y])[-self.sr * 60:]
+
+    LIVE_LEAD_S = 0.12  # in hand when live audio begins (blocks of 32 ms; with 0.06 s a real device ran dry once at the start)
+
+    def put_live(self, chunk: np.ndarray, sr: int) -> None:
+        """My voice as the microphone delivers it, block by block (原声直说). Interpolated across
+        the block edges — put() holds the last sample of each block, 31 steps a second — and with
+        a little silence first whenever the device has nothing left, so it does not run dry
+        between two blocks."""
+        chunk = np.asarray(chunk, dtype=np.float32).reshape(-1)
+        n = len(chunk)
+        if not n:
+            return
+        step = sr / self.sr
+        x = np.concatenate([[self._live_last], chunk])  # 0 = the sample before this block, n = its last
+        pos = np.arange(self._live_pos, n + 1e-9, step)
+        y = np.interp(pos, np.arange(n + 1), x).astype(np.float32)
+        self._live_pos = (float(pos[-1]) + step if len(pos) else self._live_pos) - n
+        self._live_last = float(chunk[-1])
+        with self.lock:
+            if not len(self.buf):
+                y = np.concatenate([np.zeros(int(self.LIVE_LEAD_S * self.sr), dtype=np.float32), y])
             self.buf = np.concatenate([self.buf, y])[-self.sr * 60:]
 
     def busy(self) -> bool:

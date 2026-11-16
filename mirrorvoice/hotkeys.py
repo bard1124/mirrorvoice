@@ -43,9 +43,11 @@ def prime_layout() -> None:
 
 class Hotkeys:
     def __init__(self, ptt_key: str, mute_combo: str,
-                 on_ptt: Callable[[bool], None], on_mute_toggle: Callable[[], None]) -> None:
+                 on_ptt: Callable[[bool], None], on_mute_toggle: Callable[[], None],
+                 direct_combo: str = "", on_direct_toggle: Callable[[], None] | None = None) -> None:
         self.ptt_key, self.mute_combo = ptt_key, mute_combo
         self.on_ptt, self.on_mute_toggle = on_ptt, on_mute_toggle
+        self.direct_combo, self.on_direct_toggle = direct_combo, on_direct_toggle
         self._listeners: list = []
 
     def start(self) -> None:
@@ -78,8 +80,11 @@ class Hotkeys:
         kl.daemon = True
         kl.start()
         self._listeners.append(kl)
-        if self.mute_combo:
-            hk = keyboard.GlobalHotKeys({self.mute_combo: self.on_mute_toggle})
+        combos = {self.mute_combo: self.on_mute_toggle} if self.mute_combo else {}
+        if self.direct_combo and self.on_direct_toggle is not None:
+            combos[self.direct_combo] = self.on_direct_toggle
+        if combos:
+            hk = keyboard.GlobalHotKeys(combos)
             hk.daemon = True
             hk.start()
             self._listeners.append(hk)
