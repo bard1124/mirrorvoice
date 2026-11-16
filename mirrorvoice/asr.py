@@ -481,6 +481,11 @@ class Listener:
         """Speech is being heard right now (a sentence is under way)."""
         return getattr(self.seg, "speech_from", -1) >= 0
 
+    @property
+    def tells_speaking(self) -> bool:
+        """False when speaking() cannot know (online recognition cuts the sentences elsewhere)."""
+        return hasattr(self.seg, "speech_from")
+
     def _heartbeat(self) -> None:
         """Every 10 s: is audio arriving, how loud, how many sentences — the first thing to read when
         'nothing happens' (the GUI has no console and the level bar is only a momentary hint)."""

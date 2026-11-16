@@ -109,15 +109,15 @@ def test_several_quiet_sentences_in_a_row_mean_i_moved_away_and_are_heard_again(
         e._on_me(_utt("我离麦克风远了。", level=0.012))
     assert _jobs(e) == []
     e._on_me(_utt("我离麦克风远了。", level=0.012))  # the fourth: this is my level now
-    e._on_me(_utt("继续说。", level=0.012))
-    assert _jobs(e) == [("me", "我离麦克风远了。"), ("me", "继续说。")]
+    e._on_me(_utt("我们继续往下说。", level=0.012))
+    assert _jobs(e) == [("me", "我离麦克风远了。"), ("me", "我们继续往下说。")]
 
 
 def test_the_check_can_be_switched_off_and_my_level_is_remembered_per_microphone():
     e, events = _engine(quiet_gate=False)
     for _i in range(5):
         e._on_me(_utt("我们先讨论预算。", level=0.1))
-    e._on_me(_utt("很轻的一句。", level=0.005))
+    e._on_me(_utt("这一句说得非常轻。", level=0.005))
     assert len(_jobs(e)) == 6  # off: nothing is dropped
     e.s.mic = "外置麦克风"
     e.stop()
@@ -125,10 +125,10 @@ def test_the_check_can_be_switched_off_and_my_level_is_remembered_per_microphone
     assert ("saved", {}) in events
 
     e2, _ = _engine(speech_level=0.1, speech_level_mic="外置麦克风", mic="外置麦克风")
-    e2._on_me(_utt("很轻的一句。", level=0.005))  # known from last time: caught from the first sentence on
+    e2._on_me(_utt("这一句说得非常轻。", level=0.005))  # known from last time: caught from the first sentence on
     assert _jobs(e2) == []
     e3, _ = _engine(speech_level=0.1, speech_level_mic="外置麦克风", mic="内置麦克风")
-    e3._on_me(_utt("很轻的一句。", level=0.005))  # another microphone: nothing is assumed
+    e3._on_me(_utt("这一句说得非常轻。", level=0.005))  # another microphone: nothing is assumed
     assert len(_jobs(e3)) == 1
 
 
@@ -155,7 +155,7 @@ def test_a_short_piece_goes_out_alone_when_nothing_follows_but_waits_while_they_
     deadline = time.monotonic() + 5
     while e._jobs.empty() and time.monotonic() < deadline:
         time.sleep(0.01)
-    assert _jobs(e) == [("them", "Testing done.")]
+    assert _jobs(e) == [("them_part", "Testing done.")]  # shown, not final yet (tests/test_half_sentences.py)
 
 
 def test_replies_fillers_and_my_own_language_do_not_wait_or_get_joined():

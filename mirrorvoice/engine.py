@@ -27,8 +27,8 @@ from .hotkeys import Hotkeys
 from .languages import LANGS
 from .transcript import Transcript
 from .online_llm import FailoverChat, OnlineChat, TranslateError
-from .translate import (Translator, correct_asr, is_echo, is_filler, is_fragment, left_untranslated, local_backend,
-                        spoken_en, tidy_asr)
+from .translate import (Translator, correct_asr, goes_on, is_echo, is_filler, is_fragment, left_untranslated,
+                        local_backend, own_voice, spoken_en, tidy_asr)
 from .tts import make_voice
 
 Emit = Callable[..., None]  # emit(kind: str, **data)
@@ -52,6 +52,18 @@ class _Speech:
     guess: int = 0
     state: str = "go"
     decided: threading.Event = field(default_factory=threading.Event)
+
+
+def _join(first: Utterance, rest: Utterance) -> Utterance:
+    """Two pieces of one sentence as one: the pause between them was no full stop. The time, and the
+    guess it may confirm, are those of the second."""
+    head = first.text.rstrip(" .。,，")
+    if head[-1:].isascii():
+        sep = " "
+    else:  # (after "然后那个" the sentence simply goes on; between two short pieces there was a breath)
+        sep = "" if goes_on(first.text) == "open" or rest.text[:1].isascii() else "，"
+    return Utterance(head + sep + rest.text, rest.lang, np.concatenate([first.audio, rest.audio]),
+                     rest.t_end, rest.asr_s, rest.guess)
 
 
 def speech_seconds(text: str) -> float:
@@ -113,6 +125,10 @@ class Engine:
         self._quiet_told = 0.0
         self._held: Utterance | None = None     # a short piece of the other side's sentence, waiting for the rest
         self._held_timer: threading.Timer | None = None
+        self._held_out: tuple[str, dict] | None = None  # … its own translation, once that is on screen as not final
+        self._held_me: Utterance | None = None  # a piece of my own sentence, waiting to see whether I go on
+        self._held_me_timer: threading.Timer | None = None
+        self._held_me_more, self._held_me_idle = False, 0.0  # I did go on; since when I have been silent again
         self._ready = False
         self.ptt_down = False
         self._jobs: queue.PriorityQueue = queue.PriorityQueue()
@@ -139,6 +155,7 @@ class Engine:
         self._levels.clear()
         self._quiet_hits, self._quiet_told = [], 0.0
         self._take_held()
+        self._take_held_me()
         self._prev = {"me": None, "them": None}  # (source, translation, t_end) of the last part
         self._hist = {"me": deque(maxlen=self.HISTORY_N + 1), "them": deque(maxlen=self.HISTORY_N + 1)}
         # A fresh queue per session: the previous worker may still be busy (and the previous
@@ -175,6 +192,7 @@ class Engine:
             self.running = False
             closers, self._closers = self._closers, []
         self._take_held()
+        self._take_held_me()
         self._save_level()
         self._jobs.put((99, next(self._seq), "stop", None))
         for close in reversed(closers):
@@ -568,6 +586,8 @@ class Engine:
                 self._do_me(tr, utt.utt, utt)
             elif kind == "them_guess":
                 self._do_them_guess(tr_them)
+            elif kind == "them_part":
+                self._do_them_part(tr_them, utt)
             else:
                 self._do_them(tr_them, utt)
 
@@ -852,11 +872,36 @@ class Engine:
             return
         t_tr = time.time() - t0
         self.log(f"[them] 排队 {t0 - utt.t_end:.1f}s 翻译 {t_tr:.2f}s: {out[:40]!r}")
-        if not left_untranslated(out, s.my_lang):  # (a line left in English teaches the next one to stay so)
+        self._them_done(utt, out, latency=time.time() - utt.t_end, asr_s=utt.asr_s,
+                        queue_s=max(0.0, t0 - utt.t_end - utt.asr_s), translate_s=t_tr)
+
+    def _them_done(self, utt: Utterance, out: str, **timing) -> None:
+        if not left_untranslated(out, self.s.my_lang):  # (a line left in English teaches the next one to stay so)
             self._remember("them", utt.text, out, utt.t_end)
-        self.emit("them", src=utt.text, tgt=out, latency=time.time() - utt.t_end, asr_s=utt.asr_s,
-                  queue_s=max(0.0, t0 - utt.t_end - utt.asr_s), translate_s=t_tr)
+        self.emit("them", src=utt.text, tgt=out, **timing)
         self._transcript.add("them", utt.text, out)
+
+    def _do_them_part(self, tr: Translator, utt: Utterance) -> None:
+        """A piece nothing followed in time: its own translation, on screen as not final — what
+        follows within JOIN_S still joins it, and the two are then translated as one."""
+        with self._lock:
+            if self._held is not utt:
+                return  # joined or settled while it waited its turn
+        s = self.s
+        t0 = time.time()
+        utt.text = correct_asr(utt.text, tr.glossary, "them")
+        try:
+            out = tr.translate(utt.text, utt.lang if utt.lang in LANGS else s.their_lang, s.my_lang, subtitle=True,
+                               history=self._history("them", utt, None, tr))
+        except TranslateError:
+            return  # (it is translated again when it is settled, and the failure shown then)
+        with self._lock:
+            if not out or self._held is not utt:
+                return
+            self._held_out = (out, dict(latency=time.time() - utt.t_end, asr_s=utt.asr_s,
+                                        queue_s=max(0.0, t0 - utt.t_end - utt.asr_s), translate_s=time.time() - t0))
+        self.log(f"[them] 小段先显示，等后半句：{out[:40]!r}")
+        self.emit("partial", who="them", src=utt.text, tgt=out + " …", live=True)
 
     # ---- my own voice on their line: what I sent into the meeting, heard again as "the other side"
     # (the meeting app plays me back, the monitor is on a speaker their source records, a second
@@ -895,6 +940,10 @@ class Engine:
             return
         text = tidy_asr(utt.text)
         same = utt.lang in SIMILAR.get(self.s.my_lang, {self.s.my_lang})
+        with self._lock:
+            held = self._held
+        if held is not None and not same and not is_filler(text):  # as the finished sentence will be joined
+            text = _join(held, Utterance(text, utt.lang, utt.audio, utt.t_end, 0.0)).text
         if same or is_filler(text) or len(re.findall(r"[A-Za-z0-9']+|[\u3400-\u9fff]", text)) < self.PREVIEW_MIN_WORDS:
             return  # ("Okay." is on screen as a sentence a moment later: nothing to show ahead)
         with self._lock:
@@ -1046,8 +1095,16 @@ class Engine:
 
     def _on_me(self, utt: Utterance) -> None:
         s = self.s
+        mine = ""
         if utt.lang == s.their_lang and s.passthrough and self._player and not self.muted:
+            mine = own_voice(utt.text, s.their_lang, len(utt.audio) / 16000)
+        if mine == "noise":
+            self._settle_guess(None)
+            self.log(f"[me] 太短，不当作原声送进会议：{utt.text!r}")
+            return
+        if mine == "pass":
             # I already speak their language: send my real voice, no translation
+            self._flush_held_me()
             self._player.outs[0].put(utt.audio, 16000)
             self._said_now(utt.text)
             self.emit("me", src=utt.text, tgt=utt.text, latency=time.time() - utt.t_end,
@@ -1064,7 +1121,76 @@ class Engine:
             self._settle_guess(None)
             return
         self._note_level(utt)
-        if not self._settle_guess(utt):
+        held = self._take_held_me()
+        if held is not None:
+            utt = _join(held, utt)
+            self.log(f"[me] 接上一小段：{utt.text!r}")
+        wait = 0.0  # (push-to-talk ends a sentence where I let go; and without a way to tell that I go on, no wait)
+        if s.mode != "ptt" and getattr(self._me, "tells_speaking", True):
+            wait = self.MORE_S.get(goes_on(utt.text), 0.0)
+        if wait:
+            self._hold_me(utt, wait)
+        elif not self._settle_guess(utt):
+            self._queue_me("me", utt, utt)
+
+    # ---- my own speech: a piece that may be half a sentence waits a moment to see whether I go on
+    # 2026-11-16: a pause of 0.35 s ends a piece, and each was translated and spoken alone — "然后你你
+    # 会议里面 / 你扬声器 / 就是外置耳机" came out as three sentences that had nothing to do with each
+    # other, 3.8 s late behind one another (24 of my 69 pieces that day had five characters or less).
+    # The wait runs while the piece is already being translated (the head start), so a piece that
+    # was a sentence loses less than it: only its first sound waits for the verdict.
+    MORE_S = {"open": 0.8, "short": 0.5}  # by what goes_on() says of the piece
+    HOLD_ME_MAX_S, HOLD_ME_POLL_S = 4.0, 0.2  # once I do go on: how long it waits for the rest
+
+    def _hold_me(self, utt: Utterance, wait: float) -> None:
+        with self._lock:
+            self._held_me, self._held_me_more, self._held_me_idle = utt, False, 0.0
+            self._held_me_timer = threading.Timer(wait, self._more_or_go, (utt,))
+            self._held_me_timer.daemon = True
+            self._held_me_timer.start()
+
+    def _take_held_me(self) -> Utterance | None:
+        with self._lock:
+            held, self._held_me = self._held_me, None
+            if self._held_me_timer is not None:
+                self._held_me_timer.cancel()
+                self._held_me_timer = None
+        return held
+
+    def _flush_held_me(self) -> None:
+        """What still waits goes out now, alone (something else of mine is about to be heard)."""
+        held = self._take_held_me()
+        if held is not None and not self._settle_guess(held):
+            self._queue_me("me", held, held)
+
+    def _more_or_go(self, utt: Utterance) -> None:
+        """The wait is over. I am talking again: the piece stays for the rest of the sentence, and
+        what was begun on it alone is void. I am not: it was a sentence, and is spoken."""
+        now = time.time()
+        with self._lock:
+            if self._held_me is not utt or not self.running:
+                return
+            talking = self._me is not None and self._me.speaking()
+            again = False
+            if now - utt.t_end < self.HOLD_ME_MAX_S:
+                if talking:
+                    if not self._held_me_more:
+                        self._held_me_more = True
+                        self._settle_guess(None)
+                    self._held_me_idle, again = 0.0, True
+                elif self._held_me_more:  # I stopped: the words just said are recognised and here in a moment
+                    self._held_me_idle = self._held_me_idle or now
+                    again = now - self._held_me_idle < self.s.pause + 0.6
+            if again:
+                self._held_me_timer = threading.Timer(self.HOLD_ME_POLL_S, self._more_or_go, (utt,))
+                self._held_me_timer.daemon = True
+                self._held_me_timer.start()
+                return
+            more, self._held_me, self._held_me_timer = self._held_me_more, None, None
+        if more:  # (a guess made of this piece and what followed: that rest now comes as a sentence of its own)
+            self._settle_guess(None)
+            self.log(f"[me] 后半句没等到，这一小段单独翻译：{utt.text!r}")
+        if more or not self._settle_guess(utt):
             self._queue_me("me", utt, utt)
 
     def _queue_me(self, kind: str, utt: Utterance, item) -> None:
@@ -1095,6 +1221,12 @@ class Engine:
         if utt is None or s.mode == "ptt" or (utt.lang == s.their_lang and s.passthrough) or is_filler(utt.text) \
                 or self._too_quiet(utt, verdict=False):
             return
+        with self._lock:
+            held = self._held_me
+            if held is not None:
+                self._held_me_more = True  # I went on: the piece that waits is the start of this sentence
+        if held is not None:
+            utt = _join(held, utt)
         job = _Speech(utt, 0.0, 0.0, guess=utt.guess, state="open")
         with self._lock:
             self._guess_job = job
@@ -1155,24 +1287,31 @@ class Engine:
     # ---- the other side: a short piece of a sentence waits for the rest
     # (HOLD_MAX_S was 8 s: while they kept talking, "Everything is ok." waited 4-6 s for a sentence to join)
     HOLD_S, HOLD_MAX_S = 0.8, 2.0
+    # After that it is shown, but not as final: what follows this soon still joins it. 2026-11-16,
+    # the other side spoke through a translator too — pieces about 2 s apart, 30 of 82 with one or
+    # two words ("Because." / "He that." / "And it has been filled."), 3 of them joined in time.
+    JOIN_S, JOIN_MAX_S = 4.0, 8.0
 
-    def _take_held(self) -> Utterance | None:
+    def _take_held(self) -> tuple[Utterance | None, tuple[str, dict] | None]:
+        """(the piece that waits, its own translation and timing if that is on screen already)"""
         with self._lock:
             held, self._held = self._held, None
+            shown, self._held_out = self._held_out, None
             if self._held_timer is not None:
                 self._held_timer.cancel()
                 self._held_timer = None
-        return held
+        return held, shown
 
-    def _hold(self, utt: Utterance, wait: float | None = None) -> None:
+    def _hold(self, utt: Utterance, wait: float | None = None, then: Callable | None = None) -> None:
         with self._lock:
             self._held = utt
-            self._held_timer = threading.Timer(self.HOLD_S if wait is None else wait, self._release_held, (utt,))
+            self._held_timer = threading.Timer(self.HOLD_S if wait is None else wait, then or self._release_held, (utt,))
             self._held_timer.daemon = True
             self._held_timer.start()
 
     def _release_held(self, utt: Utterance) -> None:
-        """Nothing followed in time: the piece goes out alone — unless they are still talking."""
+        """Nothing followed in time: the piece is shown alone (unless they are still talking) —
+        as not final, until JOIN_S after it was said."""
         with self._lock:
             if self._held is not utt or not self.running:
                 return
@@ -1180,8 +1319,26 @@ class Engine:
             if talking and time.time() - utt.t_end < self.HOLD_MAX_S:
                 self._hold(utt, 0.3)
                 return
-            self._held = self._held_timer = None
-        self._queue_them(utt)
+            self._hold(utt, max(0.05, utt.t_end + self.JOIN_S - time.time()), self._settle_held)
+        self._jobs.put((1, next(self._seq), "them_part", utt))
+
+    def _settle_held(self, utt: Utterance) -> None:
+        """Nothing joined it: the piece stands as a sentence."""
+        with self._lock:
+            if self._held is not utt or not self.running:
+                return
+            talking = self._them is not None and self._them.speaking()
+            if talking and time.time() - utt.t_end < self.JOIN_MAX_S:
+                self._hold(utt, 0.3, self._settle_held)  # (what they are saying joins it when it is finished)
+                return
+        _, shown = self._take_held()
+        self._them_alone(utt, shown)
+
+    def _them_alone(self, utt: Utterance, shown: tuple[str, dict] | None) -> None:
+        if shown is None:
+            self._queue_them(utt)  # not translated yet: the ordinary way
+        else:
+            self._them_done(utt, shown[0], **shown[1])
 
     def _queue_them(self, utt: Utterance) -> None:
         self._jobs.put((1, next(self._seq), "them", utt))
@@ -1192,14 +1349,12 @@ class Engine:
         if self._is_echo(utt.text):
             return
         same = utt.lang in SIMILAR.get(self.s.my_lang, {self.s.my_lang})
-        held = self._take_held()
+        held, shown = self._take_held()
         if held is not None:
             if same or is_filler(utt.text):
-                self._queue_them(held)  # nothing to join it to
+                self._them_alone(held, shown)  # nothing to join it to
             else:
-                sep = " " if held.text[-1:].isascii() else ""
-                utt = Utterance(held.text.rstrip(" .。,，") + sep + utt.text, utt.lang,
-                                np.concatenate([held.audio, utt.audio]), utt.t_end, utt.asr_s)
+                utt = _join(held, utt)
                 self.log(f"[them] 并入上一小段：{utt.text!r}")
         if same:
             self.emit("them", src=utt.text, tgt=utt.text, latency=0.0)  # same language: show as-is
@@ -1208,7 +1363,7 @@ class Engine:
         if is_filler(utt.text):
             self.log(f"[them] 语气词，不翻译：{utt.text!r}")
             return
-        if is_fragment(utt.text):
+        if is_fragment(utt.text) or goes_on(utt.text, loose=True) == "open":
             self._hold(utt)
             return
         self._queue_them(utt)

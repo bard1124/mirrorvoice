@@ -114,6 +114,56 @@ def is_fragment(text: str) -> bool:
     return len(words) <= (3 if words[0].isascii() else 2)
 
 
+# Words a sentence does not stop on: whoever pauses there has more to say. The strict set is for
+# my own speech (waiting costs time before I am heard); the wider one for subtitles, where a
+# piece taken for unfinished is still shown, only not as final.
+_OPEN_TAILS = ("然后", "那个", "这个", "就是", "因为", "所以", "但是", "可是", "不过", "而且", "或者", "如果", "比如",
+               "比如说", "还有", "以及", "的话", "那你", "那我", "那么", "那就", "和", "跟", "把", "被")
+_OPEN_WORDS = {"and", "but", "or", "because", "the", "a", "an", "of", "if", "which"}
+_OPEN_WORDS_LOOSE = _OPEN_WORDS | {"so", "to", "just", "is", "are", "was", "were", "that", "with", "for", "then",
+                                   "when", "as", "i", "we", "he", "she", "they", "my", "your", "our", "their"}
+
+
+def goes_on(text: str, loose: bool = False) -> str:
+    """Whether a piece of speech cut at a pause looks like part of a sentence. 2026-11-16: a pause
+    of 0.35 s cut "然后你你会议里面 / 你扬声器 / 就是外置耳机" in three, each translated and spoken
+    alone; the other side's "Because." / "He that." / "And the status is for risk, so." likewise.
+    'open': it stops on a word that asks for more ("然后那个。", "…for risk, so.").
+    'short': a few words that are no reply ("你扬声器。") — a sentence only if nothing follows.
+    '': a sentence, a reply ("可以。", "Okay.") or a question."""
+    if "?" in text or "？" in text:
+        return ""
+    words = _WORDS.findall(text.lower())
+    if not words or all(w in _REPLY_WORDS or w in _REPLY_CHARS for w in words):
+        return ""
+    body = re.sub(r"[\W_]+$", "", text)
+    if words[-1].isascii():
+        if words[-1] in (_OPEN_WORDS_LOOSE if loose else _OPEN_WORDS):
+            return "open"
+    elif body.endswith(_OPEN_TAILS):
+        return "open"
+    return "short" if len(words) <= (3 if words[0].isascii() else 5) else ""
+
+
+def own_voice(text: str, their_lang: str, seconds: float) -> str:
+    """What a piece of my speech recognised as the other side's language is — my real voice goes
+    into the meeting when it is theirs. 2026-11-16: five sounds under 0.9 s went in that way
+    ("H.", "え.", "S more dear.", and a Chinese "对." labelled English).
+    'pass': I said something in their language. 'mine': not a letter of it is in their script —
+    my own language under the wrong label, to be translated as usual. 'noise': too little to be
+    speech (a reply or a hesitation — "Yeah.", "Um." — is mine as it is; anything else needs two
+    words and a second)."""
+    words = _WORDS.findall(text.lower())
+    theirs = [w for w in words if w.isascii() == (their_lang == "en")] if their_lang in ("en", "zh", "yue") else words
+    if words and not theirs:
+        return "mine"
+    if not theirs:
+        return "noise"
+    if is_filler(text) or all(w in _REPLY_WORDS or w in _REPLY_CHARS for w in theirs):
+        return "pass"
+    return "pass" if len(theirs) >= 2 and seconds >= 1.0 else "noise"
+
+
 _LONE_O = re.compile(r"(?<![A-Za-z'])O{1,2}(?![A-Za-z'])")
 
 
@@ -179,6 +229,7 @@ _TASK_WORDS = (
     (re.compile(r"\bthe user\b|用户", re.I), re.compile(r"用户|使用者|user", re.I)),
     (re.compile(r"\btranscripts?\b", re.I), re.compile(r"转写|记录|transcript", re.I)),
     (re.compile(r"\binstructions?\b", re.I), re.compile(r"指令|说明|指示|instruct", re.I)),
+    (re.compile(r"识别错误|语音识别|\brecognition error", re.I), re.compile(r"识别|recogni", re.I)),
 )
 
 
@@ -213,17 +264,34 @@ def is_echo(heard: str, said: list[str], share: float = 0.7, just_said: list[str
 _PLAIN_WORD = re.compile(r"(?<![A-Za-z'])[a-z][a-z']+(?![A-Za-z'])")  # an ordinary word: not a Name, not an ACRONYM
 
 
+# Everyday English no Chinese sentence borrows: one of these in a subtitle was left untranslated
+# (a term kept on purpose — "bug", "sourcing" — is not among them).
+_EVERYDAY = frozenset(
+    "a an the this that these those it its i me my we us our you your he him his she her they them their "
+    "is am are was were be been being do does did done have has had having will would can could should shall may "
+    "might must not no yes and or but if so because than then when while where what who whom whose which why how "
+    "of to in on at by for with from into onto about over under after before between through during without within "
+    "just quite very really too also only even still already again ever never always often sometimes maybe perhaps "
+    "something anything nothing everything someone anyone everyone some any each every all both few many much more "
+    "most other another such same own here there now up down out off away back "
+    "go goes going went gone get gets got getting make makes made making say says said saying see sees saw seen "
+    "know knows knew known think thinks thought want wants wanted need needs needed look looks looked "
+    "random good bad new old big small little long short high low right wrong sure".split())
+
+
 def left_untranslated(out: str, tgt: str) -> int:
     """How much of a subtitle is still in the speaker's language, for a target written in Chinese
     characters: 0 = fine. 2026-11-13, a 4B model: 22 of 327 English sentences came back in
     English, 12 with three or more words left in the Chinese ("在评论下。yeah，please check.").
-    Names, acronyms and terms kept on purpose do not count (capitals), nor does a word or two."""
+    Names, acronyms and terms kept on purpose do not count (capitals), nor does a word or two —
+    unless it is an everyday word (2026-11-16: "我在找 something random。", "不 quite。")."""
     if tgt not in ("zh", "yue", "ja"):
         return 0
-    words = len(_PLAIN_WORD.findall(out))
-    if not _CJK.search(out):
-        return words if words >= 2 else 0
-    return words if words >= 3 else 0
+    found = _PLAIN_WORD.findall(out)
+    words = len(found)
+    if words >= (3 if _CJK.search(out) else 2):
+        return words
+    return sum(w in _EVERYDAY for w in found)
 
 
 def off_task(out: str, src_text: str, tgt: str) -> bool:
@@ -245,12 +313,18 @@ def strip_tags(text: str) -> str:
     return _TAGS.sub("", text)
 
 
+# A remark of the model's own, in brackets: "我 just（注：此处为语音识别错误，应为“就”）",
+# "我 just（此处可能为填词）在这一个里" (2026-11-16)
+_NOTE = re.compile(r"\s*[（(\[【]\s*(?:(?:译者?注|注释?|备注|translator'?s? note|note|n\.b\.)\s*[:：]"
+                   r"|此处|这里指?|原文|可能|应为|应是|疑为|疑似|unclear|inaudible|sic\b)[^）)\]】]*[）)\]】]?", re.I)
+
+
 def last_line(text: str) -> str:
     """Drop <think> blocks and echoed /no_think tags; if the model echoed extra lines keep only the
-    final one."""
+    final one, without a note of its own."""
     text = strip_tags(re.sub(r"<think>.*?</think>", "", text, flags=re.S))
     lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
-    return (lines[-1] if lines else "").strip('"“”')
+    return _NOTE.sub("", lines[-1] if lines else "").strip().strip('"“”')
 
 
 _NUM = re.compile(r"(?<![\w.])(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?(st|nd|rd|th)?(%)?")
