@@ -717,7 +717,8 @@ def test_each_look_has_its_own_layout_made_of_the_same_controls(app, settings, n
                                  translate_s=0.5))
         assert (w.log.count(), w.log_me.count(), w.log_them.count()) == (2, 1, 1)  # the partial row became the sentence
         w.stream.setChecked(True)
-        controls = (w.start_btn, w.mute_btn, w.my, w.their, w.mic, w.call, w.auto_upd, w.theme_box, w.mascot_switch)
+        controls = (w.start_btn, w.mute_btn, w.direct_btn, w.my, w.their, w.mic, w.call, w.auto_upd, w.theme_box,
+                    w.mascot_switch)
         ids = [id(c) for c in controls]
 
         def use(key):
@@ -744,7 +745,12 @@ def test_each_look_has_its_own_layout_made_of_the_same_controls(app, settings, n
         assert at(w.my).y() < 70 and at(w.their).y() < 70  # the two languages head the window
         assert not w.my.property("look")  # (an ordinary box again after being 静场's title)
         assert w.log.isVisible() and not w.log_me.isVisible() and not w.chain.isVisible()
-        assert at(w.start_btn).y() > at(w.log).y() and at(w.start_btn).x() < at(w.mic).x()  # docked under the conversation
+        # docked under the conversation: below it, within its width. (Not "left of the settings":
+        # where the settings need more room — Windows fonts — they go below, and the button sat
+        # 6 px left of the microphone box by chance until 原声直说 joined the dock.)
+        assert at(w.start_btn).y() > at(w.log).y()
+        for b in (w.direct_btn, w.mute_btn, w.start_btn):
+            assert abs(at(b).x() - at(w.log).x()) < w.log.width() / 2, b.text()
         assert at(w.nav["_glossary"]).x() < at(w.log).x() and not w.nav["_glossary"].icon().isNull()  # a rail of icons
 
         use("quiet")
