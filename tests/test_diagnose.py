@@ -175,7 +175,9 @@ def test_the_button_builds_it_and_cancel_builds_nothing(data, monkeypatch):
         monkeypatch.setattr(w, "_ask_diagnose", lambda: False)
         w.nav["_diagnose"].click()
         (made,) = data.glob("*.zip")
-        assert opened == [str(data)] and made.name in w.status.text()
+        from pathlib import Path
+
+        assert [Path(x) for x in opened] == [data] and made.name in w.status.text()  # (Qt writes C:/… on Windows)
         with zipfile.ZipFile(made) as z:
             assert "对话内容：不包含" in z.read("诊断报告.txt").decode("utf-8")
     finally:
