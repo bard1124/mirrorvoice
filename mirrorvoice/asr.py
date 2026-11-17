@@ -445,8 +445,10 @@ class Listener:
                  on_notice: Callable[[str], None] | None = None, words: "QwenASR | None" = None,
                  stream: bool = False, on_guess: Callable[[Utterance | None], None] | None = None,
                  patient: bool = False, clean: bool = False,
-                 on_audio: Callable[[np.ndarray], None] | None = None) -> None:
-        """on_audio: every block that is listened to (gate open), as it goes to recognition.
+                 on_audio: Callable[[np.ndarray], None] | None = None, guess_with_words: bool = False) -> None:
+        """guess_with_words: hand out guesses although a second recognizer (words) writes the final
+        text — for whoever only shows them (subtitles): a guess the final text rewords is withdrawn.
+        on_audio: every block that is listened to (gate open), as it goes to recognition.
         clean: a real microphone — its signal goes through audio.SpeechInput first (rumble out,
         never beyond full scale), and an overloaded input is told once (on_notice).
         language: the language expected from this source ("auto" = any); alt: the other
@@ -464,7 +466,8 @@ class Listener:
                                        on_partial, on_notice, detector=Recognizer("auto"), words=words)
         else:
             self.seg = Segmenter(name, pause, on_utt, lang, alt, self.log, on_level, words=words, stream=stream,
-                                 on_guess=None if words is not None else on_guess,  # (a second recognizer may reword it)
+                                 # (a second recognizer may reword it: no head start on words that change)
+                                 on_guess=on_guess if words is None or guess_with_words else None,
                                  patient=patient)
         self.q: queue.Queue[np.ndarray] = queue.Queue()
         self.source = source

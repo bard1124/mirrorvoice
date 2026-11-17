@@ -428,13 +428,14 @@ class Engine:
         """Subtitles want whole sentences: a longer pause ends one, long speech is cut late
         (patient), and nothing is sent ahead in pieces (边说边译 is for my voice). What they have
         said so far is shown, and translated when there is time, at every short pause instead
-        (_on_them_guess)."""
+        (_on_them_guess) — also when Qwen3-ASR writes the final text: with it nothing was shown
+        ahead at all (2026-11-17: no preview in 30 minutes), and a preview is only a preview."""
         s = self.s
         them = Listener("them", source, s.their_lang, max(s.pause, self.THEM_PAUSE_S), self._on_them, self._on_level,
                         self._them_gate, self.log, alt=s.my_lang, online_key=self._asr_key(s, "them"),
                         on_partial=lambda t: self._on_partial("them", t), on_notice=self._notice,
                         words=self._words if "them" in self._qwen_sides else None, stream=False,
-                        on_guess=self._on_them_guess, patient=True)
+                        on_guess=self._on_them_guess, patient=True, guess_with_words=True)
         them.start()
         self._own(them.close)
         self._them = them
@@ -625,6 +626,8 @@ class Engine:
                 self._do_me(tr, utt)
             elif kind == "guess":
                 self._do_me(tr, utt.utt, utt)
+            elif kind == "raw":
+                self._do_raw(utt)
             elif kind == "them_guess":
                 self._do_them_guess(tr_them)
             elif kind == "them_part":
@@ -836,6 +839,8 @@ class Engine:
             try:
                 if kind == "swap":
                     self._swap_voice()
+                elif kind == "raw":
+                    self._play_raw(job)
                 else:
                     self._speak(job)
             except Exception as e:  # noqa: BLE001 — one bad sentence must not silence the rest
@@ -844,6 +849,32 @@ class Engine:
             finally:
                 if vq.empty():
                     self._synth_idle.set()
+
+    # ---- my own voice in their language: heard in its turn
+    # It used to go to the meeting the moment it was recognised, past whatever I had said before
+    # and was still being translated or spoken. 2026-11-17, the other side, explaining a bug:
+    # "…用户 / Managing project, job and local recruiters, recruit leader / 他就说这个…" — the middle
+    # piece, product names, was taken for English and sent at once (0.1 s) while the sentences
+    # before it were 4–8 s behind: it landed between the two halves of a spoken sentence, and I
+    # received "He said, This the this this was fixed managing project."
+    def _do_raw(self, utt: Utterance) -> None:
+        """(the worker: after the sentences of mine that came before it)"""
+        self._translating(utt)
+        if self._player is None or self.muted or not self.running:
+            return
+        self._voice_q.put(("raw", utt))
+
+    def _play_raw(self, utt: Utterance) -> None:
+        """(the voice thread: after what is being spoken)"""
+        if self._player is None or self.muted:
+            return
+        late = max(0.0, self._play_until - time.monotonic())
+        self._player.outs[0].put(utt.audio, 16000)
+        self._play_until = max(time.monotonic(), self._play_until) + len(utt.audio) / 16000
+        latency = time.time() + late - utt.t_end
+        self.log(f"[me] 原声透传，说完到出声 {latency:.2f}s（等前面的话 {late:.2f}s）: {utt.text[:40]!r}")
+        self.emit("me", src=utt.text, tgt=utt.text, latency=latency, translate_s=0.0, passthrough=True)
+        self._transcript.add("me", utt.text, "（原声透传）")
 
     def _speak(self, job: _Speech) -> None:
         s, voice = self.s, self._voice
@@ -1255,16 +1286,17 @@ class Engine:
             self.log(f"[me] 太短，不当作原声送进会议：{utt.text!r}")
             return
         if mine == "pass":
-            # I already speak their language: send my real voice, no translation
+            # I already speak their language: my real voice, no translation — in its turn (_do_raw).
+            # Also when it is names of theirs in the middle of a sentence of mine ("用户 / Managing
+            # project, job and local recruiters / 他就说…"): translating the piece with the sentence
+            # was tried on that meeting and was worse — the recogniser had "no kill recruiters" where
+            # my voice says "local recruiters", and the translator dropped "用户" before it.
             self._flush_held_me()
             self._run_close()
-            self._player.outs[0].put(utt.audio, 16000)
             self._said_now(utt.text)
-            self.emit("me", src=utt.text, tgt=utt.text, latency=time.time() - utt.t_end,
-                      translate_s=0.0, passthrough=True)
-            self._transcript.add("me", utt.text, "（原声透传）")
             self._settle_guess(None)
             self._note_level(utt)
+            self._queue_me("raw", utt, utt)
             return
         if is_filler(utt.text):  # "嗯。": nothing to say in the other language
             self._settle_guess(None)

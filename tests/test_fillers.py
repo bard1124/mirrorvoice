@@ -85,7 +85,22 @@ def test_their_hesitation_gets_no_subtitle_but_words_do():
     assert e._jobs.get_nowait()[2] == "them"
 
 
+def _play(e):
+    """What the worker and then the voice thread do with my own voice in their language."""
+    rest = []
+    while not e._jobs.empty():
+        job = e._jobs.get_nowait()
+        if job[2] == "raw":
+            e._do_raw(job[3])
+            e._play_raw(e._voice_q.get_nowait()[1])
+        else:
+            rest.append(job)
+    for job in rest:
+        e._jobs.put(job)
+
+
 def test_my_own_voice_still_passes_through_when_i_speak_their_language():
     e, events = _engine()
     e._on_me(_utt("Um.", "en"))  # passthrough is my real voice: nothing is made up, nothing is held back
+    _play(e)
     assert len(e._player.outs[0].audio) == 1 and events[0][1]["passthrough"] is True

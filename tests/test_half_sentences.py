@@ -261,14 +261,30 @@ def test_nothing_of_mine_is_left_waiting_at_stop():
 
 # ---- my own voice in their language
 
+def _play(e):
+    """What the worker and then the voice thread do with my own voice in their language."""
+    rest = []
+    while not e._jobs.empty():
+        job = e._jobs.get_nowait()
+        if job[2] == "raw":
+            e._do_raw(job[3])
+            e._play_raw(e._voice_q.get_nowait()[1])
+        else:
+            rest.append(job)
+    for job in rest:
+        e._jobs.put(job)
+
+
 def test_a_sound_that_is_no_speech_is_not_sent_into_the_meeting_as_my_voice():
     e, events = _engine(passthrough=True)
     for text, sec in (("H.", 0.71), ("S more dear.", 0.87), (".", 0.68)):
         e._on_me(_utt(text, "en", sec))
     assert e._player.outs[0].audio == [] and events == [] and e._transcript.rows == [] and e._jobs.empty()
     e._on_me(_utt("Let me share my screen.", "en", 1.6))
+    _play(e)
     assert len(e._player.outs[0].audio) == 1 and events[-1][1]["passthrough"] is True
     e._on_me(_utt("Yeah.", "en", 0.74))  # a reply is mine however short
+    _play(e)
     assert len(e._player.outs[0].audio) == 2
 
 
@@ -283,7 +299,7 @@ def test_a_piece_of_mine_that_waits_is_heard_before_what_i_say_in_their_language
     e.MORE_S = {"open": 60.0, "short": 60.0}
     e._on_me(_utt("然后那个。"))
     e._on_me(_utt("Let me share my screen.", "en", 1.6))
-    assert _jobs(e) == [("me", "然后那个。")] and len(e._player.outs[0].audio) == 1
+    assert _jobs(e) == [("me", "然后那个。"), ("raw", "Let me share my screen.")] and e._player.outs[0].audio == []
 
 
 # ---- the other side
