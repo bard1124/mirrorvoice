@@ -118,6 +118,29 @@ def glossary_hotwords(rows) -> list[str]:
     return words[:100]
 
 
+def recites_hotwords(text: str, hotwords: list[str]) -> bool:
+    """The recogniser answered with the terms it was given instead of what it heard. 2026-11-17: a
+    0.9 s noise on the other side's line came back from Qwen3-ASR as "User story, user story,
+    stakeholder, stakeholder, feature, feature, sourcing, handshake, story grooming, … Gabriel,
+    Meng Yu." — the glossary, in order — and was shown and translated as a sentence of theirs.
+    True for nothing but terms from the list — five or more of them, or one said twice in a row
+    (both wordings of an entry). A term in a sentence is what the list is for, and somebody
+    naming three colleagues is somebody naming three colleagues."""
+    known = {w.strip().lower() for w in hotwords if w.strip()}
+    items = [x.strip().lower() for x in re.split(r"[,，、;；.。\n]+", text) if x.strip()]
+    if len(items) < 2 or not all(x in known for x in items):
+        return False
+    return len(items) >= 5 or any(a == b for a, b in zip(items, items[1:]))
+
+
+def more_than_was_said(text: str, seconds: float) -> bool:
+    """More words than the audio has room for (nobody says thirty words in 0.9 s): made up, whatever
+    it is. Generous: 6 words or 9 characters a second, and three more."""
+    words = len(re.findall(r"[A-Za-z0-9']+", text))
+    chars = len(re.findall(r"[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]", text))
+    return words / 6 + chars / 9 > seconds + 0.5 and words + chars > 3
+
+
 SENTENCE_END = set("。！？!?；;")
 CLAUSE_END = set("，,、：:")
 
@@ -252,7 +275,11 @@ class Segmenter:
         if self.words is not None and re.sub(r"[\W_]+", "", d.text):
             try:
                 better = self.words.transcribe(seg, d.lang)
-                if re.sub(r"[\W_]+", "", better):
+                if recites_hotwords(better, getattr(self.words, "hotwords", [])) \
+                        or more_than_was_said(better, len(seg) / ASR_SR):
+                    self.log(f"[{self.name}] Qwen3-ASR 的结果不是听到的内容（念了术语提示，或比这段声音能说的多），"
+                             f"用 SenseVoice 结果：{better[:60]!r} -> {d.text!r}")
+                elif re.sub(r"[\W_]+", "", better):
                     d = Decoded(better, d.lang, d.tokens, d.times)
             except Exception as e:  # noqa: BLE001 — keep SenseVoice's words
                 self.log(f"[{self.name}] Qwen3-ASR 失败，用 SenseVoice 结果：{e}")

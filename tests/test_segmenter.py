@@ -240,6 +240,61 @@ def test_qwen_failure_or_empty_keeps_sensevoice_text():
     assert _emit_with(_Words(text="。"))[0].text == "森斯语音的结果"
 
 
+HOT = ["用户故事", "user story", "利益相关方", "stakeholder", "功能", "feature", "sourcing", "handshake", "Danesh", "Siena",
+       "Gabriel", "Meng Yu"]
+RECITED = ("User story, user story, stakeholder, stakeholder, feature, feature, sourcing, handshake, Danesh, Siena, "
+           "Gabriel, Meng Yu.")  # what Qwen3-ASR made of 0.9 s of noise on 2026-11-17: the terms it was given, in order
+
+
+@pytest.mark.parametrize("text, recited", [
+    (RECITED, True),
+    ("User story, user story.", True),                 # both wordings of one entry, nothing else
+    ("sourcing, handshake, Danesh, Siena, Gabriel.", True),
+    ("Danesh, Siena, Gabriel.", False),                # somebody naming three colleagues
+    ("Which is user story.", False),                   # a term in a sentence: what the list is for
+    ("user story.", False),
+    ("I said to Danesh, Siena and Gabriel.", False),
+    ("Okay.", False), ("", False),
+])
+def test_the_terms_given_to_the_recogniser_coming_back_as_the_answer(text, recited):
+    from mirrorvoice.asr import recites_hotwords
+
+    assert recites_hotwords(text, HOT) is recited
+    assert recites_hotwords(text, []) is False  # no list: nothing to recite
+
+
+@pytest.mark.parametrize("text, seconds, made_up", [
+    (RECITED, 0.91, True),                              # ~20 words in under a second
+    ("今天我想和大家分享一下我们项目的最新进展。", 4.19, False),
+    ("Oh, I'm sorry. There's sound coming from somewhere. Wow! Wow! Wow!", 5.45, False),
+    ("Okay.", 0.7, False), ("Yeah, sure.", 0.5, False),  # a word or two fits anywhere
+    ("这是一段不可能在半秒钟里面说完的很长很长的话。", 0.5, True),
+])
+def test_more_words_than_the_audio_has_room_for(text, seconds, made_up):
+    from mirrorvoice.asr import more_than_was_said
+
+    assert more_than_was_said(text, seconds) is made_up
+
+
+def test_a_recited_or_impossible_answer_keeps_the_first_recogniser_s_words():
+    lines = []
+    for text in (RECITED, "User story, user story."):
+        w = _Words(text=text)
+        w.hotwords = HOT
+        out = []
+        seg = Segmenter("them", 0.5, out.append, lang="en", alt="zh", recognizer=_Rec("en", "Hmm."), vad=object(),
+                        words=w, log=lines.append)
+        seg._emit(np.zeros(int(0.91 * 16000), np.float32), time.time())
+        assert out[0].text == "Hmm." and w.calls == ["en"]
+    assert len(lines) == 4 and "不是听到的内容" in lines[0] and "segment 0.91s lang=en text='Hmm.'" in lines[1]
+    w = _Words(text="Which is user story.")  # the terms doing their job: taken
+    w.hotwords = HOT
+    out = []
+    Segmenter("them", 0.5, out.append, lang="en", alt="zh", recognizer=_Rec("en", "Which is use a story."), vad=object(),
+              words=w)._emit(np.zeros(int(1.3 * 16000), np.float32), time.time())
+    assert out[0].text == "Which is user story."
+
+
 def test_glossary_terms_become_hotwords():
     from mirrorvoice.asr import glossary_hotwords
 
