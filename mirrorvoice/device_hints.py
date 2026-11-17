@@ -106,6 +106,15 @@ SYSTEM_AUDIO_NOTE = ("直接听电脑正在播放的声音：会议软件的扬�
                      "录屏与系统录音 里给翻了么打开“仅系统录音”，然后重新打开翻了么。电脑上其他声音（视频、提示音）也会出字幕。")
 
 
+# Windows, Teams, 2026-11-17: with 我自己也听 on the headphones the meeting plays on, nobody in the
+# meeting heard a single translated sentence for forty minutes — while the user heard every one in
+# his own ears, 测试链路 passed, and 原声直说 went through. Teams takes out of the microphone
+# whatever is playing on its speaker device (echo cancellation), and the translation was on both.
+# 不监听 and it arrived at once.
+MONITOR_CANCELLED = ("Windows 上开着“我自己也听”时，会议软件会把你耳机里正在播放的翻译当成回声，从你的麦克风里消掉："
+                     "你自己听得到，会议里的人一句也听不到（Teams 实测，其他会议软件可能相同）。开会请选“不监听”。")
+
+
 def _virtual_mic() -> str:
     return "CABLE Input" if IS_WIN else "BlackHole 2ch"
 
@@ -145,6 +154,8 @@ def _monitor(name: str, k: str, ctx: Context) -> Hint:
                     "监听请选耳机，或选“不监听”。")
     if k in ("bh16", "multi") and feeds_source(name, ctx):
         return Hint(CONFLICT, "⚠️ 会造成回声", ECHO_SUBTITLE + "监听请选耳机。")
+    if IS_WIN and k in ("headphones", "speaker", "other"):
+        return Hint(UNSUITED, "开会时对方会听不到翻译", MONITOR_CANCELLED)
     if k == "headphones":
         return Hint(RECOMMENDED, "推荐")
     if k == "speaker":

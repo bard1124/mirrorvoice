@@ -22,7 +22,8 @@ import numpy as np
 from . import models
 from .asr import CJK_LANGS, SENTENCE_END, Listener, Utterance, _plain
 from .audio import Player, find_device, speech_level, time_stretch, trim_silence
-from .config import LOG_FILE, Settings
+from .config import IS_WIN, LOG_FILE, Settings
+from .device_hints import MONITOR_CANCELLED
 from . import hotkeys
 from .hotkeys import Hotkeys
 from .languages import LANGS
@@ -250,6 +251,12 @@ class Engine:
     def set_muted(self, muted: bool) -> None:
         self.muted = muted
         self.emit("mute", muted=muted)
+
+    @staticmethod
+    def _monitor_cancelled(s: Settings, voice) -> bool:
+        """Windows, the translation is spoken and also played to my own ears: the meeting app removes
+        it from the microphone as echo (device_hints.MONITOR_CANCELLED) — said at every start."""
+        return bool(IS_WIN and s.monitor and s.speak and voice is not None)
 
     # ---- 原声直说
     # 2026-11-16, a meeting of Chinese and Indian colleagues: I asked a question in Chinese, the
@@ -602,6 +609,8 @@ class Engine:
         self.emit("ready", mic=me.label, call=s.call_out, them=them.label if them else "",
                   voice="你的克隆音色" if (voice and voice.clone) else ("标准音色" if voice else "不出声"),
                   transcript=str(transcript.md), llm=tr.label)
+        if self._monitor_cancelled(s, voice):
+            self.emit("notice", text=MONITOR_CANCELLED)
 
         while self.running and not self._stale():  # this session's queue: start() makes a new one
             prio, _, kind, utt = jobs.get()

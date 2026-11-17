@@ -97,6 +97,8 @@ Model downloads and update checks use the app's bundled CA store first and fall 
 | macOS | BlackHole 2ch | Teams 扬声器 (耳机+字幕) — the headphones + BlackHole 16ch Multi-Output device |
 | Windows | CABLE Output (VB-Audio Virtual Cable) | your headphones |
 
+**On Windows keep "我自己也听" (monitor my translation) at "不监听" (off).** With it on, the meeting app removes the translation playing in your headphones from your microphone as echo: you hear it, nobody in the meeting does (measured with Teams).
+
 Use headphones so the spoken translation is not picked up by your microphone again, and turn the meeting app's noise suppression down or off. 会议软件设置 in the control panel's device card has step-by-step instructions for Teams / Zoom / Tencent Meeting / Feishu, and 测试链路 checks the whole routing before a meeting.
 
 ## How it works

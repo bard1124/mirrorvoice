@@ -24,10 +24,12 @@ def rank(role, name, ctx):
     ("monitor", MAC_OUT, MAC, "外置耳机"),
     ("source", MAC_IN, MAC, "BlackHole 16ch"),
     ("call", WIN_OUT, WIN, "CABLE Input (VB-Audio Virtual Cable)"),
-    ("monitor", WIN_OUT, WIN, "耳机 (Realtek(R) Audio)"),
     ("source", WIN_IN, WIN, "loopback:default"),
 ])
-def test_recommended_is_listed_first(role, names, ctx, first):
+def test_recommended_is_listed_first(role, names, ctx, first, monkeypatch):
+    # (which machine the names are from, not which one the test runs on: listening to my own
+    #  translation is recommended on a Mac only — see the test of that below)
+    monkeypatch.setattr(dh, "IS_WIN", ctx is WIN)
     ordered = dh.ordered(role, names, ctx)
     assert ordered[0] == first
     assert rank(role, first, ctx) == dh.RECOMMENDED
@@ -62,8 +64,25 @@ def test_default_speaker_set_to_cable_is_an_echo():
     ("monitor", "MacBook Pro扬声器", MAC, "外放，建议用耳机"),
     ("mic", "BlackHole 16ch", MAC, "虚拟声卡，不是麦克风"),
 ])
-def test_tags(role, name, ctx, tag):
+def test_tags(role, name, ctx, tag, monkeypatch):
+    monkeypatch.setattr(dh, "IS_WIN", ctx is WIN)
     assert dh.hint(role, name, ctx).tag == tag
+
+
+def test_on_windows_no_device_is_recommended_for_listening_to_my_own_translation(monkeypatch):
+    """Teams takes out of the microphone what plays on its speaker: with 我自己也听 on the headphones
+    nobody in the meeting heard the translation (2026-11-17). 不监听 is the first entry of the list."""
+    monkeypatch.setattr(dh, "IS_WIN", True)
+    for name in ("耳机 (Realtek(R) Audio)", "扬声器 (Realtek(R) Audio)", "Bose QC45"):
+        h = dh.hint("monitor", name, WIN)
+        assert h.rank == dh.UNSUITED and h.tag == "开会时对方会听不到翻译" and "不监听" in h.warning, name
+    assert dh.hint("monitor", "", WIN).rank == dh.NORMAL  # 不监听 itself
+    assert dh.hint("monitor", "CABLE Input (VB-Audio Virtual Cable)", WIN).rank == dh.CONFLICT  # (said for its own reason)
+    assert all(dh.hint("monitor", n, WIN).rank != dh.RECOMMENDED for n in WIN_OUT)
+    assert dh.hint("call", "CABLE Input (VB-Audio Virtual Cable)", WIN).rank == dh.RECOMMENDED  # (the other roles as before)
+    monkeypatch.setattr(dh, "IS_WIN", False)
+    assert dh.hint("monitor", "外置耳机", MAC).rank == dh.RECOMMENDED
+    assert dh.hint("monitor", "耳机 (Realtek(R) Audio)", WIN).rank == dh.RECOMMENDED  # decided by the platform, not the name
 
 
 def test_advice_names_the_platform_device(monkeypatch):
@@ -94,3 +113,56 @@ def test_label():
 def test_multi_output_fix(members, monitor, default, expect):
     target, why = dh.multi_output_fix(members, monitor, default)
     assert target == expect and bool(why) == bool(expect)
+
+
+def test_the_meeting_guide_says_it_on_windows_only():
+    from mirrorvoice import meeting_apps
+
+    win = "\n".join(meeting_apps.steps("Teams", mac=False))
+    assert "不监听" in win and "回声" in win
+    assert "不监听" not in "\n".join(meeting_apps.steps("Teams", mac=True))
+
+
+def test_the_line_test_does_not_call_it_fine(monkeypatch):
+    import sys
+    import types
+
+    from mirrorvoice import selftest
+    from mirrorvoice.config import Settings
+
+    class Out:
+        def __init__(self, *a):
+            pass
+
+        def put(self, *a):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("mirrorvoice.audio.DeviceOut", Out)
+    monkeypatch.setattr("mirrorvoice.audio.find_device", lambda name, kind: 0)
+    monkeypatch.setattr(selftest.time, "sleep", lambda s: None)
+    s = Settings(monitor="耳机 (Realtek(R) Audio)")
+    monkeypatch.setattr(dh, "IS_WIN", True)
+    c = selftest.check_monitor(s)
+    assert c.ok is False and "不监听" in c.detail and "回声" in c.detail
+    monkeypatch.setattr(dh, "IS_WIN", False)
+    assert selftest.check_monitor(s).ok is None
+    monkeypatch.setattr(dh, "IS_WIN", True)
+    assert selftest.check_monitor(Settings(monitor="")).ok is None  # 不监听: nothing to say
+
+
+def test_the_engine_says_it_at_every_start_on_windows(monkeypatch):
+    from mirrorvoice import engine
+    from mirrorvoice.config import Settings
+
+    voice = object()
+    monkeypatch.setattr(engine, "IS_WIN", True)
+    on = Settings(monitor="耳机 (Realtek(R) Audio)", speak=True)
+    assert engine.Engine._monitor_cancelled(on, voice)
+    assert not engine.Engine._monitor_cancelled(Settings(monitor="", speak=True), voice)
+    assert not engine.Engine._monitor_cancelled(Settings(monitor="耳机", speak=False), voice)  # nothing is spoken
+    assert not engine.Engine._monitor_cancelled(on, None)
+    monkeypatch.setattr(engine, "IS_WIN", False)
+    assert not engine.Engine._monitor_cancelled(on, voice)

@@ -228,6 +228,8 @@ def check_monitor(s: Settings) -> Check:
         out.close()
     except Exception as e:  # noqa: BLE001
         return Check("monitor", title, False, f"打开“{s.monitor}”失败：{e}")
+    if dh.IS_WIN:  # (the sweep proves nothing here: it is the meeting app that removes what is monitored)
+        return Check("monitor", title, False, f"“{s.monitor}”能出声，但是：" + dh.MONITOR_CANCELLED)
     return Check("monitor", title, None, f"刚才在“{s.monitor}”播放了一声提示音，听到了就说明监听正常。")
 
 
