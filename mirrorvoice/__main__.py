@@ -6,6 +6,7 @@
   devices                  list audio devices
   download                 download models for the current settings
   update                   check GitHub Releases and install a newer version
+  diagnose [--with-text]   write the 诊断包 (machine, settings, figures per meeting) and say where it is
 """
 from __future__ import annotations
 
@@ -97,6 +98,15 @@ def _cmd_update(_args) -> None:
     print("正在安装，完成后会自动重新打开翻了么")
 
 
+def _cmd_diagnose(args) -> None:
+    from . import diagnose
+
+    path = diagnose.build(with_text=args.with_text)
+    print(f"诊断包已生成：{path}")
+    print("包含对话内容（原始日志、最近的会议记录、术语表）" if args.with_text
+          else "不含对话内容：日志里说过的话都已替换成长度。需要分析翻译质量时加 --with-text")
+
+
 def _utf8_console() -> None:
     """Windows consoles default to a legacy code page (cp1252/cp936): printing Chinese crashed."""
     if sys.platform == "win32":
@@ -141,6 +151,9 @@ def main() -> None:
     sub.add_parser("devices").set_defaults(fn=_cmd_devices)
     sub.add_parser("download").set_defaults(fn=_cmd_download)
     sub.add_parser("update").set_defaults(fn=_cmd_update)
+    d = sub.add_parser("diagnose")
+    d.add_argument("--with-text", action="store_true", help="include what was said (raw log, meeting records, glossary)")
+    d.set_defaults(fn=_cmd_diagnose)
     a = p.parse_args()
     from .patches import confirm_boot
 

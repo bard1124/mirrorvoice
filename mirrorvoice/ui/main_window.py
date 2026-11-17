@@ -73,7 +73,8 @@ class MainWindow(QMainWindow):
 
     # ---------------------------------------------------------------- layout
     NAV = (("同传", None), ("术语表", "_glossary"), ("字幕样式", "_style"), ("音色", "_voice"), ("模型设置", "_online"),
-           ("会议记录", "_open_transcripts"), ("设置向导", "_wizard"), ("检查更新", "_check_updates"))
+           ("会议记录", "_open_transcripts"), ("设置向导", "_wizard"), ("检查更新", "_check_updates"),
+           ("诊断包", "_diagnose"))
 
     def _build(self) -> None:
         self._make_widgets()
@@ -604,7 +605,7 @@ class MainWindow(QMainWindow):
         self.brand.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         h.addWidget(self.brand)
         h.addSpacing(14)
-        tail = ("_wizard", "_check_updates")  # (these two go to the foot: the bar is for the pages)
+        tail = ("_wizard", "_check_updates", "_diagnose")  # (these go to the foot: the bar is for the pages)
         for fn, b in self.nav.items():
             if fn not in tail:
                 h.addWidget(b)
@@ -1236,6 +1237,38 @@ class MainWindow(QMainWindow):
             subprocess.run(["open", str(TRANSCRIPTS)])
         else:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(TRANSCRIPTS)))
+
+    def _diagnose(self) -> None:
+        """诊断包: one zip to send when something is slow or wrong. What was said stays out unless asked for."""
+        from .. import diagnose
+
+        with_text = self._ask_diagnose()
+        if with_text is None:
+            return
+        try:
+            path = diagnose.build(with_text=with_text)
+        except OSError as e:
+            QMessageBox.warning(self, "生成诊断包", f"没有生成：{e}")
+            return
+        self.status.setText(f"● 诊断包已生成：{path.name}")
+        if IS_MAC:
+            subprocess.run(["open", "-R", str(path)])
+        else:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.parent)))
+
+    def _ask_diagnose(self) -> bool | None:
+        """None: not now. Otherwise whether what was said goes in as well."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("生成诊断包")
+        box.setText("把这台电脑的配置、设置、已下载的模型和最近几场会议的耗时统计打包成一个文件，"
+                    "遇到卡顿或异常时发给帮你排查的人。\n\n默认不包含任何对话内容：日志里说过的话都会替换成长度。")
+        words = QCheckBox("同时包含对话文字和最近 3 场会议记录（排查翻译质量时才需要）")
+        box.setCheckBox(words)
+        go = box.addButton("生成", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        return words.isChecked() if box.clickedButton() is go else None
 
     def _wizard(self) -> None:
         Wizard(self.s, self).exec()
