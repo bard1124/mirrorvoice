@@ -7,6 +7,7 @@ import queue
 import time
 
 import numpy as np
+import pytest
 
 from mirrorvoice.asr import Utterance
 from mirrorvoice.config import Settings
@@ -84,13 +85,17 @@ def test_my_voice_in_their_language_waits_its_turn_behind_what_i_said_before():
 def test_it_is_played_after_the_speech_that_is_still_coming_out_and_counted_as_such():
     e, events = _engine()
     said = _utt("Let me share my screen.", "en", 1.6)
-    e._play_until = time.monotonic() + 5.0  # five seconds of my translated speech are still to be heard
+    e._play_until = until = time.monotonic() + 60.0  # a minute of my translated speech is still to be heard
     e._play_raw(said)
     (audio, sr), = e._player.outs[0].audio
     assert sr == 16000 and audio is said.audio and e._player.outs[1].audio == []  # not into my own ears
-    assert 6.5 < e._play_until - time.monotonic() <= 6.6  # what follows waits for it in turn
+    # what follows waits for it in turn: the end of what is queued moves on by its length. (Compared
+    # with the value set above, never with the clock again: on Windows two readings of the clock
+    # can be the same, and "<= 6.6 s from now" failed by a rounding error.)
+    assert e._play_until == pytest.approx(until + 1.6)
     kind, d = events[-1]
-    assert kind == "me" and d["passthrough"] is True and d["latency"] >= 5.0 and d["src"] == d["tgt"] == said.text
+    assert kind == "me" and d["passthrough"] is True and d["src"] == d["tgt"] == said.text
+    assert 59.0 < d["latency"] < 62.0  # (the wait is in it; a second either way is the clocks' business)
     assert e._transcript.rows == [("me", "Let me share my screen.", "（原声透传）")]
 
 
