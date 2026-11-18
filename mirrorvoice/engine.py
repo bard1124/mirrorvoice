@@ -138,6 +138,9 @@ class Engine:
         self._run: list[tuple[int, str, str, str]] = []  # (row, source, translation, language) they said in one go
         self._run_at, self._run_gen, self._run_timer = 0.0, 0, None  # when the last was added; which timer counts
         self._rows = itertools.count(1)
+        self._them_again: dict[int, int] = {}   # subtitles that gave way to my speech: how often
+        self._preview_tr = (-1, 0.0, 0)         # the last preview sent to the translator: sentence, when, words
+        self._preview_timer: threading.Timer | None = None
         self._ready = False
         self.ptt_down = False
         self._jobs: queue.PriorityQueue = queue.PriorityQueue()
@@ -168,6 +171,8 @@ class Engine:
         self._take_held_me()
         self._me_run, self._me_cut = 0, 0.0
         self._run_drop()
+        self._preview_cancel()
+        self._them_again, self._preview_tr = {}, (-1, 0.0, 0)
         self._prev = {"me": None, "them": None}  # (source, translation, t_end) of the last part
         self._hist = {"me": deque(maxlen=self.HISTORY_N + 1), "them": deque(maxlen=self.HISTORY_N + 1)}
         # A fresh queue per session: the previous worker may still be busy (and the previous
@@ -209,6 +214,7 @@ class Engine:
         self._take_held()
         self._take_held_me()
         self._run_drop()
+        self._preview_cancel()
         self._save_level()
         self._jobs.put((99, next(self._seq), "stop", None))
         for close in reversed(closers):
@@ -613,7 +619,7 @@ class Engine:
             self.emit("notice", text=MONITOR_CANCELLED)
 
         while self.running and not self._stale():  # this session's queue: start() makes a new one
-            prio, _, kind, utt = jobs.get()
+            prio, seq, kind, utt = jobs.get()
             if kind == "stop":
                 break
             if kind == "glossary":
@@ -644,7 +650,7 @@ class Engine:
             elif kind == "them_run":
                 self._do_them_run(tr_them, *utt)
             else:
-                self._do_them(tr_them, utt)
+                self._do_them(tr_them, utt, seq)
 
     def _translators(self, s: Settings) -> tuple[Translator, Translator]:
         """(mine, the subtitles'). Local model only when something uses it: offline mode, the
@@ -712,6 +718,11 @@ class Engine:
     def _translating(self, utt: Utterance) -> None:
         with self._lock:
             self._waiting_s = max(0.0, self._waiting_s - len(utt.audio) / 16000)
+
+    def _mine_waits(self) -> bool:
+        """Something I said is queued and not yet with the translator."""
+        with self._lock:
+            return self._waiting_s > 0.01
 
     def _settled(self, job: _Speech) -> bool:
         """True when the job may be spoken and recorded: always, except for a guess that was not
@@ -933,26 +944,47 @@ class Engine:
                   queue_s=max(0.0, job.waited - utt.asr_s), translate_s=translate_s, voice_s=voice_s,
                   passthrough=False)
 
-    def _do_them(self, tr: Translator, utt: Utterance) -> None:
+    # My speech does not wait for a subtitle. 2026-11-18: one of their sentences took 8.5 s to
+    # translate (the translator, Qwen3-ASR and my voice share the graphics chip while they talk
+    # without a break), a sentence of mine sat behind it for 8.8 s and was heard 12.1 s late. The
+    # subtitle gives way at its next word and is done again after what I said — at most
+    # THEM_YIELDS times, then it is finished whatever comes.
+    THEM_YIELDS = 3
+
+    def _do_them(self, tr: Translator, utt: Utterance, seq: int | None = None) -> None:
         s = self.s
         src = utt.lang if utt.lang in LANGS else s.their_lang
         t0 = time.time()
         utt.text = correct_asr(utt.text, tr.glossary, "them")
+        yielded = self._them_again.get(seq, 0)
+        show = self._live_them(utt)
+
+        def on_text(so_far: str) -> None:
+            if seq is not None and yielded < self.THEM_YIELDS and self._mine_waits():
+                raise _Void
+            show(so_far)
         try:
-            if t0 - utt.t_end > self.STALE_THEM_S:
+            if not yielded and t0 - utt.t_end > self.STALE_THEM_S:  # (one that gave way is late by my doing: not skipped)
                 raise TranslateError("timeout", "积压太多，已跳过这句")
             ctx = self._context("them", utt)
             ready = getattr(self, "_them_guess_done", None)
-            if ready and ready[0] == _plain(utt.text):  # translated at their last pause, and they stopped there
+            if ready and ready[0] == _plain(utt.text).lower():  # translated at their last pause, and they stopped there
                 out = ready[1]
             else:
                 out = tr.translate(utt.text, src, s.my_lang, subtitle=True, context=ctx,
-                                   history=self._history("them", utt, ctx, tr), on_text=self._live_them(utt))
+                                   history=self._history("them", utt, ctx, tr), on_text=on_text)
+        except _Void:
+            self._them_again[seq] = yielded + 1
+            self.log(f"[them] 让位给我说的话，这句字幕随后重做（第 {yielded + 1} 次）")
+            self._jobs.put((1, seq, "them", utt))  # (its old place: before their later sentences, after mine)
+            return
         except TranslateError as e:
+            self._them_again.pop(seq, None)
             self.log(f"[them] 未翻译 {e.kind}: {e}")
             self.emit("them", src=utt.text, tgt=f"⚠ {e}", latency=time.time() - utt.t_end, asr_s=utt.asr_s,
                       queue_s=max(0.0, t0 - utt.t_end - utt.asr_s), translate_s=time.time() - t0, failed=True)
             return
+        self._them_again.pop(seq, None)
         t_tr = time.time() - t0
         self.log(f"[them] 排队 {t0 - utt.t_end:.1f}s 翻译 {t_tr:.2f}s: {out[:40]!r}")
         self._them_done(utt, out, latency=time.time() - utt.t_end, asr_s=utt.asr_s,
@@ -1025,8 +1057,16 @@ class Engine:
         """They stopped, or I speak: what they said in a row is complete."""
         self._run_redo(self._run_take())
 
+    @staticmethod
+    def _run_cut(run: list) -> bool:
+        """Something in it was cut: a piece before the last is a fragment or stops on a word that
+        asks for more. Whole sentences side by side gain nothing from being put together — on
+        2026-11-18 thirteen passages were made of them (several people each saying a line), none
+        read better than its rows, and "Hi, Sandy." became "我是桑迪"."""
+        return any(is_fragment(src) or goes_on(src, loose=True) == "open" for _, src, _, _ in run[:-1])
+
     def _run_redo(self, run: list, tries: int = 0) -> None:
-        if len(run) >= 2 and self.running:
+        if len(run) >= 2 and self._run_cut(run) and self.running:
             self._jobs.put((2, next(self._seq), "them_run", (run, tries)))  # after my speech (0) and their sentences (1)
 
     def _do_them_run(self, tr: Translator, run: list, tries: int) -> None:
@@ -1108,12 +1148,40 @@ class Engine:
         return True
 
     PREVIEW_MIN_WORDS = 4
+    # 2026-11-18, 29 minutes of fluent English: 887 previews, 589 of them translated — 5.2 a
+    # sentence, each the whole sentence so far again (a quarter of them 8 s and more into it) —
+    # while Qwen3-ASR rewords the finished sentence, so that 5 of 148 could use a preview's
+    # translation. The finished subtitles came 3.8 s after the speaker stopped (2.3 s before
+    # previews were on with Qwen3-ASR). Now: the first pause of a sentence is translated at once;
+    # after that only every PREVIEW_EVERY_S and with PREVIEW_NEW_WORDS more — or when the pause
+    # has lasted PREVIEW_LATE_S, which is how a sentence ends.
+    # (Replayed on that meeting: 589 translations -> about 359; every 2 s / 3 words gave 417.)
+    PREVIEW_EVERY_S, PREVIEW_NEW_WORDS, PREVIEW_LATE_S = 3.0, 4, 0.35
+
+    def _preview_cancel(self) -> None:
+        with self._lock:
+            if self._preview_timer is not None:
+                self._preview_timer.cancel()
+                self._preview_timer = None
+
+    def _preview_go(self, words: int, gen: int | None = None) -> None:
+        """Hand the newest preview to the translator (gen: only if that sentence is still going on)."""
+        with self._lock:
+            if gen is not None and (gen != self._them_gen or not self.running):
+                return
+            self._preview_tr = (self._them_gen, time.time(), words)
+            queued, self._them_guess_queued = getattr(self, "_them_guess_queued", False), True
+        if not queued:
+            self._jobs.put((2, next(self._seq), "them_guess", None))  # after my speech (0) and their sentences (1)
 
     def _on_them_guess(self, utt: Utterance | None) -> None:
         """They paused for a moment: what they have said so far goes on screen at once, and is
         translated as soon as the translator is free (the newest guess only). The finished
         sentence replaces it. None: they went on — the line stays until there is a newer one."""
-        if utt is None or not self.running:
+        if utt is None:
+            self._preview_cancel()  # (the pause was no end of a sentence)
+            return
+        if not self.running:
             return
         text = tidy_asr(utt.text)
         same = utt.lang in SIMILAR.get(self.s.my_lang, {self.s.my_lang})
@@ -1121,7 +1189,8 @@ class Engine:
             held = self._held
         if held is not None and not same and not is_filler(text):  # as the finished sentence will be joined
             text = _join(held, Utterance(text, utt.lang, utt.audio, utt.t_end, 0.0)).text
-        if same or is_filler(text) or len(re.findall(r"[A-Za-z0-9']+|[\u3400-\u9fff]", text)) < self.PREVIEW_MIN_WORDS:
+        words = len(re.findall(r"[A-Za-z0-9']+|[\u3400-\u9fff]", text))
+        if same or is_filler(text) or words < self.PREVIEW_MIN_WORDS:
             return  # ("Okay." is on screen as a sentence a moment later: nothing to show ahead)
         with self._lock:
             said = [t for at, t in getattr(self, "_said", ()) if time.time() - at < self.ECHO_S]
@@ -1130,11 +1199,18 @@ class Engine:
         self.emit("partial", who="them", src=text, tgt="")
         self._preview_at = (time.time(), len(utt.audio) / 16000)
         self.log(f"[them] 预览原文：已说 {len(utt.audio) / 16000:.1f}s，{len(text.split())} 词")
+        self._preview_cancel()
         with self._lock:
-            self._them_guess = (self._them_gen, text, utt.lang)
-            queued, self._them_guess_queued = getattr(self, "_them_guess_queued", False), True
-        if not queued:
-            self._jobs.put((2, next(self._seq), "them_guess", None))  # after my speech (0) and their sentences (1)
+            gen = self._them_gen
+            self._them_guess = (gen, text, utt.lang)
+            was, at, had = self._preview_tr
+            due = was != gen or (time.time() - at >= self.PREVIEW_EVERY_S and words - had >= self.PREVIEW_NEW_WORDS)
+            if not due:
+                self._preview_timer = threading.Timer(self.PREVIEW_LATE_S, self._preview_go, (words, gen))
+                self._preview_timer.daemon = True
+                self._preview_timer.start()
+        if due:
+            self._preview_go(words)
 
     def _do_them_guess(self, tr: Translator) -> None:
         with self._lock:
@@ -1147,7 +1223,7 @@ class Engine:
         show = self._live_them(Utterance(text, lang, np.zeros(0, np.float32), time.time(), 0.0))
 
         def still_wanted(so_far: str) -> None:
-            if gen != self._them_gen or (self._me is not None and self._me.speaking()):
+            if gen != self._them_gen or (self._me is not None and self._me.speaking()) or self._mine_waits():
                 raise _Void  # (my own words come first: a guess never keeps my voice waiting)
             show(so_far)
         try:
@@ -1156,7 +1232,7 @@ class Engine:
         except (_Void, TranslateError):
             return
         if out and gen == self._them_gen:
-            self._them_guess_done = (_plain(text), out)
+            self._them_guess_done = (_plain(text).lower(), out)  # (the second recogniser writes "Okay, so": the same words)
             self.emit("partial", who="them", src=text, tgt=out + " …", live=True)
             at, said = getattr(self, "_preview_at", (time.time(), 0.0))
             self.log(f"[them] 预览译文：已说 {said:.1f}s，停顿后 {time.time() - at:.2f}s 显示")

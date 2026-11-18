@@ -199,7 +199,7 @@ def _said(e, *pieces):
 def test_what_they_said_in_one_go_is_translated_once_more_as_a_whole():
     e, events = _engine()
     e.RUN_GAP_S = 60.0
-    _said(e, ("And this bug is the user.", "而且这个bug就是用户。"), ("Who applied for the job.", "谁申请了这份工作。"))
+    _said(e, ("And this bug is the.", "而且这个bug就是"), ("User who applied for the job.", "申请了这份工作的用户。"))
     rows = [d["row"] for k, d in events if k == "them"]
     assert rows == [1, 2] and e._jobs.empty()
     e._run_over(e._run_gen)  # (what the timer does RUN_GAP_S after their last word)
@@ -207,7 +207,7 @@ def test_what_they_said_in_one_go_is_translated_once_more_as_a_whole():
     assert kind == "them_run" and tries == 0 and e._run == []
     tr = _Says("这个 bug 出在申请这份工作的用户身上。")
     e._do_them_run(tr, run, tries)
-    assert tr.asked == ["And this bug is the user. Who applied for the job."] and tr.kw[0]["passage"] is True
+    assert tr.asked == ["And this bug is the. User who applied for the job."] and tr.kw[0]["passage"] is True
     assert events[-1] == ("them_run", {"rows": [1, 2], "src": tr.asked[0], "tgt": tr.out})
     assert e._transcript.rows[-1] == ("them_run", tr.asked[0], tr.out)
 
@@ -224,7 +224,7 @@ def test_it_waits_while_they_are_still_talking_or_a_piece_still_waits():
     e, _ = _engine()
     e.RUN_GAP_S = e.RUN_POLL_S = 60.0
     e._them.talking = True
-    _said(e, ("And this bug is the user.", "而且这个bug就是用户。"), ("Who applied for the job.", "谁申请了这份工作。"))
+    _said(e, ("And this bug is the.", "而且这个bug就是"), ("User who applied for the job.", "申请了这份工作的用户。"))
     at = e._run_gen
     e._run_over(at)  # (what the timer does)
     assert len(e._run) == 2 and e._jobs.empty()  # they go on: the passage is not complete
@@ -240,9 +240,9 @@ def test_it_waits_while_they_are_still_talking_or_a_piece_still_waits():
 def test_the_timer_ends_a_passage_by_itself_and_an_old_timer_ends_nothing():
     e, _ = _engine()
     e.RUN_GAP_S = 60.0
-    _said(e, ("And this bug is the user.", "而且这个bug就是用户。"))
+    _said(e, ("And this bug is the.", "而且这个bug就是"))
     old = e._run_gen
-    _said(e, ("Who applied for the job.", "谁申请了这份工作。"))
+    _said(e, ("User who applied for the job.", "申请了这份工作的用户。"))
     e._run_over(old)  # (a timer of an earlier piece that was not cancelled in time)
     assert len(e._run) == 2 and e._jobs.empty()
     e.RUN_GAP_S = 0.02
@@ -255,7 +255,7 @@ def test_the_timer_ends_a_passage_by_itself_and_an_old_timer_ends_nothing():
 def test_my_answer_ends_what_they_were_saying():
     e, _ = _engine()
     e.RUN_GAP_S = 60.0
-    _said(e, ("And this bug is the user.", "而且这个bug就是用户。"), ("Who applied for the job.", "谁申请了这份工作。"))
+    _said(e, ("And this bug is the.", "而且这个bug就是"), ("User who applied for the job.", "申请了这份工作的用户。"))
     e._on_me(_utt("我明白你的意思了。"))
     assert sorted(k for k, _ in _jobs(e)) == ["me", "them_run"] and e._run == [] and e._run_timer is None
 
@@ -263,7 +263,7 @@ def test_my_answer_ends_what_they_were_saying():
 def test_a_passage_is_put_off_while_i_talk_and_my_words_come_first():
     e, events = _engine()
     e.RUN_RETRY_S = 0.02
-    run = [(1, "And this bug is the user.", "而且这个bug就是用户。", "en"), (2, "Who applied.", "谁申请了。", "en")]
+    run = [(1, "And this bug is the.", "而且这个bug就是", "en"), (2, "User who applied.", "申请的用户。", "en")]
     e._me.talking = True
     tr = _Says("这个 bug 出在申请的用户身上。")
     e._do_them_run(tr, run, 0)
@@ -301,7 +301,7 @@ def test_a_passage_that_says_nothing_new_changes_nothing():
 def test_a_long_talk_is_several_passages():
     e, _ = _engine()
     e.RUN_GAP_S, e.RUN_MAX_S = 60.0, 8.0
-    piece = "We need to check the status of every applicant again."  # ~3.8 s of speech
+    piece = "We need to check the status of every applicant and."  # ~3.8 s of speech, stopping on a word that asks for more
     _said(e, (piece, "一"), (piece, "二"))
     assert e._jobs.empty() and [r[0] for r in e._run] == [1, 2]
     _said(e, (piece, "三"), (piece, "四"))  # the third does not fit: the first two are a passage
@@ -313,6 +313,6 @@ def test_nothing_of_theirs_is_left_waiting_at_stop():
     e, _ = _engine()
     e.RUN_GAP_S = 60.0
     e._save_level = lambda: None
-    _said(e, ("And this bug is the user.", "而且这个bug就是用户。"), ("Who applied.", "谁申请了。"))
+    _said(e, ("And this bug is the.", "而且这个bug就是"), ("User who applied.", "申请的用户。"))
     e.stop()
     assert e._run == [] and e._run_timer is None
