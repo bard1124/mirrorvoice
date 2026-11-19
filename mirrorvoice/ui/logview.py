@@ -71,12 +71,13 @@ class ConvoDelegate(QStyledItemDelegate):
             box_h = src_h + tgt_h + 2 * self.PAD + (2 if src_h and tgt_h else 0)
             return {"mode": "bubbles", "text_w": text_w, "src_h": src_h, "tgt_h": tgt_h, "box_w": text_w + 2 * self.PAD + 8,
                     "box_h": box_h, "h": box_h + (16 if d["time"] else 0) + self.GAP, "small": small, "big": big}
-        lead = self.TAG_W if t.convo == "rows" else 0
+        lead = self.TAG_W if t.convo == "rows" else 0  # cards and strips: no column for who
         text_w = full - lead - 2 * self.PAD - 4
         src_w = text_w - time_w
         src_h, tgt_h = self._h(small, d["src"], src_w), self._h(big, d["tgt"], text_w)
         box_h = max(src_h, 16 if time_w else 0) + tgt_h + 2 * self.PAD + (2 if tgt_h else 0)
-        return {"mode": t.convo, "lead": lead, "text_w": text_w, "src_w": src_w, "src_h": src_h, "tgt_h": tgt_h,
+        return {"mode": "cards" if t.convo == "strips" else t.convo, "strip": t.convo == "strips", "lead": lead,
+                "text_w": text_w, "src_w": src_w, "src_h": src_h, "tgt_h": tgt_h,
                 "time_w": time_w, "box_h": box_h, "h": box_h + self.GAP, "small": small, "big": big}
 
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:  # noqa: N802
@@ -156,7 +157,10 @@ class ConvoDelegate(QStyledItemDelegate):
             p.drawText(QRect(x, y, lay["src_w"], lay["src_h"]), WRAP, d["src"])
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(who_color)
-            p.drawEllipse(QRectF(r.x() + 3, y + 5, 5, 5))  # a dot of the speaker's colour
+            if lay["strip"]:  # a soft bar of the speaker's colour down the card's left edge
+                p.drawRoundedRect(QRectF(r.x() + 3, r.y() + 8, 3, lay["box_h"] - 16), 1.5, 1.5)
+            else:
+                p.drawEllipse(QRectF(r.x() + 3, y + 5, 5, 5))  # a dot of the speaker's colour
         if d["time"]:
             f = QFont(lay["small"])
             if lay["mode"] == "cards":

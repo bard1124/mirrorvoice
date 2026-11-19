@@ -661,11 +661,11 @@ def test_the_switch_at_the_bottom_left_shows_and_hides_her_and_is_remembered(app
 
 
 
-def test_three_looks_and_switching_between_them(app, settings, no_popups, monkeypatch):
+def test_four_looks_and_switching_between_them(app, settings, no_popups, monkeypatch):
     from mirrorvoice.config import Settings
     from mirrorvoice.ui import logview, main_window, theme
 
-    assert settings.theme == "quiet" and set(theme.THEMES) == {"quiet", "studio", "chat"}
+    assert settings.theme == "quiet" and set(theme.THEMES) == {"quiet", "studio", "chat", "cyber"}
     for t in theme.THEMES.values():  # every token of the stylesheet has a value in every theme
         css = theme.qss(t)
         assert t.accent in css and t.bg in css and "{" not in css.replace("{ ", "").replace(" {", "").replace("{\n", "")
@@ -685,7 +685,7 @@ def test_three_looks_and_switching_between_them(app, settings, no_popups, monkey
 
         box, d, opt = w.theme_box, w.log.itemDelegate(), QtWidgets.QStyleOptionViewItem()
         heights = {}
-        for key in ("studio", "chat", "quiet"):
+        for key in ("studio", "chat", "cyber", "quiet"):
             box.setCurrentIndex(box.findData(key))
             assert theme.current().key == key and Settings.load().theme == key  # at once, and remembered
             assert theme.current().accent in app.styleSheet()
@@ -693,6 +693,9 @@ def test_three_looks_and_switching_between_them(app, settings, no_popups, monkey
             w.grab()  # every way of drawing a sentence paints without error
         assert heights["chat"] > heights["quiet"]  # a bubble carries its time below it
         assert theme.current().convo == "rows" and theme.STUDIO.convo == "cards" and theme.CHAT.convo == "bubbles"
+        assert theme.CYBER.convo == "strips" and theme.CYBER.glass and "Menlo" in theme.qss(theme.CYBER) or \
+            "Consolas" in theme.qss(theme.CYBER)  # 赛博: readouts in a monospace face
+        assert w.clear_slider.isHidden()  # no glass here: nothing to make clearer
         assert theme.use(app, "no-such-look").key == "quiet"  # a setting from a newer version: the default
     finally:
         w.close()

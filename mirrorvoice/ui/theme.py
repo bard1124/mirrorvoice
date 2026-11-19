@@ -2,7 +2,8 @@
 
 Fusion draws the same on macOS and Windows, so the stylesheet below is the whole look. Every
 colour and corner in it is a token of the Theme in use (THEMES): 静场 (quiet light), 调音台 (dark
-console) and 对话 (soft, rounded). use() switches while the app runs.
+console), 对话 (soft, rounded) and 赛博 (white glass, the update robot's cyan). use() switches while the
+app runs.
 """
 from __future__ import annotations
 
@@ -68,7 +69,7 @@ class Theme:
     rp: int
     rs: int
     # the conversation: how a sentence is drawn, and who is which colour
-    convo: str  # rows | cards | bubbles
+    convo: str  # rows | cards | strips (cards, a bar of who's colour at the left) | bubbles
     me: str
     them: str
     live: str
@@ -84,6 +85,8 @@ class Theme:
     log_bg: str = ""      # what the conversation lies on
     brand: str = ""       # the name of the app
     dark: bool = False
+    mono: bool = False    # readouts (latencies, the status) in a monospace face
+    glass: bool = False   # frosted glass behind the window where the system can (ui/glass.py)
 
 
 QUIET = Theme(
@@ -137,7 +140,25 @@ CHAT = Theme(
     switch_off="#C9C6E6", chip_on_bg="#4B3FD6", chip_on_fg="#FFFFFF",
     seg_on_bg="#4B3FD6", seg_on_fg="#FFFFFF", log_bg="#FFFFFF", brand="#4B3FD6")
 
-THEMES: dict[str, Theme] = {t.key: t for t in (QUIET, STUDIO, CHAT)}
+# white armour, cyan cables: the update robot's colours. Soft hairlines, round corners, glass behind.
+CYBER = Theme(
+    key="cyber", name="赛博",
+    accent="#1786C2", accent_soft="#E8F6FE", primary="#1786C2", primary_hover="#0F6C9F", on_primary="#FFFFFF",
+    stop="#2A3440", stop_hover="#3B4756", on_stop="#FFFFFF",
+    text="#1B2430", text_2="#5A6878", text_3="#A6B1BC", nav_text="#3B4756", nav_on_bg="#E8F6FE", nav_on_fg="#0F6C9F",
+    bg="#F8FAFC", bg_side="#F3F6F9", bg_soft="#F3F6F9", surface="#FFFFFF", chip="#EDF2F6", pressed="#E2EAF0",
+    line="#E6ECF1", border="#D8E1E8", border_hover="#9ED6F3", scroll="#D8E1E8", scroll_hover="#9ED6F3",
+    tip_bg="#1B2430", tip_fg="#FFFFFF",
+    ok_bg="#E4F6FD", ok_fg="#0F6C9F", busy_bg="#FFF4E0", busy_fg="#8A5300",
+    warn_bg="#FFF7E6", warn_line="#FFE1A8", warn_fg="#8A5300", info_bg="#E8F6FE", info_fg="#0F6C9F",
+    danger_bg="#FDECEC", danger_fg="#B3261E",
+    r=8, r2=10, rc=14, rp=12, rs=6,
+    convo="strips", me="#3B4756", them="#1786C2", live="#56BEF2",
+    me_bubble="#EDF2F6", on_me_bubble="#1B2430", them_bubble="#E8F6FE", on_them_bubble="#1B2430",
+    switch_off="#C5CFD8", chip_on_bg="#E8F6FE", chip_on_fg="#0F6C9F",
+    seg_on_bg="#FFFFFF", seg_on_fg="#0F6C9F", log_bg="#FFFFFF", brand="#1B2430", mono=True, glass=True)
+
+THEMES: dict[str, Theme] = {t.key: t for t in (QUIET, STUDIO, CHAT, CYBER)}
 DEFAULT = QUIET.key
 _current = QUIET
 
@@ -174,6 +195,11 @@ def _tinted(name: str, drawn: str, color: str) -> str:
 
 # Only fonts that exist on this platform: a missing family made Qt search every alias at startup
 FONTS = '"PingFang SC", "Helvetica Neue"' if sys.platform == "darwin" else '"Microsoft YaHei UI", "Segoe UI"'
+MONO = 'Menlo, "PingFang SC"' if sys.platform == "darwin" else '"Cascadia Mono", Consolas, "Microsoft YaHei UI"'
+_MONO_QSS = """
+QLabel#cellValue, QLabel#status, QLabel#brandSub {{ font-family: {MONO}; }}
+QLabel#status {{ letter-spacing: 0.5px; }}
+"""
 
 _QSS = """
 * {{ font-family: {FONTS}; font-size: 13px;
@@ -314,7 +340,8 @@ QScrollArea#page, QScrollArea#page > QWidget > QWidget#content {{ background: {B
 def qss(t: Theme) -> str:
     tokens = {k.upper(): v for k, v in vars(t).items()}
     return _QSS.format(FONTS=FONTS, CHEVRON=_tinted("chevron-down.svg", "#6B7280", t.text_2),
-                       CHECK=_tinted("check-white.svg", "#fff", t.on_primary), **tokens)
+                       CHECK=_tinted("check-white.svg", "#fff", t.on_primary), **tokens) + \
+        (_MONO_QSS.format(MONO=MONO) if t.mono else "")
 
 
 _translators: list[QTranslator] = []  # keep alive

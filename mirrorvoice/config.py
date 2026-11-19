@@ -206,7 +206,9 @@ class Settings:
     meeting_context: str = ""       # free-text background of the meeting, helps the translator pick terms
     quiet_gate: bool = True         # sounds far quieter than my usual speech are not translated
     mascot: bool = False            # the owl girl in the sidebar (and her routine while updating)
-    theme: str = "quiet"            # the look: quiet 静场 | studio 调音台 | chat 对话 (ui/theme.py)
+    theme: str = "quiet"            # the look: quiet 静场 | studio 调音台 | chat 对话 | cyber 赛博 (ui/theme.py)
+    glass: bool = True              # 赛博: frosted glass behind the window where the system can (ui/glass.py)
+    glass_clear: int = 60           # 赛博: how see-through that glass is, 0–100 %
     speech_level: float = 0.0       # my usual speech level on speech_level_mic (learned, engine.py)
     speech_level_mic: str = ""
     llm_mode: str = "local"         # translation: "local" (downloaded Qwen3) | "online" (API key, providers.py)

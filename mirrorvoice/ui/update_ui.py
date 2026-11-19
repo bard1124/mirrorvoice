@@ -15,7 +15,7 @@ from .. import __version__, updater
 from ..config import Settings
 from .bridge import Bridge
 from .mascot import UpdateMascot, UpdateRobot
-from . import theme
+from . import glass, theme
 
 
 def mb(n: int) -> str:
@@ -171,6 +171,7 @@ class UpdateProgress(QDialog):
 
     def __init__(self, parent: QWidget | None, text: str, mascot: bool = True, head: str = SAY_LINK) -> None:
         super().__init__(parent)
+        glass.frost(self)  # 赛博: the robot hangs in front of frosted glass
         self.setWindowTitle("更新翻了么")
         self.setWindowModality(Qt.WindowModality.WindowModal)
         self.canceled = threading.Event()

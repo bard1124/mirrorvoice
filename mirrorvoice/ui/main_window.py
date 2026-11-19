@@ -9,7 +9,8 @@ from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFormLayout, QFrame,
                                QGridLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-                               QProgressBar, QPushButton, QRadioButton, QScrollArea, QVBoxLayout, QWidget, QBoxLayout)
+                               QProgressBar, QPushButton, QRadioButton, QScrollArea, QSlider, QVBoxLayout, QWidget,
+                               QBoxLayout)
 
 from .. import __version__, models
 from .. import device_hints as dh
@@ -24,7 +25,7 @@ from .checkup import MeetingGuideDialog, SelfTestDialog
 from .convo import ConversationWindow
 from .dialogs import GlossaryDialog, StyleDialog, VoiceDialog
 from .icons import app_icon
-from . import theme
+from . import glass, theme
 from .logview import ROLE, ConvoDelegate, entry
 from .mascot import Mascot
 from .switch import Switch
@@ -38,6 +39,8 @@ class MainWindow(QMainWindow):
     def __init__(self, s: Settings) -> None:
         super().__init__()
         self.s = s
+        glass.allow(s.glass, s.glass_clear)
+        glass.frost(self)  # (see-through from the start, or the glass can only come at the next start)
         self.setWindowTitle(f"翻了么 {__version__}")
         self.resize(560, 820)
         self.bridge = Bridge()
@@ -139,12 +142,18 @@ class MainWindow(QMainWindow):
         for t in theme.THEMES.values():
             self.theme_box.addItem(f"风格 · {t.name}", t.key)
         self.theme_box.setCurrentIndex(max(0, self.theme_box.findData(theme.current().key)))
-        self.theme_box.setToolTip("静场：极简浅色 · 调音台：深色专业 · 对话：亲和圆润（气泡）")
+        self.theme_box.setToolTip("静场：极简浅色 · 调音台：深色专业 · 对话：亲和圆润（气泡） · 赛博：白色毛玻璃")
         self.theme_box.currentIndexChanged.connect(self._use_theme)
         self.mascot_label = keep(QLabel("虚拟形象", objectName="sideOption"))
         self.mascot_switch = keep(Switch(s.mascot))
         self.mascot_switch.setToolTip("显示或隐藏虚拟形象（更新时的动画也跟着开关）")
         self.mascot_switch.toggled.connect(self._show_mascot)
+        # 赛博 on glass: how much of what is behind the window shows through
+        self.clear_label = keep(QLabel("透明度", objectName="sideOption"))
+        self.clear_slider = keep(QSlider(Qt.Orientation.Horizontal, minimum=0, maximum=100, value=s.glass_clear))
+        self.clear_slider.setAccessibleName("窗口透明度")
+        self.clear_slider.setToolTip("毛玻璃的透明程度：越往右，越能看到窗口后面")
+        self.clear_slider.valueChanged.connect(self._set_clear)
 
         # the page's head
         self.h1 = keep(QLabel("同传", objectName="h1"))
@@ -333,8 +342,8 @@ class MainWindow(QMainWindow):
             self._chain_vals[key].setText(text)
 
     # ---- the layouts: the same pieces, placed the theme's way
-    LAYOUTS = {"quiet": "_lay_quiet", "studio": "_lay_studio", "chat": "_lay_chat"}
-    MIN_SIZE = {"quiet": (760, 560), "studio": (980, 600), "chat": (900, 600)}
+    LAYOUTS = {"quiet": "_lay_quiet", "studio": "_lay_studio", "chat": "_lay_chat", "cyber": "_lay_quiet"}
+    MIN_SIZE = {"quiet": (760, 560), "studio": (980, 600), "chat": (900, 600), "cyber": (760, 560)}
 
     def _arrange(self) -> None:
         key = theme.current().key if theme.current().key in self.LAYOUTS else theme.DEFAULT
@@ -570,6 +579,8 @@ class MainWindow(QMainWindow):
         v.addStretch()
         v.addLayout(self._side_row(self.theme_box, margins=(4, 0, 4, 6)))
         v.addLayout(self._side_row(self.mascot_label, None, self.mascot_switch))
+        v.addLayout(self._side_row(self.clear_label, self.clear_slider))
+        self._show_clear()
         outer.addWidget(side)
 
         content = QWidget(objectName="content")
@@ -767,6 +778,21 @@ class MainWindow(QMainWindow):
         for lst in (self.log, self.log_me, self.log_them):  # laid out again: a bubble is not as tall as a row
             lst.doItemsLayout()
             lst.scrollToBottom()
+        if not glass.refresh(self) and glass.wanted() and not glass.frostable(self):
+            theme.toast(self, "毛玻璃效果在下次启动时生效")
+        self._show_clear()
+
+    def _show_clear(self) -> None:
+        """The 透明度 slider only where there is glass to make clearer."""
+        on = glass.wanted() and glass.frostable(self)
+        self.clear_label.setVisible(on)
+        self.clear_slider.setVisible(on)
+
+    def _set_clear(self, value: int) -> None:
+        self.s.glass_clear = value
+        self.s.save()
+        glass.allow(self.s.glass, value)
+        glass.refresh(self)
 
     def _show_mascot(self, on: bool) -> None:
         self.mascot.setVisible(on)
