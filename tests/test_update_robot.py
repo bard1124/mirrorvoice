@@ -85,7 +85,8 @@ def test_the_window_shows_her_or_the_robot_by_the_switch_and_waits_for_either(ap
     on = update_ui.UpdateProgress(None, "v0.8.38 → v0.8.39", True)
     assert off.mascot.isHidden() and not off.robot.isHidden() and off.picture() is off.robot
     assert on.robot.isHidden() and not on.mascot.isHidden() and on.picture() is on.mascot
-    assert off.link is not None and on.link is None and off.bar.isHidden() and not on.bar.isHidden()
+    assert off.bar.isHidden() and not on.bar.isHidden()  # (the robot's cables are its bar)
+    assert off.robot.progress == 0.0 and on.robot.progress is None
     assert off.finish() > 1.0 and off.robot.frame()[0] == "wake"
 
 
@@ -113,31 +114,57 @@ def test_the_restart_waits_for_the_robot_to_wake(app, monkeypatch, tmp_path):
     assert len(timers) == 1 and timers[0] >= wake  # the app restarts once it has woken
 
 
-def test_the_progress_is_a_cable_hanging_from_the_top_into_the_neck_port(app):
-    from PySide6.QtCore import QPointF
+def _blue(img, box):
+    """How much bluer than red the drawn pixels in box (x0, y0, x1, y1) are, summed."""
+    x0, y0, x1, y1 = box
+    return sum(max(0, c.blue() - c.red()) * c.alpha() / 255
+               for x in range(x0, x1) for y in range(y0, y1) for c in [img.pixelColor(x, y)])
 
+
+def test_its_own_cables_are_the_progress_lit_from_the_top_and_the_eye_last(app):
+    from mirrorvoice.ui import mascot, update_ui
+
+    d = update_ui.UpdateProgress(None, "…", False)
+    r = d.robot
+    r.still = True  # (one picture per state: no band running down)
+    t = [100.0]
+    r.clock = lambda: t[0]
+    w = r.width()
+    vx, vy, vw = mascot.ROBOT_VIEW
+    s = w / vw
+    top = (0, 0, w, 24)                                    # the cables at the top edge
+    neck = (int(110 * s), int((300 - vy) * s), int(160 * s), int((330 - vy) * s))  # where they reach the neck
+    ex, ey = mascot.UpdateRobot.ROBOT_EYE
+    eye = (int((ex - 6) * s), int((ey - vy - 6) * s), int((ex + 6) * s), int((ey - vy + 6) * s))
+
+    def at(v):
+        d.bar.setValue(v)
+        return r.grab().toImage()
+
+    none, half, full = at(0), at(450), at(1000)
+    assert _blue(none, top) < _blue(half, top) / 4             # grey until the update comes in, lit from the top
+    assert _blue(half, neck) < _blue(full, neck) / 2            # not down to the neck before it is all there
+    assert _blue(full, eye) < 50                                # the eye stays dark …
+    r.finish()
+    t[0] += 5
+    woke = r.grab().toImage()
+    assert _blue(woke, eye) > 4 * max(1.0, _blue(full, eye))    # … until it is in
+    assert _blue(woke, neck) >= _blue(full, neck) * 0.9         # (and the cables stay lit meanwhile)
+    d.dismiss()
+
+
+def test_a_band_of_light_runs_down_the_lit_part(app):
     from mirrorvoice.ui import update_ui
 
     d = update_ui.UpdateProgress(None, "…", False)
-    d.show()
-    app.processEvents()
-    try:
-        assert d.bar.isHidden()  # the cable is the progress
-        path = d.link.path()
-        top, end = path.pointAtPercent(0), path.pointAtPercent(1)
-        port = QPointF(d.robot.mapTo(d, d.robot.port()))
-        assert top.y() < 0 and top.x() > d.robot.geometry().right()  # it comes in at the top edge, beside the picture
-        assert (end - port).manhattanLength() < 1 and d.robot.geometry().contains(port.toPoint())  # … into the neck port
-        assert path.pointAtPercent(0.3).y() > top.y()  # (down, not across)
-        assert d.link.geometry() == d.rect()
-        x, y = int(port.x()) + 9, int(port.y())
-        d.bar.setValue(0)
-        before = d.link.grab().toImage().pixelColor(x, y)
-        d.bar.setValue(1000)
-        after = d.link.grab().toImage().pixelColor(x, y)
-        assert before != after and after.blue() > after.red() + 40  # at the end the light has reached the port
-        upper = d.link.grab().toImage().pixelColor(int(top.x()), 6)
-        d.bar.setValue(300)
-        assert d.link.grab().toImage().pixelColor(int(top.x()), 6).blue() > upper.red() - 1  # lit from the top first
-    finally:
-        d.dismiss()
+    r = d.robot
+    r.still = False
+    t = [100.0]
+    r.clock, r._t0 = (lambda: t[0]), 100.0
+    d.bar.setValue(1000)
+    shots = []
+    for dt in (0.1, 0.5, 0.9):
+        t[0] = 100.0 + dt
+        shots.append(r.grab().toImage())
+    assert shots[0] != shots[1] != shots[2]  # it moves
+    d.dismiss()

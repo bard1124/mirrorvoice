@@ -6,8 +6,8 @@ import threading
 import time
 from typing import Callable
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QFontDatabase, QPainter, QPainterPath, QPen
+from PySide6.QtCore import QRectF, Qt, QTimer
+from PySide6.QtGui import QColor, QFontDatabase, QPainter, QPen
 from PySide6.QtWidgets import (QApplication, QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QMessageBox,
                                QProgressBar, QPushButton, QTextBrowser, QVBoxLayout, QWidget)
 
@@ -151,7 +151,6 @@ class UpdateWindow(QDialog):
                    "模型、音色、会议记录和设置都会保留。", "稍后", size_line(rel), rel.notes or "")
 
 
-ROBOT_BLUE = "#56BEF2"  # the light in the robot's cables (packaging/assets/mascot/robot): the bar is the same
 
 # What the window says, in the voice of a machine being plugged in and rewritten (not 正在下载 /
 # 正在安装): head while it downloads, while it installs, when it is in; the line under the bar.
@@ -163,100 +162,12 @@ SAY_HOLD = "链路占用中，请勿关闭"
 SAY_WAKE = "意识重启中…"
 
 
-class NeuralLink(QWidget):
-    """The progress as one more of the robot's cables: it hangs from the window's top edge beside
-    the picture, bends and plugs into the port at the back of its neck. The cables in the drawing
-    carry their light from the top down, so does this one: the progress lights it from the top
-    edge towards the neck, packets of light run down the lit part, and when it is done the light
-    has reached the port — and the robot wakes. Drawn like the drawing's cables: a light grey
-    tube with a dark outline and a highlight. Over the window; the QProgressBar only keeps the value."""
-
-    TUBE, OUTLINE, PULSES, PULSE_S = 7.0, 1.3, 3, 1.1
-    DROP = 0.55  # how far down the straight part hangs, of the way to the port's height
-    SHELL, LINE, SHINE = QColor("#E6E7EA"), QColor("#3B3F46"), QColor(255, 255, 255, 200)  # (the drawing's own)
-
-    @property
-    def dlg(self) -> "UpdateProgress":
-        # (the window as its parent, not kept in an attribute: window -> link -> window was a
-        #  reference cycle, and the garbage collector freeing the two Qt objects in the wrong
-        #  order later crashed the process — in the test run, in the middle of another test)
-        return self.parentWidget()
-
-    def __init__(self, dlg: "UpdateProgress") -> None:
-        super().__init__(dlg)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.clock = time.monotonic
-        self._t0 = self.clock()
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self.update)
-        dlg.bar.valueChanged.connect(self.update)
-
-    def showEvent(self, e) -> None:
-        if not self.dlg.robot.still:
-            self._timer.start(33)
-        super().showEvent(e)
-
-    def hideEvent(self, e) -> None:
-        self._timer.stop()
-        super().hideEvent(e)
-
-    def path(self) -> QPainterPath:
-        """From the window's top edge (just right of the picture) down to the neck port, in the
-        window's coordinates."""
-        robot = self.dlg.robot
-        port = QPointF(robot.mapTo(self.dlg, robot.port()))
-        x = robot.mapTo(self.dlg, robot.rect().topRight()).x() + 10
-        p = QPainterPath(QPointF(x, -self.TUBE))
-        p.lineTo(QPointF(x, port.y() * self.DROP))
-        p.cubicTo(QPointF(x, port.y() + 4), QPointF(port.x() + (x - port.x()) * 0.5, port.y()), port)
-        return p
-
-    def paintEvent(self, _e) -> None:
-        path = self.path()
-        done = self.dlg.bar.value() / max(1, self.dlg.bar.maximum())
-        n = 240
-        pts = [path.pointAtPercent(i / n) for i in range(n + 1)]  # (equal steps along the length)
-        lit = pts[:max(1, int(round(done * n))) + 1]
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        def stroke(points, color: QColor, width: float, dx: float = 0.0) -> None:
-            if len(points) < 2:
-                return
-            q = QPainterPath(points[0] + QPointF(dx, 0))
-            for pt in points[1:]:
-                q.lineTo(pt + QPointF(dx, 0))
-            p.setPen(QPen(color, width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawPath(q)
-
-        blue = QColor(ROBOT_BLUE)
-        stroke(pts, self.LINE, self.TUBE + 2 * self.OUTLINE)        # the tube: outline …
-        stroke(pts, self.SHELL, self.TUBE)                           # … its grey shell …
-        stroke(pts, self.SHINE, 1.2, -1.6)                           # … and a highlight along it
-        if len(lit) > 1:
-            stroke(lit, blue, self.TUBE - 1.5)                       # the light inside, from the top down
-            core = QColor(200, 240, 255, 210)
-            stroke(lit, core, 1.6, -0.8)
-        if len(lit) > 8 and not self.dlg.robot.still:                # packets running down into the port
-            phase = ((self.clock() - self._t0) / self.PULSE_S) % 1.0
-            for k in range(self.PULSES):
-                f = (phase + k / self.PULSES) % 1.0                  # 0 at the top -> 1 at the lit end
-                i = int(f * (len(lit) - 1))
-                stroke(lit[max(0, i - 6):i + 1], QColor(235, 250, 255, 235), self.TUBE - 3.5)
-        port = pts[-1]                                                # the plug at the port
-        p.setPen(QPen(self.LINE, 1.4))
-        p.setBrush(blue if done >= 1 else self.SHELL)
-        p.drawEllipse(port, 4.6, 4.6)
-        p.end()
-
-
 class UpdateProgress(QDialog):
     """Download progress, with a picture beside it: her floating, curling up and plugging in (虚拟形象
-    on), or the robot hanging from cables a light runs down (off) — flush with the window's top-left,
-    the cables coming in from its top edge, the bar in their blue. The text: what happens now
-    (head), how far (label)."""
+    on), or the robot hanging from its cables (off) — flush with the window's top-left, the cables
+    coming in from its top edge — whose cables are the progress bar: grey, lit from the top down as
+    the update comes in, and its eye comes on when it is in. The text: what happens now (head), how
+    far (label)."""
 
     def __init__(self, parent: QWidget | None, text: str, mascot: bool = True, head: str = SAY_LINK) -> None:
         super().__init__(parent)
@@ -287,7 +198,7 @@ class UpdateProgress(QDialog):
         self.cancel.setToolTip("取消这次更新")
         self.cancel.clicked.connect(self.reject)
         right = QVBoxLayout()
-        right.setContentsMargins(4 if mascot else 34, 20, 22, 18)  # (robot: room for the cable hanging beside it)
+        right.setContentsMargins(4 if mascot else 22, 20, 22, 18)
         right.setSpacing(8)
         right.addStretch(1)
         right.addWidget(self.head)
@@ -308,14 +219,13 @@ class UpdateProgress(QDialog):
         lay.setSpacing(0)
         lay.addLayout(right, 1)
         self.setFixedWidth(500 if mascot else 500)
-        self.link = None if mascot else NeuralLink(self)
-        self.bar.setVisible(mascot)  # (robot: the cable is the progress; the bar only keeps the value)
+        if not mascot:  # its own cables are the progress: they light up from the top down; the bar keeps the value
+            self.bar.setVisible(False)
+            self.robot.set_progress(0.0)
+            self.bar.valueChanged.connect(self._lit)  # (a method, not a lambda holding the window: no cycle)
 
-    def resizeEvent(self, e) -> None:
-        super().resizeEvent(e)
-        if self.link is not None:
-            self.link.setGeometry(self.rect())
-            self.link.raise_()
+    def _lit(self, value: int) -> None:
+        self.robot.set_progress(value / max(1, self.bar.maximum()))
 
     def picture(self) -> UpdateMascot | UpdateRobot:
         return self.robot if self.mascot.isHidden() else self.mascot

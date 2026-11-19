@@ -326,6 +326,7 @@ ROBOT_HOLD_S = 0.6    # the last frame of the wake stays this long before the ap
 ROBOT_VIEW = (0, 100, 270)
 ROBOT_FADE_RIGHT, ROBOT_FADE_BOTTOM = 0.80, 0.86  # where the fades begin, of the width / height
 ROBOT_PORT = (142, 235)  # where the cables plug into the back of its neck, in the drawing
+ROBOT_LIT_END = 340       # how far down (in the drawing) its cables run: the progress lights them to here
 
 
 def reduce_motion() -> bool:
@@ -368,6 +369,7 @@ class UpdateRobot(QWidget):
             pm = QPixmap(str(d / f"{name}.png")) if int(w) else QPixmap()
             self.layers[run].append((pm, int(x), int(y)))
         self.still = reduce_motion()
+        self.progress: float | None = None  # set: its own cables light up from the top this far (0…1)
         self.clock = time.monotonic
         self._t0 = self.clock()
         self._woke: float | None = None
@@ -375,6 +377,28 @@ class UpdateRobot(QWidget):
         self._timer.timeout.connect(self.update)
         if not self.still:
             self._timer.start(ROBOT_STEP_MS)
+
+    def set_progress(self, done: float) -> None:
+        """From now on its own cables are the progress bar (0…1): see _paint_progress."""
+        self.progress = min(1.0, max(0.0, done))
+        if not self.still and not self._timer.isActive() and self._woke is None and self.isVisible():
+            self._timer.start(ROBOT_STEP_MS // 2)
+        self.update()
+
+    @staticmethod
+    def _unlit(pm: QPixmap) -> QPixmap:
+        """The picture with its cables dark: their blue turned to the grey of the other cables."""
+        import numpy as np
+        from PySide6.QtGui import QImage
+
+        img = pm.toImage().convertToFormat(QImage.Format.Format_RGBA8888)
+        a = np.frombuffer(img.constBits(), np.uint8).reshape(img.height(), img.bytesPerLine() // 4, 4)[:, :img.width()].astype(np.float32)
+        rgb = a[..., :3]
+        blue = np.clip((rgb[..., 2] - rgb[..., 0] - 20) / 80, 0, 1)[..., None]
+        grey = (rgb @ np.array([0.30, 0.59, 0.11], np.float32))[..., None] * 0.92
+        a[..., :3] = rgb * (1 - blue) + grey * blue
+        out = QImage(a.astype(np.uint8).tobytes(), img.width(), img.height(), img.width() * 4, QImage.Format.Format_RGBA8888)
+        return QPixmap.fromImage(out.copy())
 
     def port(self) -> QPointF:
         """The neck port in this widget's coordinates (the progress pipe plugs in there)."""
@@ -397,8 +421,10 @@ class UpdateRobot(QWidget):
         if self._woke is not None:
             n = len(self.layers["wake"])
             i = n - 1 if self.still else min(n - 1, int((now - self._woke) * 1000 // ROBOT_STEP_MS))
-            if i == n - 1:
+            if i == n - 1 and self.progress is None:
                 self._timer.stop()  # (held)
+            elif i == n - 1 and now - self._woke > n * ROBOT_STEP_MS / 1000 + 0.2:
+                self._timer.stop()  # (progress: the band stops once the eye is on)
             return "wake", i
         n = len(self.layers["loop"])
         return "loop", (n - 1 if self.still else int((now - self._t0) * 1000 // ROBOT_STEP_MS) % n)
@@ -426,10 +452,13 @@ class UpdateRobot(QWidget):
         s = self.width() / vw
         p.scale(s, s)
         p.translate(-vx, -vy)
-        p.drawPixmap(0, 0, self.base)
-        pm, x, y = self.layers[run][i] if i < len(self.layers[run]) else (QPixmap(), 0, 0)
-        if not pm.isNull():
-            p.drawPixmap(x, y, pm)
+        if self.progress is None:  # the loop of the drawing as it was made
+            p.drawPixmap(0, 0, self.base)
+            pm, x, y = self.layers[run][i] if i < len(self.layers[run]) else (QPixmap(), 0, 0)
+            if not pm.isNull():
+                p.drawPixmap(x, y, pm)
+        else:
+            self._paint_progress(p, vy)
         p.resetTransform()
         p.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
         for x0, y0, x1, y1 in ((0, self.height() * ROBOT_FADE_BOTTOM, 0, self.height()),
@@ -441,3 +470,58 @@ class UpdateRobot(QWidget):
         p.end()
         out = QPainter(self)
         out.drawPixmap(0, 0, buf)
+
+    # ---- its own cables as the progress
+    ROBOT_EYE, ROBOT_EYE_R = (78, 278), 14  # (in the drawing) its eye: lit only once the update is in
+    BAND_S, BAND_H = 1.3, 18                # a brighter band running down the lit part, every this long
+
+    def _lit_part(self, top: float, bottom: float, eye: float = 0.0) -> tuple[QPixmap, int, int]:
+        """The drawing's cables, all lit, between top and bottom (drawing rows), soft-edged; the eye
+        at `eye` (0 = dark … 1 = lit)."""
+        lit, lx, ly = self.layers["wake"][-1]
+        part = QPixmap(lit.size())
+        part.fill(Qt.GlobalColor.transparent)
+        q = QPainter(part)
+        q.drawPixmap(0, 0, lit)
+        q.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+        band = QLinearGradient(0, top - ly - 6, 0, bottom - ly + 4)
+        a, b = 6 / max(1.0, bottom - top + 10), 1 - 4 / max(1.0, bottom - top + 10)
+        band.setColorAt(0, QColor(0, 0, 0, 0))
+        band.setColorAt(max(0.0, min(a, 0.49)), QColor(0, 0, 0, 255))
+        band.setColorAt(min(1.0, max(b, 0.51)), QColor(0, 0, 0, 255))
+        band.setColorAt(1, QColor(0, 0, 0, 0))
+        q.fillRect(part.rect(), band)
+        if eye < 1:  # (the eye's pixels taken out, then put back as far as it is lit)
+            ex, ey = self.ROBOT_EYE[0] - lx, self.ROBOT_EYE[1] - ly
+            dark = QRadialGradient(QPointF(ex, ey), self.ROBOT_EYE_R)
+            dark.setColorAt(0, QColor(0, 0, 0, int(255 * (1 - eye))))
+            dark.setColorAt(0.7, QColor(0, 0, 0, int(255 * (1 - eye))))
+            dark.setColorAt(1, QColor(0, 0, 0, 0))
+            q.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationOut)
+            q.fillRect(QRectF(ex - self.ROBOT_EYE_R, ey - self.ROBOT_EYE_R, 2 * self.ROBOT_EYE_R, 2 * self.ROBOT_EYE_R), dark)
+        q.end()
+        return part, lx, ly
+
+    def _paint_progress(self, p: QPainter, vy: int) -> None:
+        """Its cables grey, lit from the top down as far as the update has come; a brighter band
+        running down the lit part; when it is in (finish), the eye comes on."""
+        if not hasattr(self, "_grey"):
+            self._grey = self._unlit(self.base)
+        p.drawPixmap(0, 0, self._grey)
+        woke = self._woke is not None
+        cut = vy + (1.0 if woke else self.progress) * (ROBOT_LIT_END - vy)
+        eye = 0.0
+        if woke:
+            wake = len(self.layers["wake"]) * ROBOT_STEP_MS / 1000
+            eye = 1.0 if self.still else min(1.0, (self.clock() - self._woke) / wake)
+        part, lx, ly = self._lit_part(vy - 20, cut, eye)
+        p.drawPixmap(lx, ly, part)
+        if not self.still and cut > vy + 10:
+            f = ((self.clock() - self._t0) / self.BAND_S) % 1.0
+            y = vy + f * (cut - vy)
+            glow, gx, gy = self._lit_part(y - self.BAND_H / 2, y + self.BAND_H / 2)
+            p.setOpacity(0.75)
+            p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Plus)
+            p.drawPixmap(gx, gy, glow)
+            p.setOpacity(1.0)
+            p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
