@@ -85,7 +85,7 @@ def test_the_window_shows_her_or_the_robot_by_the_switch_and_waits_for_either(ap
     on = update_ui.UpdateProgress(None, "v0.8.38 → v0.8.39", True)
     assert off.mascot.isHidden() and not off.robot.isHidden() and off.picture() is off.robot
     assert on.robot.isHidden() and not on.mascot.isHidden() and on.picture() is on.mascot
-    assert off.link is not None and on.link is None and "transparent" in off.bar.styleSheet() and not on.bar.styleSheet()
+    assert off.link is not None and on.link is None and off.bar.isHidden() and not on.bar.isHidden()
     assert off.finish() > 1.0 and off.robot.frame()[0] == "wake"
 
 
@@ -113,7 +113,7 @@ def test_the_restart_waits_for_the_robot_to_wake(app, monkeypatch, tmp_path):
     assert len(timers) == 1 and timers[0] >= wake  # the app restarts once it has woken
 
 
-def test_the_progress_is_a_cable_from_the_neck_port_along_the_bar(app):
+def test_the_progress_is_a_cable_hanging_from_the_top_into_the_neck_port(app):
     from PySide6.QtCore import QPointF
 
     from mirrorvoice.ui import update_ui
@@ -122,19 +122,22 @@ def test_the_progress_is_a_cable_from_the_neck_port_along_the_bar(app):
     d.show()
     app.processEvents()
     try:
+        assert d.bar.isHidden()  # the cable is the progress
         path = d.link.path()
-        start, end = path.pointAtPercent(0), path.pointAtPercent(1)
-        port = d.robot.mapTo(d, d.robot.port())
-        assert (start - QPointF(port)).manhattanLength() < 1  # it starts in the neck port …
-        assert d.robot.geometry().contains(port.toPoint())     # … which is on the robot
-        bar = d.bar.geometry()
-        top_left = d.bar.parentWidget().mapTo(d, bar.topLeft()) if d.bar.parentWidget() is not d else bar.topLeft()
-        assert abs(end.x() - (top_left.x() + bar.width() - 1)) < 2 and abs(end.y() - (top_left.y() + bar.height() / 2)) < 2
+        top, end = path.pointAtPercent(0), path.pointAtPercent(1)
+        port = QPointF(d.robot.mapTo(d, d.robot.port()))
+        assert top.y() < 0 and top.x() > d.robot.geometry().right()  # it comes in at the top edge, beside the picture
+        assert (end - port).manhattanLength() < 1 and d.robot.geometry().contains(port.toPoint())  # … into the neck port
+        assert path.pointAtPercent(0.3).y() > top.y()  # (down, not across)
         assert d.link.geometry() == d.rect()
-        before = d.link.grab().toImage()
+        x, y = int(port.x()) + 9, int(port.y())
+        d.bar.setValue(0)
+        before = d.link.grab().toImage().pixelColor(x, y)
         d.bar.setValue(1000)
-        after = d.link.grab().toImage()
-        x, y = int(end.x()) - 4, int(end.y())
-        assert before.pixelColor(x, y) != after.pixelColor(x, y)  # the far end lights up when it is done
+        after = d.link.grab().toImage().pixelColor(x, y)
+        assert before != after and after.blue() > after.red() + 40  # at the end the light has reached the port
+        upper = d.link.grab().toImage().pixelColor(int(top.x()), 6)
+        d.bar.setValue(300)
+        assert d.link.grab().toImage().pixelColor(int(top.x()), 6).blue() > upper.red() - 1  # lit from the top first
     finally:
         d.dismiss()

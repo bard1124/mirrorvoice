@@ -164,16 +164,26 @@ SAY_WAKE = "意识重启中…"
 
 
 class NeuralLink(QWidget):
-    """The progress bar as a cable plugged into the robot's neck port: from the port it runs out to
-    where the bar is and along it; the progress lights it from the port outwards, and packets of
-    light run back along the lit part into the port — the update flowing into its head. Drawn over
-    the window (the QProgressBar keeps the value and the place, invisibly)."""
+    """The progress as one more of the robot's cables: it hangs from the window's top edge beside
+    the picture, bends and plugs into the port at the back of its neck. The cables in the drawing
+    carry their light from the top down, so does this one: the progress lights it from the top
+    edge towards the neck, packets of light run down the lit part, and when it is done the light
+    has reached the port — and the robot wakes. Drawn like the drawing's cables: a light grey
+    tube with a dark outline and a highlight. Over the window; the QProgressBar only keeps the value."""
 
-    WIDTH, PULSES, PULSE_S = 6.0, 3, 1.2
+    TUBE, OUTLINE, PULSES, PULSE_S = 7.0, 1.3, 3, 1.1
+    DROP = 0.55  # how far down the straight part hangs, of the way to the port's height
+    SHELL, LINE, SHINE = QColor("#E6E7EA"), QColor("#3B3F46"), QColor(255, 255, 255, 200)  # (the drawing's own)
+
+    @property
+    def dlg(self) -> "UpdateProgress":
+        # (the window as its parent, not kept in an attribute: window -> link -> window was a
+        #  reference cycle, and the garbage collector freeing the two Qt objects in the wrong
+        #  order later crashed the process — in the test run, in the middle of another test)
+        return self.parentWidget()
 
     def __init__(self, dlg: "UpdateProgress") -> None:
         super().__init__(dlg)
-        self.dlg = dlg
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.clock = time.monotonic
@@ -192,54 +202,53 @@ class NeuralLink(QWidget):
         super().hideEvent(e)
 
     def path(self) -> QPainterPath:
-        """From the port to the bar's right end, in this widget's (the window's) coordinates."""
-        port = self.dlg.robot.mapTo(self.dlg, self.dlg.robot.port())
-        bar = self.dlg.bar.geometry()
-        bar = QRectF(self.dlg.bar.parentWidget().mapTo(self.dlg, bar.topLeft()), bar.size()) \
-            if self.dlg.bar.parentWidget() is not self.dlg else QRectF(bar)
-        y, x0, x1 = bar.center().y(), bar.left(), bar.right()
-        p = QPainterPath(QPointF(port))
-        bend = max(24.0, (x0 - port.x()) * 0.55)
-        p.cubicTo(QPointF(port.x() + bend, port.y()), QPointF(x0 - bend, y), QPointF(x0, y))
-        p.lineTo(QPointF(x1, y))
+        """From the window's top edge (just right of the picture) down to the neck port, in the
+        window's coordinates."""
+        robot = self.dlg.robot
+        port = QPointF(robot.mapTo(self.dlg, robot.port()))
+        x = robot.mapTo(self.dlg, robot.rect().topRight()).x() + 10
+        p = QPainterPath(QPointF(x, -self.TUBE))
+        p.lineTo(QPointF(x, port.y() * self.DROP))
+        p.cubicTo(QPointF(x, port.y() + 4), QPointF(port.x() + (x - port.x()) * 0.5, port.y()), port)
         return p
 
     def paintEvent(self, _e) -> None:
         path = self.path()
-        t = theme.current()
         done = self.dlg.bar.value() / max(1, self.dlg.bar.maximum())
-        pts = [path.pointAtPercent(i / 200) for i in range(201)]  # (equal steps along the length)
-        lit = pts[:max(1, int(round(done * 200))) + 1]
+        n = 240
+        pts = [path.pointAtPercent(i / n) for i in range(n + 1)]  # (equal steps along the length)
+        lit = pts[:max(1, int(round(done * n))) + 1]
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        def stroke(points, color: QColor, width: float) -> None:
+        def stroke(points, color: QColor, width: float, dx: float = 0.0) -> None:
             if len(points) < 2:
                 return
-            q = QPainterPath(points[0])
+            q = QPainterPath(points[0] + QPointF(dx, 0))
             for pt in points[1:]:
-                q.lineTo(pt)
+                q.lineTo(pt + QPointF(dx, 0))
             p.setPen(QPen(color, width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawPath(q)
 
         blue = QColor(ROBOT_BLUE)
-        stroke(pts, QColor(t.pressed), self.WIDTH)                 # the cable
-        glow = QColor(blue)
-        glow.setAlpha(70)
-        stroke(lit, glow, self.WIDTH + 5)                          # lit: a halo …
-        stroke(lit, blue, self.WIDTH)                              # … and the light
-        if len(lit) > 8 and not self.dlg.robot.still:              # packets running back into the port
+        stroke(pts, self.LINE, self.TUBE + 2 * self.OUTLINE)        # the tube: outline …
+        stroke(pts, self.SHELL, self.TUBE)                           # … its grey shell …
+        stroke(pts, self.SHINE, 1.2, -1.6)                           # … and a highlight along it
+        if len(lit) > 1:
+            stroke(lit, blue, self.TUBE - 1.5)                       # the light inside, from the top down
+            core = QColor(200, 240, 255, 210)
+            stroke(lit, core, 1.6, -0.8)
+        if len(lit) > 8 and not self.dlg.robot.still:                # packets running down into the port
             phase = ((self.clock() - self._t0) / self.PULSE_S) % 1.0
             for k in range(self.PULSES):
-                f = 1.0 - ((phase + k / self.PULSES) % 1.0)        # 1 at the lit end -> 0 at the port
+                f = (phase + k / self.PULSES) % 1.0                  # 0 at the top -> 1 at the lit end
                 i = int(f * (len(lit) - 1))
-                seg = lit[max(0, i - 5):i + 1]
-                stroke(seg, QColor(220, 246, 255, 230), self.WIDTH - 2)
-        port = pts[0]                                              # the plug, at the port
-        p.setPen(QPen(QColor(t.text_2), 1.4))
-        p.setBrush(blue if done > 0 else QColor(t.pressed))
-        p.drawEllipse(port, 4.2, 4.2)
+                stroke(lit[max(0, i - 6):i + 1], QColor(235, 250, 255, 235), self.TUBE - 3.5)
+        port = pts[-1]                                                # the plug at the port
+        p.setPen(QPen(self.LINE, 1.4))
+        p.setBrush(blue if done >= 1 else self.SHELL)
+        p.drawEllipse(port, 4.6, 4.6)
         p.end()
 
 
@@ -273,16 +282,12 @@ class UpdateProgress(QDialog):
         self.bar = QProgressBar()
         self.bar.setRange(0, 1000)
         self.bar.setTextVisible(False)
-        self.bar.setFixedHeight(12)  # (room for the cable drawn over it, halo included)
-        if not mascot:  # the bar is NeuralLink's: here it only keeps the value and the place
-            self.bar.setStyleSheet("QProgressBar, QProgressBar::chunk { background: transparent; border: none; }")
-        else:
-            self.bar.setFixedHeight(6)
+        self.bar.setFixedHeight(6)
         self.cancel = QPushButton("断开")
         self.cancel.setToolTip("取消这次更新")
         self.cancel.clicked.connect(self.reject)
         right = QVBoxLayout()
-        right.setContentsMargins(4 if mascot else 18, 20, 22, 18)
+        right.setContentsMargins(4 if mascot else 34, 20, 22, 18)  # (robot: room for the cable hanging beside it)
         right.setSpacing(8)
         right.addStretch(1)
         right.addWidget(self.head)
@@ -304,6 +309,7 @@ class UpdateProgress(QDialog):
         lay.addLayout(right, 1)
         self.setFixedWidth(500 if mascot else 500)
         self.link = None if mascot else NeuralLink(self)
+        self.bar.setVisible(mascot)  # (robot: the cable is the progress; the bar only keeps the value)
 
     def resizeEvent(self, e) -> None:
         super().resizeEvent(e)
