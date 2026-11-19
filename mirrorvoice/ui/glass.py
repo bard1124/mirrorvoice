@@ -1,10 +1,10 @@
 """Frosted glass behind a window (赛博 theme): what lies behind the window shows through, blurred, under
 a white veil.
 
-macOS: the system's own blur (an NSVisualEffectView) is put behind the Qt view. Windows 11 (22H2+):
-the window asks DWM for its Acrylic backdrop. Anywhere else, or when either fails, the window keeps
-its opaque white: the veil (QSS) is only laid on once the blur is really there. Both systems turn the
-blur flat by themselves while the window is not the active one.
+macOS: the window's ground is made clear and the window server blurs what is behind it (as
+Terminal does). Windows 11 (22H2+): the window asks DWM for its Acrylic backdrop, which turns flat
+while the window is in the background. Anywhere else, or when either fails, the window keeps its
+opaque white: the veil (QSS) is only laid on once the window really is see-through.
 
 A window has to be see-through from the moment it exists (frost(), before it is first shown); a
 window made while another theme was on gets the glass at the next start.
@@ -31,6 +31,7 @@ QFrame#card {{ background: rgba(255,255,255,{CARD:.3f}); border: 1px solid rgba(
 QGroupBox::title {{ background: transparent; }}
 """
 CLEAR = 60  # the default 透明度, in percent
+BLUR = 20   # macOS: how soft what is behind the window gets (a radius in points)
 
 
 def qss(clear: int = CLEAR) -> str:
@@ -110,7 +111,16 @@ def refresh(w: QWidget) -> bool:
     return on
 
 
+def _native() -> str:
+    """The windowing system the windows really live in ('' under offscreen: no native handle to touch)."""
+    from PySide6.QtGui import QGuiApplication
+
+    return {"cocoa": "darwin", "windows": "win32"}.get(QGuiApplication.platformName(), "")
+
+
 def _attach(w: QWidget) -> bool:
+    if _native() != sys.platform:
+        return False
     try:
         if sys.platform == "darwin":
             return _mac_attach(w)
@@ -122,13 +132,11 @@ def _attach(w: QWidget) -> bool:
 
 
 def _detach(w: QWidget) -> None:
-    if not frostable(w):
+    if not frostable(w) or _native() != sys.platform:
         return
     try:
         if sys.platform == "darwin":
-            fx = getattr(w, "_glass_fx", None)
-            if fx is not None:
-                fx.setHidden_(True)
+            _mac_detach(w)
         elif sys.platform == "win32":
             _win_backdrop(w, 1)  # DWMSBT_NONE
     except Exception:  # noqa: BLE001
@@ -136,27 +144,49 @@ def _detach(w: QWidget) -> None:
 
 
 def _mac_attach(w: QWidget) -> bool:
+    """The window's own ground made clear, then blurred lightly the way Terminal does it: the
+    wallpaper stays recognisable through the veil."""
     import ctypes
 
     import AppKit
     import objc
 
-    view = objc.objc_object(c_void_p=ctypes.c_void_p(int(w.winId())))
-    fx = getattr(w, "_glass_fx", None)
-    if fx is None:
-        frame = view.superview()
-        if frame is None or view.window() is None:
-            return False
-        fx = AppKit.NSVisualEffectView.alloc().initWithFrame_(view.frame())
-        fx.setAutoresizingMask_(AppKit.NSViewWidthSizable | AppKit.NSViewHeightSizable)
-        fx.setBlendingMode_(AppKit.NSVisualEffectBlendingModeBehindWindow)
-        fx.setMaterial_(AppKit.NSVisualEffectMaterialSidebar)
-        fx.setState_(AppKit.NSVisualEffectStateFollowsWindowActiveState)  # flat while in the background
-        fx.setAppearance_(AppKit.NSAppearance.appearanceNamed_(AppKit.NSAppearanceNameAqua))  # white, even in dark mode
-        frame.addSubview_positioned_relativeTo_(fx, AppKit.NSWindowBelow, view)
-        w._glass_fx = fx
-    fx.setHidden_(False)
+    nw = objc.objc_object(c_void_p=ctypes.c_void_p(int(w.winId()))).window()
+    if nw is None:
+        return False
+    nw.setOpaque_(False)
+    nw.setBackgroundColor_(AppKit.NSColor.clearColor())
+    _mac_blur(nw.windowNumber(), BLUR)
     return True
+
+
+def _mac_detach(w: QWidget) -> None:
+    import ctypes
+
+    import AppKit
+    import objc
+
+    nw = objc.objc_object(c_void_p=ctypes.c_void_p(int(w.winId()))).window()
+    if nw is not None:
+        nw.setBackgroundColor_(AppKit.NSColor.windowBackgroundColor())
+        _mac_blur(nw.windowNumber(), 0)
+
+
+def _mac_blur(window_number: int, radius: int) -> bool:
+    """CGSSetWindowBackgroundBlurRadius (private, what Terminal and iTerm2 use): no blur if it is
+    not there — the window is still see-through."""
+    import ctypes
+
+    try:
+        cg = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+        conn = cg.CGSDefaultConnectionForThread
+        conn.restype = ctypes.c_void_p
+        blur = cg.CGSSetWindowBackgroundBlurRadius
+        blur.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+        blur.restype = ctypes.c_int
+        return blur(conn(), int(window_number), int(radius)) == 0
+    except (OSError, AttributeError):
+        return False
 
 
 def _win_backdrop(w: QWidget, kind: int) -> bool:
