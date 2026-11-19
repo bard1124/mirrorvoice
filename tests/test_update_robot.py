@@ -100,8 +100,11 @@ def test_the_restart_waits_for_the_robot_to_wake(app, monkeypatch, tmp_path):
     c._dlg = update_ui.UpdateProgress(None, "…", False)
     c._rel, c._path = rel, tmp_path / "MirrorVoice-9.9.9-patch.zip"
     c._on_progress(1 << 20, 2 << 20)
+    assert c._dlg.head.text() == update_ui.SAY_LINK
     assert "1.0 MB / 2.0 MB" in c._dlg.label.text() and "9.9.9" in c._dlg.label.text()
     c._on_progress(-1, 0)
-    assert c._dlg.head.text() == "已更新到 v9.9.9"
+    assert c._dlg.head.text() == "v9.9.9 已上线" and c._dlg.label.text() == update_ui.SAY_WAKE
+    for words in ("正在下载", "正在安装", "取消"):  # (the plain words it no longer says)
+        assert words not in c._dlg.head.text() + c._dlg.label.text() + c._dlg.cancel.text()
     wake = 12 * mascot.ROBOT_STEP_MS + 1000 * mascot.ROBOT_HOLD_S
     assert len(timers) == 1 and timers[0] >= wake  # the app restarts once it has woken

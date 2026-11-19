@@ -7,7 +7,7 @@ import time
 from typing import Callable
 
 from PySide6.QtCore import QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QColor, QFontDatabase, QPainter, QPen
 from PySide6.QtWidgets import (QApplication, QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QMessageBox,
                                QProgressBar, QPushButton, QTextBrowser, QVBoxLayout, QWidget)
 
@@ -153,6 +153,15 @@ class UpdateWindow(QDialog):
 
 ROBOT_BLUE = "#56BEF2"  # the light in the robot's cables (packaging/assets/mascot/robot): the bar is the same
 
+# What the window says, in the voice of a machine being plugged in and rewritten (not 正在下载 /
+# 正在安装): head while it downloads, while it installs, when it is in; the line under the bar.
+SAY_LINK = "接入神经链路…"
+SAY_WRITE = "改写核心协议…"
+SAY_DONE = "v{v} 已上线"
+SAY_FLOW = "下行 {done} / {total} // v{old}→v{new}"  # (one line: no wrap under the bar)
+SAY_HOLD = "链路占用中，请勿关闭"
+SAY_WAKE = "意识重启中…"
+
 
 class UpdateProgress(QDialog):
     """Download progress, with a picture beside it: her floating, curling up and plugging in (虚拟形象
@@ -160,7 +169,7 @@ class UpdateProgress(QDialog):
     the cables coming in from its top edge, the bar in their blue. The text: what happens now
     (head), how far (label)."""
 
-    def __init__(self, parent: QWidget | None, text: str, mascot: bool = True, head: str = "正在更新翻了么") -> None:
+    def __init__(self, parent: QWidget | None, text: str, mascot: bool = True, head: str = SAY_LINK) -> None:
         super().__init__(parent)
         self.setWindowTitle("更新翻了么")
         self.setWindowModality(Qt.WindowModality.WindowModal)
@@ -177,6 +186,9 @@ class UpdateProgress(QDialog):
         self.head.setFont(f)
         self.label = QLabel(text)
         self.label.setWordWrap(True)
+        mono = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)  # (the readout of a machine)
+        mono.setPointSizeF(self.label.font().pointSizeF() * 0.92)
+        self.label.setFont(mono)
         self.label.setStyleSheet(f"color: {theme.current().text_2};")
         self.bar = QProgressBar()
         self.bar.setRange(0, 1000)
@@ -184,7 +196,8 @@ class UpdateProgress(QDialog):
         self.bar.setFixedHeight(6)
         if not mascot:
             self.bar.setStyleSheet(f"QProgressBar::chunk {{ background: {ROBOT_BLUE}; border-radius: 3px; }}")
-        self.cancel = QPushButton("取消")
+        self.cancel = QPushButton("断开")
+        self.cancel.setToolTip("取消这次更新")
         self.cancel.clicked.connect(self.reject)
         right = QVBoxLayout()
         right.setContentsMargins(4 if mascot else 18, 20, 22, 18)
@@ -283,8 +296,8 @@ class UpdateController:
             __import__("webbrowser").open(rel.page)
 
     def _start(self, rel: updater.Release) -> None:
-        self._dlg = UpdateProgress(self.parent, f"v{__version__} → v{rel.version}　·　{mb(rel.size)}", self.s.mascot,
-                                   "正在下载更新…")
+        flow = SAY_FLOW.format(done=mb(0), total=mb(rel.size), old=__version__, new=rel.version)
+        self._dlg = UpdateProgress(self.parent, flow, self.s.mascot, SAY_LINK)
         self._dlg.show()
         cancel = self._dlg.canceled
         self._rel = rel
@@ -308,7 +321,7 @@ class UpdateController:
             return
         if done >= 0:
             dlg.bar.setValue(int(1000 * done / max(total, 1)))
-            dlg.label.setText(f"v{__version__} → v{self._rel.version}　·　{mb(done)} / {mb(total)}")
+            dlg.label.setText(SAY_FLOW.format(done=mb(done), total=mb(total), old=__version__, new=self._rel.version))
             return
         if done == -2:
             dlg.dismiss()
@@ -319,8 +332,8 @@ class UpdateController:
             return
         dlg.lock()
         dlg.bar.setValue(1000)
-        dlg.head.setText("正在安装…")
-        dlg.label.setText("请不要关闭翻了么")
+        dlg.head.setText(SAY_WRITE)
+        dlg.label.setText(SAY_HOLD)
         QApplication.processEvents()
         try:
             self.before_install()
@@ -329,8 +342,8 @@ class UpdateController:
             dlg.dismiss()
             QMessageBox.warning(self.parent, "更新失败", str(e))
             return
-        dlg.head.setText(f"已更新到 v{self._rel.version}")
-        dlg.label.setText("马上重新打开翻了么…")
+        dlg.head.setText(SAY_DONE.format(v=self._rel.version))
+        dlg.label.setText(SAY_WAKE)
         # let the picture finish first (her landing, the robot waking): the hand-over waits for this
         # process to exit, then switches to the patch (or replaces the app) and relaunches it. Not
         # the Windows installer — it starts at once and closes the app itself.
