@@ -73,6 +73,9 @@ def test_it_paints_head_and_cables_and_fades_out_at_the_bottom(app):
     assert all(img.pixelColor(x, h - 1).alpha() < 20 for x in range(w))  # gone at the bottom edge
     mid = [img.pixelColor(x, h // 2) for x in range(w)]
     assert sum(c.alpha() > 200 for c in mid) > w // 3  # the head, in the middle
+    assert all(img.pixelColor(w - 1, y).alpha() < 20 for y in range(h))  # no hard edge on the right either
+    shoulder = [img.pixelColor(x, int(h * 0.62)) for x in range(int(w * 0.55), int(w * 0.8))]
+    assert sum(c.alpha() > 200 for c in shoulder) > len(shoulder) // 2  # the right shoulder is there
 
 
 def test_the_window_shows_her_or_the_robot_by_the_switch_and_waits_for_either(app):

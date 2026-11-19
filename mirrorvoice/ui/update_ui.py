@@ -220,7 +220,7 @@ class UpdateProgress(QDialog):
             lay.addWidget(self.robot, 0, Qt.AlignmentFlag.AlignTop)
         lay.setSpacing(0)
         lay.addLayout(right, 1)
-        self.setFixedWidth(500 if mascot else 470)
+        self.setFixedWidth(500 if mascot else 504)
 
     def picture(self) -> UpdateMascot | UpdateRobot:
         return self.robot if self.mascot.isHidden() else self.mascot

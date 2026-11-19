@@ -320,9 +320,11 @@ class UpdateMascot(QWidget):
 # ---------------------------------------------------------------------------- the robot (no 虚拟形象)
 ROBOT_STEP_MS = 100   # both runs are drawn at 10 frames a second
 ROBOT_HOLD_S = 0.6    # the last frame of the wake stays this long before the app restarts
-# the part of the drawing (270 x 640) shown, x / y / width: the head and the cables over it. The
-# whole width made the head a thumbnail in the window; the cables on the far right are not missed.
-ROBOT_VIEW = (0, 80, 210)
+# the part of the drawing (270 x 640) shown, x / y / width: the head, the cables over it and the
+# whole right shoulder (cut at 210 px the window showed a hard vertical edge through it). The
+# drawing itself ends at the shoulder, so the right edge fades out as the bottom does.
+ROBOT_VIEW = (0, 80, 270)
+ROBOT_FADE_RIGHT, ROBOT_FADE_BOTTOM = 0.80, 0.72  # where the fades begin, of the width / height
 
 
 def reduce_motion() -> bool:
@@ -352,7 +354,7 @@ class UpdateRobot(QWidget):
     The frames are packaging/assets/mascot/robot: one base picture and, per frame, only what differs
     from it (offsets.txt) — 480 KB instead of 6 MB of whole frames."""
 
-    def __init__(self, width: int = 150, height: int = 232, parent: QWidget | None = None) -> None:
+    def __init__(self, width: int = 184, height: int = 232, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setFixedSize(width, height)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -422,11 +424,13 @@ class UpdateRobot(QWidget):
         if not pm.isNull():
             p.drawPixmap(x, y, pm)
         p.resetTransform()
-        fade = QLinearGradient(0, self.height() * 0.72, 0, self.height())
-        fade.setColorAt(0, QColor(0, 0, 0, 255))
-        fade.setColorAt(1, QColor(0, 0, 0, 0))
         p.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
-        p.fillRect(QRectF(0, 0, self.width(), self.height()), fade)
+        for x0, y0, x1, y1 in ((0, self.height() * ROBOT_FADE_BOTTOM, 0, self.height()),
+                               (self.width() * ROBOT_FADE_RIGHT, 0, self.width(), 0)):
+            fade = QLinearGradient(x0, y0, x1, y1)
+            fade.setColorAt(0, QColor(0, 0, 0, 255))
+            fade.setColorAt(1, QColor(0, 0, 0, 0))
+            p.fillRect(QRectF(0, 0, self.width(), self.height()), fade)
         p.end()
         out = QPainter(self)
         out.drawPixmap(0, 0, buf)
