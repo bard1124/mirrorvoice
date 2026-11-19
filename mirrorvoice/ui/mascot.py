@@ -320,11 +320,12 @@ class UpdateMascot(QWidget):
 # ---------------------------------------------------------------------------- the robot (no 虚拟形象)
 ROBOT_STEP_MS = 100   # both runs are drawn at 10 frames a second
 ROBOT_HOLD_S = 0.6    # the last frame of the wake stays this long before the app restarts
-# the part of the drawing (270 x 640) shown, x / y / width: the head, the cables over it and the
-# whole right shoulder (cut at 210 px the window showed a hard vertical edge through it). The
-# drawing itself ends at the shoulder, so the right edge fades out as the bottom does.
-ROBOT_VIEW = (0, 80, 270)
-ROBOT_FADE_RIGHT, ROBOT_FADE_BOTTOM = 0.80, 0.72  # where the fades begin, of the width / height
+# the part of the drawing (270 x 640) shown, x / y / width: the head, the cables over it, both
+# shoulders (the left one ends at y 490, the right one at the drawing's edge). The right edge and
+# the bottom fade into the window.
+ROBOT_VIEW = (0, 100, 270)
+ROBOT_FADE_RIGHT, ROBOT_FADE_BOTTOM = 0.80, 0.86  # where the fades begin, of the width / height
+ROBOT_PORT = (142, 235)  # where the cables plug into the back of its neck, in the drawing
 
 
 def reduce_motion() -> bool:
@@ -354,7 +355,7 @@ class UpdateRobot(QWidget):
     The frames are packaging/assets/mascot/robot: one base picture and, per frame, only what differs
     from it (offsets.txt) — 480 KB instead of 6 MB of whole frames."""
 
-    def __init__(self, width: int = 184, height: int = 232, parent: QWidget | None = None) -> None:
+    def __init__(self, width: int = 176, height: int = 288, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setFixedSize(width, height)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -374,6 +375,12 @@ class UpdateRobot(QWidget):
         self._timer.timeout.connect(self.update)
         if not self.still:
             self._timer.start(ROBOT_STEP_MS)
+
+    def port(self) -> QPointF:
+        """The neck port in this widget's coordinates (the progress pipe plugs in there)."""
+        vx, vy, vw = ROBOT_VIEW
+        s = self.width() / vw
+        return QPointF((ROBOT_PORT[0] - vx) * s, (ROBOT_PORT[1] - vy) * s)
 
     def finish(self) -> float:
         """The update is in: the cables light up and the eye comes on. Seconds until that is done."""
