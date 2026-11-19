@@ -18,14 +18,15 @@ from PySide6.QtWidgets import QWidget
 
 from . import theme
 
-# the veil: a white haze over the blur, as thin as the user's 透明度 wants (0 = nearly opaque, 100 =
-# only the blur). The sidebar shows the most of what is behind; panels and cards sit a little lighter.
+# the veil: a white haze over what is behind the window, as thin as the user's 透明度 wants. The
+# window's own ground is painted under everything (_Veil: a top-level's style-sheet background is not
+# drawn once it is see-through); the sidebar always keeps some white of its own so its words stay
+# readable over any wallpaper, and panels and cards sit lighter still.
 _VEIL = """
-QMainWindow, QDialog {{ background: rgba(255,255,255,{GROUND:.3f}); }}
 QWidget#content {{ background: rgba(255,255,255,{CONTENT:.3f}); }}
 QScrollArea#page, QScrollArea#page > QWidget > QWidget#content {{ background: transparent; }}
-QFrame#sidebar {{ background: transparent; border: none; border-right: 1px solid rgba(23,134,194,0.12); }}
-QFrame#topbar {{ background: transparent; border: none; border-bottom: 1px solid rgba(23,134,194,0.12); }}
+QFrame#sidebar {{ background: rgba(255,255,255,0.300); border: none; border-right: 1px solid rgba(23,134,194,0.12); }}
+QFrame#topbar {{ background: rgba(255,255,255,0.300); border: none; border-bottom: 1px solid rgba(23,134,194,0.12); }}
 QListWidget#log {{ background: rgba(255,255,255,{PANEL:.3f}); }}
 QFrame#card {{ background: rgba(255,255,255,{CARD:.3f}); border: 1px solid rgba(255,255,255,0.9); }}
 QGroupBox::title {{ background: transparent; }}
@@ -34,10 +35,19 @@ CLEAR = 60  # the default 透明度, in percent
 BLUR = 20   # macOS: how soft what is behind the window gets (a radius in points)
 
 
+def _k(clear: int) -> float:
+    return 1 - max(0, min(100, clear)) / 100
+
+
+def ground(clear: int = CLEAR) -> float:
+    """How white the window's ground is: never quite gone, so nothing is ever text on bare wallpaper."""
+    return 0.20 + 0.65 * _k(clear)
+
+
 def qss(clear: int = CLEAR) -> str:
-    """The veil for a 透明度 of `clear` percent."""
-    k = 1 - max(0, min(100, clear)) / 100
-    return _VEIL.format(GROUND=0.85 * k, CONTENT=0.35 * k, PANEL=0.20 + 0.55 * k, CARD=0.38 + 0.52 * k)
+    """The veil over the window's ground for a 透明度 of `clear` percent."""
+    k = _k(clear)
+    return _VEIL.format(CONTENT=0.35 * k, PANEL=0.20 + 0.55 * k, CARD=0.38 + 0.52 * k)
 
 
 _allowed = True
@@ -71,9 +81,19 @@ def wanted() -> bool:
 
 
 class _OnShow(QObject):
+    """Puts the glass in once the window is shown, and paints the window's white ground under it."""
+
     def eventFilter(self, obj: QObject, ev: QEvent) -> bool:  # noqa: N802
-        if ev.type() == QEvent.Type.Show and isinstance(obj, QWidget):
+        if not isinstance(obj, QWidget):
+            return False
+        if ev.type() == QEvent.Type.Show:
             QTimer.singleShot(0, obj, _Refresher(obj).run)  # a hop: the native window is up by then
+        elif ev.type() == QEvent.Type.Paint and obj.property("veil"):
+            from PySide6.QtGui import QColor, QPainter
+
+            p = QPainter(obj)
+            p.fillRect(obj.rect(), QColor(255, 255, 255, round(255 * float(obj.property("veil")))))
+            p.end()
         return False
 
 
@@ -107,7 +127,9 @@ def refresh(w: QWidget) -> bool:
     on = frostable(w) and wanted() and _attach(w)
     if not on:
         _detach(w)
+    w.setProperty("veil", ground(_clear) if on else 0.0)
     w.setStyleSheet(qss(_clear) if on else "")
+    w.update()
     return on
 
 
