@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import math
 import random
+import sys
 import time
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QPainter, QPixmap, QRadialGradient
+from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPixmap, QRadialGradient
 from PySide6.QtWidgets import QWidget
 
 from .icons import assets_dir
@@ -314,3 +315,118 @@ class UpdateMascot(QWidget):
         p.setBrush(g)
         p.drawEllipse(QPointF(0, 0), radius, radius)
         p.restore()
+
+
+# ---------------------------------------------------------------------------- the robot (no 虚拟形象)
+ROBOT_STEP_MS = 100   # both runs are drawn at 10 frames a second
+ROBOT_HOLD_S = 0.6    # the last frame of the wake stays this long before the app restarts
+# the part of the drawing (270 x 640) shown, x / y / width: the head and the cables over it. The
+# whole width made the head a thumbnail in the window; the cables on the far right are not missed.
+ROBOT_VIEW = (0, 80, 210)
+
+
+def reduce_motion() -> bool:
+    """The system asks for less movement on screen (accessibility)."""
+    try:
+        if sys.platform == "darwin":
+            import AppKit
+
+            return bool(AppKit.NSWorkspace.sharedWorkspace().accessibilityDisplayShouldReduceMotion())
+        if sys.platform == "win32":
+            import ctypes
+
+            on = ctypes.c_int(1)
+            ctypes.windll.user32.SystemParametersInfoW(0x1042, 0, ctypes.byref(on), 0)  # SPI_GETCLIENTAREAANIMATION
+            return not on.value
+    except Exception:  # noqa: BLE001 — unknown: move
+        pass
+    return False
+
+
+class UpdateRobot(QWidget):
+    """The update window's picture when 虚拟形象 is off: a robot hanging from cables, a light running
+    down them to its neck while the update comes in (loop, 2.4 s), and on finish() every cable lit
+    and its eye on (wake, 1.2 s, the last frame held). Head to chest only, the cables running in from
+    the top edge, the bottom fading into the window.
+
+    The frames are packaging/assets/mascot/robot: one base picture and, per frame, only what differs
+    from it (offsets.txt) — 480 KB instead of 6 MB of whole frames."""
+
+    def __init__(self, width: int = 150, height: int = 232, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedSize(width, height)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        d = assets_dir() / "mascot" / "robot"
+        self.base = QPixmap(str(d / "base.png"))
+        self.layers: dict[str, list[tuple[QPixmap, int, int]]] = {"loop": [], "wake": []}
+        for row in (d / "offsets.txt").read_text(encoding="utf-8").splitlines()[1:]:
+            name, x, y, w, _h = row.split()
+            run = name.split("_")[0]
+            pm = QPixmap(str(d / f"{name}.png")) if int(w) else QPixmap()
+            self.layers[run].append((pm, int(x), int(y)))
+        self.still = reduce_motion()
+        self.clock = time.monotonic
+        self._t0 = self.clock()
+        self._woke: float | None = None
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self.update)
+        if not self.still:
+            self._timer.start(ROBOT_STEP_MS)
+
+    def finish(self) -> float:
+        """The update is in: the cables light up and the eye comes on. Seconds until that is done."""
+        if self._woke is None:
+            self._woke = self.clock()
+            if not self.still:
+                self._timer.start(ROBOT_STEP_MS)
+        wake = len(self.layers["wake"]) * ROBOT_STEP_MS / 1000
+        return max(0.0, self._woke + wake + ROBOT_HOLD_S - self.clock())
+
+    def frame(self) -> tuple[str, int]:
+        """(run, index) to draw now."""
+        now = self.clock()
+        if self._woke is not None:
+            n = len(self.layers["wake"])
+            i = n - 1 if self.still else min(n - 1, int((now - self._woke) * 1000 // ROBOT_STEP_MS))
+            if i == n - 1:
+                self._timer.stop()  # (held)
+            return "wake", i
+        n = len(self.layers["loop"])
+        return "loop", (n - 1 if self.still else int((now - self._t0) * 1000 // ROBOT_STEP_MS) % n)
+
+    def showEvent(self, e) -> None:
+        if not self.still and (self._woke is None or self.frame()[1] < len(self.layers["wake"]) - 1):
+            self._timer.start(ROBOT_STEP_MS)
+        super().showEvent(e)
+
+    def hideEvent(self, e) -> None:
+        self._timer.stop()
+        super().hideEvent(e)
+
+    def paintEvent(self, _e) -> None:
+        if self.base.isNull():
+            return
+        run, i = self.frame()
+        dpr = self.devicePixelRatioF()
+        buf = QPixmap(int(self.width() * dpr), int(self.height() * dpr))
+        buf.setDevicePixelRatio(dpr)
+        buf.fill(Qt.GlobalColor.transparent)
+        p = QPainter(buf)
+        p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
+        vx, vy, vw = ROBOT_VIEW
+        s = self.width() / vw
+        p.scale(s, s)
+        p.translate(-vx, -vy)
+        p.drawPixmap(0, 0, self.base)
+        pm, x, y = self.layers[run][i] if i < len(self.layers[run]) else (QPixmap(), 0, 0)
+        if not pm.isNull():
+            p.drawPixmap(x, y, pm)
+        p.resetTransform()
+        fade = QLinearGradient(0, self.height() * 0.72, 0, self.height())
+        fade.setColorAt(0, QColor(0, 0, 0, 255))
+        fade.setColorAt(1, QColor(0, 0, 0, 0))
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+        p.fillRect(QRectF(0, 0, self.width(), self.height()), fade)
+        p.end()
+        out = QPainter(self)
+        out.drawPixmap(0, 0, buf)

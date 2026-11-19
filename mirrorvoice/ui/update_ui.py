@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QApplication, QDialog, QDialogButtonBox, QHBoxLay
 from .. import __version__, updater
 from ..config import Settings
 from .bridge import Bridge
-from .mascot import UpdateMascot
+from .mascot import UpdateMascot, UpdateRobot
 from . import theme
 
 
@@ -151,37 +151,70 @@ class UpdateWindow(QDialog):
                    "模型、音色、会议记录和设置都会保留。", "稍后", size_line(rel), rel.notes or "")
 
 
-class UpdateProgress(QDialog):
-    """Download progress, with her floating, curling up and plugging in beside it."""
+ROBOT_BLUE = "#56BEF2"  # the light in the robot's cables (packaging/assets/mascot/robot): the bar is the same
 
-    def __init__(self, parent: QWidget | None, text: str, mascot: bool = True) -> None:
+
+class UpdateProgress(QDialog):
+    """Download progress, with a picture beside it: her floating, curling up and plugging in (虚拟形象
+    on), or the robot hanging from cables a light runs down (off) — flush with the window's top-left,
+    the cables coming in from its top edge, the bar in their blue. The text: what happens now
+    (head), how far (label)."""
+
+    def __init__(self, parent: QWidget | None, text: str, mascot: bool = True, head: str = "正在更新翻了么") -> None:
         super().__init__(parent)
         self.setWindowTitle("更新翻了么")
         self.setWindowModality(Qt.WindowModality.WindowModal)
         self.canceled = threading.Event()
         self._locked = False
         self.mascot = UpdateMascot()
-        self.mascot.setVisible(mascot)  # 虚拟形象 switched off: just the bar
+        self.mascot.setVisible(mascot)
+        self.robot = UpdateRobot()
+        self.robot.setVisible(not mascot)
+        self.head = QLabel(head)
+        f = self.head.font()
+        f.setPointSizeF(f.pointSizeF() * 1.25)
+        f.setBold(True)
+        self.head.setFont(f)
         self.label = QLabel(text)
         self.label.setWordWrap(True)
+        self.label.setStyleSheet(f"color: {theme.current().text_2};")
         self.bar = QProgressBar()
         self.bar.setRange(0, 1000)
         self.bar.setTextVisible(False)
+        self.bar.setFixedHeight(6)
+        if not mascot:
+            self.bar.setStyleSheet(f"QProgressBar::chunk {{ background: {ROBOT_BLUE}; border-radius: 3px; }}")
         self.cancel = QPushButton("取消")
         self.cancel.clicked.connect(self.reject)
         right = QVBoxLayout()
+        right.setContentsMargins(4 if mascot else 18, 20, 22, 18)
+        right.setSpacing(8)
         right.addStretch(1)
-        right.addWidget(self.label)
+        right.addWidget(self.head)
         right.addWidget(self.bar)
+        right.addWidget(self.label)
         right.addStretch(1)
         buttons = QHBoxLayout()
         buttons.addStretch(1)
         buttons.addWidget(self.cancel)
         right.addLayout(buttons)
         lay = QHBoxLayout(self)
-        lay.addWidget(self.mascot, 0, Qt.AlignmentFlag.AlignVCenter)
+        if mascot:
+            lay.setContentsMargins(12, 12, 0, 12)
+            lay.addWidget(self.mascot, 0, Qt.AlignmentFlag.AlignVCenter)
+        else:  # (no margin: the cables run in from the window's edge, the bottom fades into it)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.addWidget(self.robot, 0, Qt.AlignmentFlag.AlignTop)
+        lay.setSpacing(0)
         lay.addLayout(right, 1)
-        self.setMinimumWidth(520)
+        self.setFixedWidth(500 if mascot else 470)
+
+    def picture(self) -> UpdateMascot | UpdateRobot:
+        return self.robot if self.mascot.isHidden() else self.mascot
+
+    def finish(self) -> float:
+        """The update is in: the picture's last moment (her landing, the robot waking). Seconds it takes."""
+        return self.picture().finish()
 
     def reject(self) -> None:  # 取消, Esc or the close box
         if self._locked:
@@ -250,7 +283,8 @@ class UpdateController:
             __import__("webbrowser").open(rel.page)
 
     def _start(self, rel: updater.Release) -> None:
-        self._dlg = UpdateProgress(self.parent, f"正在下载 {rel.asset_name}（{mb(rel.size)}）…", self.s.mascot)
+        self._dlg = UpdateProgress(self.parent, f"v{__version__} → v{rel.version}　·　{mb(rel.size)}", self.s.mascot,
+                                   "正在下载更新…")
         self._dlg.show()
         cancel = self._dlg.canceled
         self._rel = rel
@@ -274,7 +308,7 @@ class UpdateController:
             return
         if done >= 0:
             dlg.bar.setValue(int(1000 * done / max(total, 1)))
-            dlg.label.setText(f"正在下载 {self._rel.asset_name}  {mb(done)} / {mb(total)}")
+            dlg.label.setText(f"v{__version__} → v{self._rel.version}　·　{mb(done)} / {mb(total)}")
             return
         if done == -2:
             dlg.dismiss()
@@ -285,7 +319,8 @@ class UpdateController:
             return
         dlg.lock()
         dlg.bar.setValue(1000)
-        dlg.label.setText("下载好了，正在安装…")
+        dlg.head.setText("正在安装…")
+        dlg.label.setText("请不要关闭翻了么")
         QApplication.processEvents()
         try:
             self.before_install()
@@ -294,12 +329,13 @@ class UpdateController:
             dlg.dismiss()
             QMessageBox.warning(self.parent, "更新失败", str(e))
             return
-        dlg.label.setText("更新好了，马上重新打开翻了么…")
-        # let her rise and land first: the hand-over waits for this process to exit, then switches
-        # to the patch (or replaces the app) and relaunches it. Not the Windows installer — it
-        # starts at once and closes the app itself.
-        landing = (self._path.suffix.lower() == ".zip" or not updater.IS_WIN) and not dlg.mascot.isHidden()
-        QTimer.singleShot(int(1000 * dlg.mascot.finish()) + 300 if landing else 0, lambda: self._restart(dlg))
+        dlg.head.setText(f"已更新到 v{self._rel.version}")
+        dlg.label.setText("马上重新打开翻了么…")
+        # let the picture finish first (her landing, the robot waking): the hand-over waits for this
+        # process to exit, then switches to the patch (or replaces the app) and relaunches it. Not
+        # the Windows installer — it starts at once and closes the app itself.
+        landing = self._path.suffix.lower() == ".zip" or not updater.IS_WIN
+        QTimer.singleShot(int(1000 * dlg.finish()) + 300 if landing else 0, lambda: self._restart(dlg))
 
     @staticmethod
     def _restart(dlg: UpdateProgress) -> None:
