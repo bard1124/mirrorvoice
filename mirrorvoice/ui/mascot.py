@@ -3,8 +3,9 @@ up and cheers when it starts, then stands by: types on her laptop while the othe
 while I talk, blinks now and then.
 
 Six pose pictures per theme from packaging/assets/mascot/<set>/ (packaging/art/make_mascots.py cuts
-them out): black hair for 静场 (and 赛博), silver for 调音台, lilac for 对话. The breathing, the
-little hop and cross-fade between poses, blinking and "z z z" are animated here.
+them out): black hair for 静场, silver for 调音台, lilac for 对话. The breathing, the little hop and
+cross-fade between poses, blinking and "z z z" are animated here. 赛博 has no figure: the same
+states drawn as cyan code rain (coderain.py).
 
 UpdateMascot is her update routine, shown while an update downloads and installs.
 """
@@ -20,10 +21,12 @@ from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPixmap, QRa
 from PySide6.QtWidgets import QWidget
 
 from . import theme
+from .coderain import CodeRain
 from .icons import assets_dir
 
 POSES = ("hello", "smile", "wave", "laptop", "sleepy", "cheer")
 OUTFITS = {"quiet": "quiet", "cyber": "quiet", "studio": "studio", "chat": "chat"}  # theme -> her set
+RAIN = {"cyber"}  # themes where code rain stands in for her
 FPS = 30
 FADE_S = 0.22      # cross-fade between poses
 CHEER_S = 1.4      # the cheer when translation has started
@@ -37,6 +40,7 @@ class Mascot(QWidget):
         self.setFixedSize(width, height)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.outfit = ""
+        self.rain: CodeRain | None = None
         self.dress()
         self.state = "stopped"  # stopped | busy | running
         self.muted = False
@@ -54,7 +58,13 @@ class Mascot(QWidget):
 
     def dress(self) -> None:
         """Her look for the theme in use (after a theme switch, too)."""
-        outfit = OUTFITS.get(theme.current().key, "quiet")
+        key = theme.current().key
+        if key in RAIN and self.rain is None:
+            self.rain = CodeRain(rows=max(6, self.height() // 11), still=reduce_motion())
+        elif key not in RAIN:
+            self.rain = None
+        self.update()
+        outfit = OUTFITS.get(key, "quiet")
         if outfit != self.outfit:
             d = assets_dir() / "mascot" / outfit
             self.poses = {n: QPixmap(str(d / f"{n}.png")) for n in POSES}
@@ -105,6 +115,16 @@ class Mascot(QWidget):
             self._blink_at = now + random.uniform(2.5, 6.0)
         return "hello"
 
+    def rain_mode(self) -> str:
+        """What the code rain shows for the state (the poses' meaning, without her)."""
+        if self.state == "stopped":
+            return "asleep"
+        if self.state == "busy":
+            return "waking"
+        if self.muted:
+            return "muted"
+        return {"cheer": "cheer", "laptop": "them", "wave": "me"}.get(self.pose(), "idle")
+
     def _tick(self) -> None:
         p = self.pose()
         if p != self._pose:
@@ -133,6 +153,12 @@ class Mascot(QWidget):
         now = time.monotonic()
         t = now - self._t0
         p = QPainter(self)
+        if self.rain is not None:
+            self.rain.set_mode(self.rain_mode())
+            self.rain.paint(p, QRectF(self.rect()).adjusted(1, 1, -1, -1), self._level)
+            self._level *= 0.85
+            p.end()
+            return
         p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
         self._level *= 0.85
         if self.asleep():
