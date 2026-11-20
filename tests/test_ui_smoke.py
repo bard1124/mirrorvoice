@@ -691,6 +691,9 @@ def test_four_looks_and_switching_between_them(app, settings, no_popups, monkeyp
             assert theme.current().key == key and Settings.load().theme == key  # at once, and remembered
             assert theme.current().accent in app.styleSheet()
             assert w.mascot.outfit == mascot.OUTFITS[key]  # she changes with the look
+            in_bar = w.mascot.parentWidget().objectName() == "topbar"
+            assert in_bar == (key == "studio")  # 调音台: by the name in the top bar, never scrolled away
+            assert w.mascot.size().toTuple() == (w.STUDIO_MASCOT if key == "studio" else w.MASCOT)
             heights[key] = d.sizeHint(opt, w.log.indexFromItem(me)).height()
             w.grab()  # every way of drawing a sentence paints without error
         assert heights["chat"] > heights["quiet"]  # a bubble carries its time below it

@@ -147,7 +147,8 @@ class Mascot(QWidget):
     def _target(self, pm: QPixmap) -> QRectF:
         s = min(self.width() / pm.width(), self.height() / pm.height())
         w, h = pm.width() * s, pm.height() * s
-        return QRectF((self.width() - w) / 2, self.height() - h, w, h)
+        x = 0 if self.width() > self.height() else (self.width() - w) / 2  # wide (a top bar): her z z z go beside her
+        return QRectF(x, self.height() - h, w, h)
 
     def paintEvent(self, _e) -> None:
         now = time.monotonic()
@@ -191,9 +192,11 @@ class Mascot(QWidget):
             ph = ((t / 2.7) + i / 3) % 1.0
             f = QFont()
             f.setBold(True)
-            f.setPixelSize(max(7, int(h * (0.08 + 0.06 * ph))))
+            f.setPixelSize(max(8, int(h * (0.08 + 0.06 * ph))))
             p.setFont(f)
-            p.setPen(QColor(130, 112, 190, int(220 * math.sin(math.pi * ph))))
+            z = QColor(theme.current().text_2)  # (light on the dark console, grey on the light looks)
+            z.setAlpha(int(230 * math.sin(math.pi * ph)))
+            p.setPen(z)
             p.drawText(QPointF(w * (0.74 + 0.14 * ph), h * (0.30 - 0.18 * ph)), "z")
 
 

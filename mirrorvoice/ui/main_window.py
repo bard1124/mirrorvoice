@@ -344,12 +344,15 @@ class MainWindow(QMainWindow):
     # ---- the layouts: the same pieces, placed the theme's way
     LAYOUTS = {"quiet": "_lay_quiet", "studio": "_lay_studio", "chat": "_lay_chat", "cyber": "_lay_quiet"}
     MIN_SIZE = {"quiet": (760, 560), "studio": (980, 600), "chat": (900, 600), "cyber": (760, 560)}
+    MASCOT = (100, 120)        # her size in a sidebar
+    STUDIO_MASCOT = (72, 58)   # in 调音台's top bar: room for her z z z beside her
 
     def _arrange(self) -> None:
         key = theme.current().key if theme.current().key in self.LAYOUTS else theme.DEFAULT
         self._fn_switches: dict[QCheckBox, Switch] = {}
         for w in self._atoms:  # out of the old frames before those are thrown away
             w.setParent(self._attic)
+        self.mascot.setFixedSize(*self.MASCOT)
         root = getattr(self, self.LAYOUTS[key])()
         old = self.takeCentralWidget()
         self.setCentralWidget(root)
@@ -503,10 +506,7 @@ class MainWindow(QMainWindow):
         cl.setContentsMargins(0, 0, 4, 0)
         cl.setSpacing(12)
         for c in cards:
-            if c is self.mascot:
-                cl.addWidget(c, 0, Qt.AlignmentFlag.AlignHCenter)
-            else:
-                cl.addWidget(c)
+            cl.addWidget(c)
         cl.addStretch()
         scroll = QScrollArea(objectName="page")
         scroll.setWidgetResizable(True)
@@ -615,7 +615,10 @@ class MainWindow(QMainWindow):
         h.setSpacing(4)
         self.brand.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         h.addWidget(self.brand)
-        h.addSpacing(14)
+        # she sits by the name, as small as the buttons: never scrolled away, nothing pushed down
+        self.mascot.setFixedSize(*self.STUDIO_MASCOT)
+        h.addWidget(self.mascot, 0, Qt.AlignmentFlag.AlignVCenter)
+        h.addSpacing(10)
         tail = ("_wizard", "_check_updates", "_diagnose")  # (these go to the foot: the bar is for the pages)
         for fn, b in self.nav.items():
             if fn not in tail:
@@ -647,8 +650,8 @@ class MainWindow(QMainWindow):
             tv.addLayout(th)
             tv.addWidget(lst, 1)
             bh.addWidget(g, 1)
-        self._two_columns(lay, both, self._settings_column(self._card_lang(), self._card_devices(), self._card_functions("chips"),
-                                                           self.mascot), chrome=40)  # (she sits under the settings: above, she pushed them down)
+        self._two_columns(lay, both, self._settings_column(self._card_lang(), self._card_devices(), self._card_functions("chips")),
+                          chrome=40)
         foot = QHBoxLayout()
         foot.setSpacing(8)
         foot.addWidget(self.lat_label, 1)
