@@ -146,7 +146,7 @@ class MainWindow(QMainWindow):
         self.theme_box.currentIndexChanged.connect(self._use_theme)
         self.mascot_label = keep(QLabel("虚拟形象", objectName="sideOption"))
         self.mascot_switch = keep(Switch(s.mascot))
-        self.mascot_switch.setToolTip("显示或隐藏虚拟形象（更新时的动画也跟着开关）")
+        self.mascot_switch.setToolTip("显示或隐藏虚拟形象（随风格换装）")
         self.mascot_switch.toggled.connect(self._show_mascot)
         # 赛博 on glass: how much of what is behind the window shows through
         self.clear_label = keep(QLabel("透明度", objectName="sideOption"))
@@ -773,6 +773,7 @@ class MainWindow(QMainWindow):
         theme.use(QApplication.instance(), key)
         self.s.theme = key
         self.s.save()
+        self.mascot.dress()
         if getattr(self, "_layout_key", key) != key:
             self._arrange()
         for lst in (self.log, self.log_me, self.log_them):  # laid out again: a bubble is not as tall as a row

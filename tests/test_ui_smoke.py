@@ -346,8 +346,9 @@ def test_owl_girl_dozes_when_stopped_cheers_on_start_and_reacts_to_voices(app, s
     from mirrorvoice.ui import main_window, mascot
     from mirrorvoice.ui.icons import assets_dir
 
-    for n in mascot.POSES:
-        assert (assets_dir() / "mascot" / f"{n}.png").exists()
+    for outfit in set(mascot.OUTFITS.values()):
+        for n in mascot.POSES:
+            assert (assets_dir() / "mascot" / outfit / f"{n}.png").exists()
     w = _window(main_window, settings, monkeypatch)
     m = w.mascot
     try:
@@ -652,7 +653,7 @@ def test_the_switch_at_the_bottom_left_shows_and_hides_her_and_is_remembered(app
         assert w.mascot.isHidden() and Settings.load().mascot is False
     finally:
         w.close()
-    # her update routine follows the switch: without her nothing waits for the landing
+    # the progress window can still show her first update routine (the controller always asks for the robot)
     assert update_ui.UpdateProgress(None, "正在下载…", False).mascot.isHidden()
     assert not update_ui.UpdateProgress(None, "正在下载…").mascot.isHidden()
     again = _window(main_window, Settings.load(), monkeypatch)  # the next start finds it as it was left
@@ -663,7 +664,7 @@ def test_the_switch_at_the_bottom_left_shows_and_hides_her_and_is_remembered(app
 
 def test_four_looks_and_switching_between_them(app, settings, no_popups, monkeypatch):
     from mirrorvoice.config import Settings
-    from mirrorvoice.ui import logview, main_window, theme
+    from mirrorvoice.ui import logview, main_window, mascot, theme
 
     assert settings.theme == "quiet" and set(theme.THEMES) == {"quiet", "studio", "chat", "cyber"}
     for t in theme.THEMES.values():  # every token of the stylesheet has a value in every theme
@@ -689,6 +690,7 @@ def test_four_looks_and_switching_between_them(app, settings, no_popups, monkeyp
             box.setCurrentIndex(box.findData(key))
             assert theme.current().key == key and Settings.load().theme == key  # at once, and remembered
             assert theme.current().accent in app.styleSheet()
+            assert w.mascot.outfit == mascot.OUTFITS[key]  # she changes with the look
             heights[key] = d.sizeHint(opt, w.log.indexFromItem(me)).height()
             w.grab()  # every way of drawing a sentence paints without error
         assert heights["chat"] > heights["quiet"]  # a bubble carries its time below it

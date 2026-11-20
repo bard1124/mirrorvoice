@@ -1,6 +1,7 @@
-"""Clean up the owl-girl pose pictures (packaging/art/owl-girl/*.png) for the control panel mascot
-(mirrorvoice/ui/mascot.py) and write them to packaging/assets/mascot/, and the six frames of her
-update routine (owl-update-*.png) to packaging/assets/mascot/update/.
+"""Clean up the six frames of the first owl girl's update routine (packaging/art/owl-girl/
+owl-update-*.png) and write them to packaging/assets/mascot/update/. (Her six sidebar poses gave
+way to one Q-version girl per theme: packaging/art/make_mascots.py. clean() and main() are kept
+for her old poses, run with --poses.)
 
 The cut-outs came with holes punched into the eyes and headphones (their whites and highlights
 were taken for background) and a few stray specks. Here the holes are filled from the nearest
@@ -136,4 +137,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+
+    main() if "--poses" in sys.argv else write_update()

@@ -303,7 +303,8 @@ class UpdateController:
 
     def _start(self, rel: updater.Release) -> None:
         flow = SAY_FLOW.format(done=mb(0), total=mb(rel.size), old=__version__, new=rel.version)
-        self._dlg = UpdateProgress(self.parent, flow, self.s.mascot, SAY_LINK)
+        # always the robot: her own update routine is the first girl's, not the theme's Q-version one
+        self._dlg = UpdateProgress(self.parent, flow, False, SAY_LINK)
         self._dlg.show()
         cancel = self._dlg.canceled
         self._rel = rel

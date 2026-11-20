@@ -1,0 +1,74 @@
+{
+  "title": "静场",
+  "count": 6,
+  "render_style": "hd",
+  "groups": [
+    {
+      "name": "静场",
+      "atlas": "quiet-atlas.png",
+      "grid": [
+        3,
+        2
+      ],
+      "ink": "#C2453A",
+      "tint": "#F3B2A8",
+      "background": "#F8F4F1",
+      "entries": [
+        {
+          "text": "安静",
+          "cell": [
+            0,
+            0
+          ],
+          "motion": "breathe",
+          "icon": "none"
+        },
+        {
+          "text": "放松",
+          "cell": [
+            1,
+            0
+          ],
+          "motion": "nod",
+          "icon": "none"
+        },
+        {
+          "text": "你好",
+          "cell": [
+            2,
+            0
+          ],
+          "motion": "sway",
+          "icon": "none"
+        },
+        {
+          "text": "看着",
+          "cell": [
+            0,
+            1
+          ],
+          "motion": "ponder",
+          "icon": "none"
+        },
+        {
+          "text": "休息",
+          "cell": [
+            1,
+            1
+          ],
+          "motion": "droop",
+          "icon": "none"
+        },
+        {
+          "text": "好了",
+          "cell": [
+            2,
+            1
+          ],
+          "motion": "jump",
+          "icon": "none"
+        }
+      ]
+    }
+  ]
+}

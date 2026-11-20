@@ -1,0 +1,74 @@
+{
+  "title": "对话",
+  "count": 6,
+  "render_style": "hd",
+  "groups": [
+    {
+      "name": "对话",
+      "atlas": "talk-atlas.png",
+      "grid": [
+        3,
+        2
+      ],
+      "ink": "#5B45C6",
+      "tint": "#C9BEF6",
+      "background": "#F3EEFB",
+      "entries": [
+        {
+          "text": "聊聊",
+          "cell": [
+            0,
+            0
+          ],
+          "motion": "breathe",
+          "icon": "none"
+        },
+        {
+          "text": "微笑",
+          "cell": [
+            1,
+            0
+          ],
+          "motion": "nod",
+          "icon": "none"
+        },
+        {
+          "text": "挥手",
+          "cell": [
+            2,
+            0
+          ],
+          "motion": "sway",
+          "icon": "none"
+        },
+        {
+          "text": "记录",
+          "cell": [
+            0,
+            1
+          ],
+          "motion": "ponder",
+          "icon": "none"
+        },
+        {
+          "text": "想想",
+          "cell": [
+            1,
+            1
+          ],
+          "motion": "droop",
+          "icon": "none"
+        },
+        {
+          "text": "嗨呀",
+          "cell": [
+            2,
+            1
+          ],
+          "motion": "jump",
+          "icon": "none"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,74 @@
+{
+  "title": "调音台",
+  "count": 6,
+  "render_style": "hd",
+  "groups": [
+    {
+      "name": "调音台",
+      "atlas": "console-atlas.png",
+      "grid": [
+        3,
+        2
+      ],
+      "ink": "#1F7A4D",
+      "tint": "#8EEDC0",
+      "background": "#E7F6EE",
+      "entries": [
+        {
+          "text": "开麦",
+          "cell": [
+            0,
+            0
+          ],
+          "motion": "breathe",
+          "icon": "none"
+        },
+        {
+          "text": "在听",
+          "cell": [
+            1,
+            0
+          ],
+          "motion": "nod",
+          "icon": "none"
+        },
+        {
+          "text": "招呼",
+          "cell": [
+            2,
+            0
+          ],
+          "motion": "sway",
+          "icon": "none"
+        },
+        {
+          "text": "记下",
+          "cell": [
+            0,
+            1
+          ],
+          "motion": "ponder",
+          "icon": "none"
+        },
+        {
+          "text": "等一下",
+          "cell": [
+            1,
+            1
+          ],
+          "motion": "droop",
+          "icon": "none"
+        },
+        {
+          "text": "开始",
+          "cell": [
+            2,
+            1
+          ],
+          "motion": "jump",
+          "icon": "none"
+        }
+      ]
+    }
+  ]
+}

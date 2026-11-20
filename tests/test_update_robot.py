@@ -98,10 +98,12 @@ def test_the_restart_waits_for_the_robot_to_wake(app, monkeypatch, tmp_path):
     timers = []
     monkeypatch.setattr(updater, "install", lambda path, rel: None)
     monkeypatch.setattr(update_ui.QTimer, "singleShot", lambda ms, fn: timers.append(ms))
-    c = update_ui.UpdateController(None, Settings(mascot=False), lambda: None)
+    c = update_ui.UpdateController(None, Settings(mascot=True), lambda: None)
+    monkeypatch.setattr(update_ui.threading, "Thread", lambda **kw: type("T", (), {"start": lambda self: None})())
     rel = updater.Release(version="9.9.9", notes="", page="", asset_name="MirrorVoice-9.9.9-patch.zip",
                           asset_url="", size=2 << 20, sha256="", kind="patch")
-    c._dlg = update_ui.UpdateProgress(None, "…", False)
+    c._start(rel)  # with the sidebar girl on, too, the update is the robot's
+    assert c._dlg.picture() is c._dlg.robot and c._dlg.mascot.isHidden()
     c._rel, c._path = rel, tmp_path / "MirrorVoice-9.9.9-patch.zip"
     c._on_progress(1 << 20, 2 << 20)
     assert c._dlg.head.text() == update_ui.SAY_LINK
