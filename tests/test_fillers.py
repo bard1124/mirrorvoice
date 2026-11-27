@@ -104,3 +104,16 @@ def test_my_own_voice_still_passes_through_when_i_speak_their_language():
     e._on_me(_utt("Um.", "en"))  # passthrough is my real voice: nothing is made up, nothing is held back
     _play(e)
     assert len(e._player.outs[0].audio) == 1 and events[0][1]["passthrough"] is True
+
+
+def test_a_short_piece_said_over_and_over_is_said_once():
+    """2026-11-27: "Okay. Okay. Okay. Sure. Sure." came out as a line of eight 好的."""
+    from mirrorvoice.translate import collapse_repeats, tidy_subtitle
+
+    assert collapse_repeats("好的。好的。好的。好的。好的。好的。好了。谢谢。好的。") == "好的。好了。谢谢。好的。"
+    assert collapse_repeats("有，有，有。") == "有。"  # (the last one's punctuation)
+    assert collapse_repeats("Okay. Okay. Sure. Sure.") == "Okay. Sure."
+    assert collapse_repeats("嗯，嗯…") == "嗯…"
+    for kept in ("这个很重要，这个很重要。", "价格是 3.5 元。", "是的。另一个是，也许我们可以。"):
+        assert collapse_repeats(kept) == kept  # longer pieces repeat on purpose; numbers stay whole
+    assert tidy_subtitle("好的， sure，好的。好的。", "zh") == "好的。"  # after "sure" became 好的, too

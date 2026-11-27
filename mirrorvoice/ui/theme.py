@@ -154,7 +154,7 @@ CYBER = Theme(
     danger_bg="#FDECEC", danger_fg="#B3261E",
     r=8, r2=10, rc=14, rp=12, rs=6,
     convo="strips", me="#3B4756", them="#1786C2", live="#56BEF2",
-    me_bubble="#EDF2F6", on_me_bubble="#1B2430", them_bubble="#E8F6FE", on_them_bubble="#1B2430",
+    me_bubble="#EEF0F3", on_me_bubble="#1B2430", them_bubble="#E3F4FD", on_them_bubble="#1B2430",
     switch_off="#C5CFD8", chip_on_bg="#E8F6FE", chip_on_fg="#0F6C9F",
     seg_on_bg="#FFFFFF", seg_on_fg="#0F6C9F", log_bg="#FFFFFF", brand="#1B2430", mono=True, glass=True)
 

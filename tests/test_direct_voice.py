@@ -33,7 +33,7 @@ def test_what_the_recogniser_adds_to_an_english_sentence_is_taken_out(heard, cle
 
 
 @pytest.mark.parametrize("out, shown", [
-    ("好的， sure，谢谢。好的，所以第一个。", "好的，好的，谢谢。好的，所以第一个。"),
+    ("好的， sure，谢谢。好的，所以第一个。", "好的，谢谢。好的，所以第一个。"),
     ("是的， yeah，这个。", "是的，嗯，这个。"),
     ("yeah，就像这样 yeah。", "嗯，就像这样嗯。"),
     ("Yes，就是这个。", "是的，就是这个。"),

@@ -227,3 +227,30 @@ def test_only_what_was_cut_is_put_together_again(pieces, worth):
         e._them_done(_utt(src), f"译文{i}", latency=1.0)
     e._run_over(e._run_gen)  # (what the timer does when they have stopped)
     assert [j[2] for j in _jobs(e)] == (["them_run"] if worth else []) and e._run == []
+
+
+def test_a_long_sentence_is_not_skipped_for_the_time_it_took_to_recognise():
+    """2026-11-27: their 13 s sentence took 5 s to recognise and was dropped as 积压 at once."""
+    e, events = _engine()
+    long = Utterance("So we need to consider all these things in the next PI and the quarter roadmap.", "en",
+                     np.full(16000 * 13, 0.1, np.float32), time.time() - 7.0, 6.8)  # recognised 6.8 s after the cut
+    e._do_them(_Says("所以我们需要在下一个 PI 和季度路线图里考虑这些。"), long, 9)
+    assert events[-1][1]["tgt"] == "所以我们需要在下一个 PI 和季度路线图里考虑这些。"
+    queued = Utterance("Are we doing this in Vue or React?", "en", np.full(16000 * 4, 0.1, np.float32),
+                       time.time() - 8.0, 1.0)  # 7 s in the queue after it was recognised: still too late
+    e._do_them(_Says("我们用 Vue 还是 React？"), queued, 10)
+    assert "积压太多" in events[-1][1]["tgt"]
+
+
+def test_notices_go_into_the_log_and_an_overload_stays_on_the_devices_card():
+    """2026-11-27: the overload notice scrolled away in the conversation and left nothing in the log."""
+    from mirrorvoice.asr import OVERLOAD_NOTICE
+
+    e, events = _engine()
+    logged = []
+    e.log = logged.append
+    e._notice(OVERLOAD_NOTICE)
+    assert [k for k, _ in events[-2:]] == ["notice", "mic_warn"] and events[-1][1]["text"] == OVERLOAD_NOTICE
+    e._notice("对方字幕已开启")
+    assert events[-1][0] == "notice"  # (any other notice: the conversation only)
+    assert logged == [f"[提示] {OVERLOAD_NOTICE}", "[提示] 对方字幕已开启"]

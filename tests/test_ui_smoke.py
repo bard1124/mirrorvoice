@@ -538,6 +538,9 @@ def test_update_progress_installs_then_lets_her_land_before_quitting(app, settin
     c = update_ui.UpdateController(None, settings, lambda: before.append(1))
     rel = updater.Release(version="9.9.9", notes="", page="", asset_name="MirrorVoice-9.9.9-patch.zip",
                           asset_url="", size=2 << 20, sha256="", kind="patch")
+    import time
+
+    t0 = time.monotonic()  # (before her routine starts: what has passed of it is subtracted below)
     c._dlg = update_ui.UpdateProgress(None, "正在下载…")
     c._rel, c._path = rel, tmp_path / "MirrorVoice-9.9.9-patch.zip"
     c._on_progress(1 << 20, 2 << 20)
@@ -547,7 +550,8 @@ def test_update_progress_installs_then_lets_her_land_before_quitting(app, settin
     from mirrorvoice.ui import mascot
 
     least = sum(d for _, d in mascot.INTRO) + mascot.LINK_MIN_S + sum(d for _, d in mascot.OUTRO)
-    assert len(timers) == 1 and timers[0] >= 1000 * least  # she curls up, plugs in, rises and lands
+    passed = time.monotonic() - t0  # (a busy machine: part of the routine is already over)
+    assert len(timers) == 1 and timers[0] >= 1000 * (least - passed)  # she curls up, plugs in, rises and lands
     c._dlg.reject()
     assert not c._dlg.canceled.is_set()  # installing: no cancelling now
 
@@ -805,3 +809,21 @@ def test_the_subtitle_windows_ask_to_stay_out_of_screen_sharing(app, settings, n
     finally:
         bar.close()
         win.close()
+
+
+def test_an_overloaded_microphone_is_shown_on_the_devices_card_until_another_is_picked(app, settings, no_popups,
+                                                                                     monkeypatch):
+    from mirrorvoice.asr import OVERLOAD_NOTICE
+    from mirrorvoice.ui import main_window
+
+    w = _window(main_window, settings, monkeypatch)
+    try:
+        assert w.mic_warn.isHidden()
+        w._on_event("mic_warn", {"text": OVERLOAD_NOTICE})
+        assert not w.mic_warn.isHidden() and "系统设置" in w.mic_warn.text()
+        w._device_picked("call")
+        assert not w.mic_warn.isHidden()  # another device: still the same microphone
+        w._device_picked("mic")
+        assert w.mic_warn.isHidden()
+    finally:
+        w.close()

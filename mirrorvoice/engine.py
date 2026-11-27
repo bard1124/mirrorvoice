@@ -20,7 +20,7 @@ from typing import Callable
 import numpy as np
 
 from . import models
-from .asr import CJK_LANGS, SENTENCE_END, Listener, Utterance, _plain
+from .asr import CJK_LANGS, OVERLOAD_NOTICE, SENTENCE_END, Listener, Utterance, _plain
 from .audio import Player, find_device, speech_level, time_stretch, trim_silence
 from .config import IS_WIN, LOG_FILE, Settings
 from .device_hints import MONITOR_CANCELLED
@@ -225,6 +225,8 @@ class Engine:
         self.emit("stopped")
 
     def emit(self, kind: str, **d) -> None:
+        if kind == "notice":  # (in the log too: 2026-11-27 an overload notice scrolled away and left no trace)
+            self.log(f"[提示] {d.get('text', '')}")
         if getattr(self._tl, "sid", None) is None:
             self._emit(kind, **d)
             return
@@ -682,7 +684,10 @@ class Engine:
         return mine, Translator(local(), s.meeting_context)
 
     CONTINUATION_GAP_S = 1.5  # a part starting this soon after the previous one continues it
-    STALE_THEM_S = 6.0        # subtitles this far behind are skipped instead of piling up behind my speech
+    # subtitles that waited this long in the queue are skipped instead of piling up behind my speech.
+    # Only the wait counts, not the recognising: 2026-11-27 three of their 11-19 s sentences took
+    # 4-5 s to recognise, reached the queue already "6 s late" and were dropped untranslated.
+    STALE_THEM_S = 6.0
 
     HISTORY_N, HISTORY_S = 3, 90.0  # earlier turns given to the translator as conversation context
 
@@ -964,7 +969,8 @@ class Engine:
                 raise _Void
             show(so_far)
         try:
-            if not yielded and t0 - utt.t_end > self.STALE_THEM_S:  # (one that gave way is late by my doing: not skipped)
+            # (one that gave way is late by my doing: not skipped)
+            if not yielded and t0 - utt.t_end - utt.asr_s > self.STALE_THEM_S:
                 raise TranslateError("timeout", "积压太多，已跳过这句")
             ctx = self._context("them", utt)
             ready = getattr(self, "_them_guess_done", None)
@@ -1320,6 +1326,8 @@ class Engine:
 
     def _notice(self, text: str) -> None:
         self.emit("notice", text=text)
+        if text == OVERLOAD_NOTICE:
+            self.emit("mic_warn", text=text)
 
     INTERIM_EVERY_S, INTERIM_MIN_CHARS = 2.5, 12
 

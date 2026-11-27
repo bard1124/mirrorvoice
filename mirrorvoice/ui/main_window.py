@@ -216,6 +216,10 @@ class MainWindow(QMainWindow):
         self.mic, self.call, self.mon, self.src = keep(QComboBox(), QComboBox(), QComboBox(), QComboBox())
         self.dev_warn = keep(QLabel(objectName="devWarn", wordWrap=True))  # problems with the current choice
         self.dev_warn.hide()
+        # the microphone is overloaded (engine "mic_warn"): stays until another microphone is picked
+        self.mic_warn = keep(QLabel(objectName="devWarn", wordWrap=True))
+        self.mic_warn.setProperty("level", "conflict")
+        self.mic_warn.hide()
         # macOS: the meeting-speaker multi-output still points at the old headphones
         self.multi_fix = keep(QFrame(objectName="banner"))
         mh_ = QHBoxLayout(self.multi_fix)
@@ -423,6 +427,7 @@ class MainWindow(QMainWindow):
             f.addRow(QLabel(name, objectName="muted"), combo)
         body.addLayout(f)
         body.addWidget(self.dev_warn)
+        body.addWidget(self.mic_warn)
         body.addWidget(self.multi_fix)
         return g
 
@@ -913,6 +918,8 @@ class MainWindow(QMainWindow):
 
     def _device_picked(self, role: str) -> None:
         """The user picked a device: explain right away if it breaks the setup."""
+        if role == "mic":
+            self.mic_warn.hide()  # (another microphone: its own level will tell)
         self._annotate_devices()
         if role in ("monitor", "source"):
             self._check_multi_output()
@@ -1102,6 +1109,9 @@ class MainWindow(QMainWindow):
                               live=True)
         elif kind == "notice":
             self._add(f"提示  {d['text']}", "note", entry("note", f"提示  {d['text']}"))
+        elif kind == "mic_warn":
+            self.mic_warn.setText(f"⚠ {d['text']}")
+            self.mic_warn.show()
         elif kind == "mute":
             self.mascot.set_muted(d["muted"])
             self.mute_btn.blockSignals(True)

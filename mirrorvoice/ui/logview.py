@@ -2,6 +2,8 @@
 
     rows     (静场)   who · original (small) / translation (larger), time at the right
     cards    (调音台) the same on a dark card, the time in a fixed-width face
+    strips   (赛博)   cards tinted by who speaks (cyan theirs, grey mine), a bar of their colour at
+                      the left and 我 / 对方 before the time
     bubbles  (对话)   mine at the right in the accent colour, theirs at the left
 
 Each row of the list keeps its plain text (copying, tests, screen readers) and carries what it is
@@ -40,6 +42,12 @@ class ConvoDelegate(QStyledItemDelegate):
         return small, big
 
     @staticmethod
+    def _tag_font(small: QFont) -> QFont:
+        tag = QFont(small)
+        tag.setWeight(QFont.Weight.DemiBold)
+        return tag
+
+    @staticmethod
     def _h(font: QFont, text: str, width: int) -> int:
         if not text:
             return 0
@@ -61,6 +69,8 @@ class ConvoDelegate(QStyledItemDelegate):
         t, full = theme.current(), self._width(option)
         small, big = self._fonts(option)
         time_w = QFontMetrics(small).horizontalAdvance(d["time"]) + 8 if d["time"] else 0
+        if t.convo == "strips" and d["who"] in WHO:  # 我 / 对方 goes before the time
+            time_w += QFontMetrics(self._tag_font(small)).horizontalAdvance(WHO[d["who"]]) + 8
         if d["who"] == "note":
             w = full - 2 * self.PAD
             return {"mode": "note", "w": w, "h": self._h(small, d["src"], w) + 8, "small": small, "big": big}
@@ -138,7 +148,8 @@ class ConvoDelegate(QStyledItemDelegate):
                 p.setBrush(Qt.BrushStyle.NoBrush)
             else:
                 p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(QColor(t.surface))
+                tint = (t.me_bubble if mine else t.them_bubble) if lay["strip"] else t.surface
+                p.setBrush(QColor(tint))  # 赛博: who speaks is the card's colour, seen at a glance
             p.drawRoundedRect(box.adjusted(0.5, 0.5, -0.5, -0.5), t.r2, t.r2)
         x, y = r.x() + self.PAD, r.y() + self.PAD
         p.setFont(lay["small"])
@@ -158,7 +169,7 @@ class ConvoDelegate(QStyledItemDelegate):
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(who_color)
             if lay["strip"]:  # a soft bar of the speaker's colour down the card's left edge
-                p.drawRoundedRect(QRectF(r.x() + 3, r.y() + 8, 3, lay["box_h"] - 16), 1.5, 1.5)
+                p.drawRoundedRect(QRectF(r.x() + 3, r.y() + 7, 4, lay["box_h"] - 14), 2, 2)
             else:
                 p.drawEllipse(QRectF(r.x() + 3, y + 5, 5, 5))  # a dot of the speaker's colour
         if d["time"]:
@@ -169,6 +180,13 @@ class ConvoDelegate(QStyledItemDelegate):
             p.setPen(QColor(t.live if d["live"] else t.text_2))
             p.drawText(QRect(r.right() - self.PAD - lay["time_w"], y, lay["time_w"], 16),
                        int(Qt.AlignmentFlag.AlignRight), d["time"])
+            if lay["strip"] and d["who"] in WHO:
+                tag = self._tag_font(lay["small"])
+                gap = QFontMetrics(f).horizontalAdvance(d["time"]) + 8
+                p.setFont(tag)
+                p.setPen(who_color)
+                p.drawText(QRect(r.right() - self.PAD - lay["time_w"], y, lay["time_w"] - gap, 16),
+                           int(Qt.AlignmentFlag.AlignRight), WHO[d["who"]])
         p.setFont(lay["big"])
         p.setPen(QColor(t.live if d["live"] else t.text))
         top = y + max(lay["src_h"], 16 if lay["time_w"] else 0) + 2

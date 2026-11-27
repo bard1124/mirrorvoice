@@ -43,6 +43,12 @@ def reads_as_latin(text: str) -> bool:
     return (cjk == 0 and words >= 1) or (words >= 3 and cjk <= 4)
 
 
+# said once a session when the microphone keeps going far beyond full scale (the engine also keeps it
+# on the devices card, where it is not scrolled away like a line in the conversation)
+OVERLOAD_NOTICE = ("麦克风输入过载（输入音量太高，或有很强的低频噪声），已自动滤除后再识别。"
+                   "建议到 系统设置 → 声音 → 输入，把输入音量调低一些。")
+
+
 @dataclass
 class Decoded:
     text: str
@@ -531,8 +537,7 @@ class Listener:
         if self.clean is not None and peak > self.OVERLOAD:
             self._overloads += 1
             if self._overloads == 2 and self.on_notice is not None:  # (twice: not for one knock on the desk)
-                self.on_notice("麦克风输入过载（输入音量太高，或有很强的低频噪声），已自动滤除后再识别。"
-                               "建议到 系统设置 → 声音 → 输入，把输入音量调低一些。")
+                self.on_notice(OVERLOAD_NOTICE)
         self._hb, self._hb_clean = [now, 0, 0.0, 0], 0.0
 
     def start(self) -> None:

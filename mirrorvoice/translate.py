@@ -216,15 +216,41 @@ _KEPT_OKAY = re.compile(rf"{_NO_LATIN_BEFORE}\b(?:okay|ok|sure|alright)\b{_NO_LA
 _CJK_GAP = re.compile(r"(?<=[\u3400-\u9fff，。、；：！？])\s+(?=[\u3400-\u9fff，。、；：！？])")
 
 
+_STOPS = "。！？!?.，,；;、…"
+_PIECE = re.compile(f"[^{_STOPS}]+[{_STOPS}]*|[{_STOPS}]+")
+_PUNCT_END = re.compile(f"[{_STOPS}\\s]*$")
+REPEAT_CJK, REPEAT_LATIN = 3, 5  # how long a piece may be (punctuation aside) to be said only once
+
+
+def collapse_repeats(out: str) -> str:
+    """One of a short piece said several times in a row: "好的。好的。好的。好了。" -> "好的。好了。",
+    "有，有，有。" -> "有。" (the punctuation of the last one stays). 2026-11-27: "Okay. Okay. Okay.
+    Sure. Sure." came out as a line of eight 好的. Longer pieces ("这个很重要，这个很重要") repeat
+    on purpose and stay."""
+    pieces = _PIECE.findall(out)
+    kept: list[str] = []
+    last = ""
+    for piece in pieces:
+        key = re.sub(r"[\W_]+", "", piece).lower()
+        short = len(key) <= (REPEAT_LATIN if key.isascii() else REPEAT_CJK)
+        if kept and key and key == last and short:
+            kept[-1] = _PUNCT_END.sub("", kept[-1]) + piece[len(piece.rstrip(_STOPS + " ")):]
+            continue
+        kept.append(piece)
+        last = key
+    return "".join(kept)
+
+
 def tidy_subtitle(out: str, tgt: str) -> str:
     """A Chinese subtitle with the speaker's "yeah" / "okay" / "sure" still in it ("好的， sure，
     谢谢。", "是的， yeah，这个。": 21 of 194 lines on 2026-11-16 — asking the model again did not
     help, it keeps them as often). Said in Chinese, where they stand alone; a word that belongs
-    to a phrase left in English ("make sure", "OK Google") is not touched."""
+    to a phrase left in English ("make sure", "OK Google") is not touched. A short piece said
+    over and over is said once (collapse_repeats)."""
     if tgt not in ("zh", "yue") or not re.search(r"[A-Za-z]", out):
-        return out
+        return collapse_repeats(out)
     out = _KEPT_OKAY.sub("好的", _KEPT_YES.sub("是的", _KEPT_YEAH.sub("嗯", out)))
-    return _CJK_GAP.sub("", out).strip()
+    return collapse_repeats(_CJK_GAP.sub("", out).strip())
 
 
 def system_prompt(src: str, tgt: str, subtitle: bool, meeting: str = "", concise: int = 0) -> str:
