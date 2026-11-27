@@ -90,3 +90,24 @@ def test_the_rain_falls_bursts_and_stands_still_when_asked(app):
     still.set_mode("cheer")
     still.step(1.0)
     assert [c.head for c in still.cols] == heads and any(0 < h for h in heads)
+
+
+def test_a_stopped_app_still_shows_a_screen_of_rain(app):
+    """2026-11-27: stopped, the rain was a few faint glyphs: an empty corner on the glass."""
+    from PySide6.QtCore import QRectF
+    from PySide6.QtGui import QImage, QPainter
+
+    from mirrorvoice.ui import coderain
+
+    r = coderain.CodeRain(rows=10, seed=3)
+    for c in r.cols:
+        c.falling = False  # nothing falling at all: the still screen alone
+    img = QImage(100, 120, QImage.Format.Format_ARGB32)
+    img.fill(0)
+    p = QPainter(img)
+    r.paint(p, QRectF(0, 0, 100, 120))
+    p.end()
+    drawn = sum(1 for x in range(0, 100, 2) for y in range(0, 120, 2) if img.pixelColor(x, y).alpha())
+    assert coderain.FIELD["asleep"] > 0 and drawn > 100  # glyphs across the whole screen
+    r.set_mode("idle")
+    assert coderain.FIELD.get("idle", 0) == 0  # running: only the rain

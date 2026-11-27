@@ -29,7 +29,7 @@ MUTATE_PER_S = 2.5  # glyph changes per column per second
 WAKE_S = 1.0        # one sweep of the waking band
 # mode: share of columns falling, rows a second, ink, colour
 MODES = {
-    "asleep": (0.35, 2.2, 0.40, "#7FB9D8"),
+    "asleep": (0.8, 1.8, 0.85, "#3E95C8"),
     "waking": (1.0, 6.0, 0.85, "#1786C2"),
     "cheer": (1.0, 14.0, 1.0, "#1786C2"),
     "idle": (0.75, 5.0, 1.0, "#1786C2"),
@@ -37,6 +37,9 @@ MODES = {
     "them": (0.9, 7.0, 1.0, "#0A4F78"),
     "muted": (0.6, 0.0, 0.55, "#9AA6B2"),
 }
+# a faint still screen of glyphs under the rain, so a stopped (or muted) app still shows a screen,
+# not an empty corner (2026-11-27: "没点开始时效果不明显")
+FIELD = {"asleep": 0.16, "muted": 0.12}
 FONT = ["Menlo", "PingFang SC"] if sys.platform == "darwin" else ["Consolas", "Microsoft YaHei UI"]
 
 
@@ -110,6 +113,16 @@ class CodeRain:
         wide.setPixelSize(max(6, int(min(cell_w, cell_h) * 0.92)))
         band = ((now - self._since) / WAKE_S % 1.0) * self.rows if self.mode == "waking" else None
         base = QColor(colour)
+        field = FIELD.get(self.mode, 0.0)
+        if field:
+            faint = QColor(base)
+            for i, c in enumerate(self.cols):
+                for row in range(self.rows):
+                    faint.setAlphaF(field * min(1.0, (row + 0.6) / 1.6, (self.rows - row - 0.4) / 1.6))
+                    p.setPen(faint)
+                    p.setFont(wide if c.glyphs[row] in ACCENTS else font)
+                    p.drawText(QRectF(screen.x() + i * cell_w, screen.y() + row * cell_h, cell_w + 4, cell_h),
+                               int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), c.glyphs[row])
         for i, c in enumerate(self.cols):
             if not c.falling:
                 continue
