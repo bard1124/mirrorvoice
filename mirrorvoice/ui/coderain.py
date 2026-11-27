@@ -37,6 +37,11 @@ MODES = {
     "them": (0.9, 7.0, 1.0, "#0A4F78"),
     "muted": (0.6, 0.0, 0.55, "#9AA6B2"),
 }
+# once translation is under way some columns fall in the window buttons' red, yellow and green
+# (decoration only: they say nothing about the state)
+TRAFFIC = ("#FF5F57", "#FEBC2E", "#28C840")
+TRAFFIC_P = 0.25
+TRAFFIC_MODES = {"cheer", "idle", "me", "them"}
 # a faint still screen of glyphs under the rain, so a stopped (or muted) app still shows a screen,
 # not an empty corner (2026-11-27: "没点开始时效果不明显")
 FIELD = {"asleep": 0.16, "muted": 0.12}
@@ -48,17 +53,18 @@ def _glyph(rng: random.Random) -> str:
 
 
 class _Column:
-    __slots__ = ("head", "trail", "pace", "falling", "glyphs")
+    __slots__ = ("head", "trail", "pace", "falling", "glyphs", "tint")
 
     def __init__(self, rng: random.Random, rows: int) -> None:
         self.glyphs = [_glyph(rng) for _ in range(rows)]
-        self.head, self.trail, self.pace, self.falling = 0.0, 6, 1.0, False
+        self.head, self.trail, self.pace, self.falling, self.tint = 0.0, 6, 1.0, False, ""
 
     def restart(self, rng: random.Random, rows: int, share: float, spread: float = 0.6) -> None:
         self.head = -rng.uniform(0, rows * spread)
         self.trail = rng.randint(4, max(5, rows - 2))
         self.pace = rng.uniform(0.7, 1.3)
         self.falling = rng.random() < share
+        self.tint = rng.choice(TRAFFIC) if rng.random() < TRAFFIC_P else ""
 
 
 class CodeRain:
@@ -123,9 +129,11 @@ class CodeRain:
                     p.setFont(wide if c.glyphs[row] in ACCENTS else font)
                     p.drawText(QRectF(screen.x() + i * cell_w, screen.y() + row * cell_h, cell_w + 4, cell_h),
                                int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), c.glyphs[row])
+        lit = self.mode in TRAFFIC_MODES
         for i, c in enumerate(self.cols):
             if not c.falling:
                 continue
+            colour_of = QColor(c.tint) if lit and c.tint else base
             x = screen.x() + i * cell_w
             top = int(math.floor(c.head))
             for k in range(c.trail):
@@ -136,7 +144,7 @@ class CodeRain:
                 a *= min(1.0, (row + 0.6) / 1.6, (self.rows - row - 0.4) / 1.6)  # fade in at the top, out at the bottom
                 if band is not None and row > band:
                     a *= 0.18  # not reached by the sweep yet
-                ch = QColor(base.darker(135) if k == 0 else base)  # the head: darkest on a light screen
+                ch = QColor(colour_of.darker(135) if k == 0 else colour_of)  # the head: darkest on a light screen
                 ch.setAlphaF(max(0.0, min(1.0, a if k else ink * min(1.0, (self.rows - row - 0.4) / 1.6))))
                 p.setPen(ch)
                 p.setFont(wide if c.glyphs[row] in ACCENTS else font)

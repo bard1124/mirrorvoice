@@ -111,3 +111,35 @@ def test_a_stopped_app_still_shows_a_screen_of_rain(app):
     assert coderain.FIELD["asleep"] > 0 and drawn > 100  # glyphs across the whole screen
     r.set_mode("idle")
     assert coderain.FIELD.get("idle", 0) == 0  # running: only the rain
+
+
+def test_once_running_some_columns_fall_in_red_yellow_or_green(app):
+    """The window buttons' colours, as decoration once translation is under way — not while stopped."""
+    from PySide6.QtCore import QRectF
+    from PySide6.QtGui import QImage, QPainter
+
+    from mirrorvoice.ui import coderain
+
+    def colours(mode: str) -> set[str]:
+        r = coderain.CodeRain(rows=10, seed=4)
+        for i, c in enumerate(r.cols):
+            c.falling, c.head, c.trail = True, 9.0, 9
+            c.tint = coderain.TRAFFIC[i % 3] if i < 3 else ""
+        r.set_mode(mode)
+        img = QImage(100, 120, QImage.Format.Format_ARGB32)
+        img.fill(0)
+        p = QPainter(img)
+        r.paint(p, QRectF(0, 0, 100, 120))
+        p.end()
+        seen = set()
+        for x in range(100):
+            for y in range(120):
+                c = img.pixelColor(x, y)
+                if c.alpha() > 120 and c.hsvSaturation() > 120:
+                    h = c.hsvHue()
+                    seen.add("red" if h < 15 or h > 345 else "yellow" if 30 <= h <= 55 else
+                             "green" if 100 <= h <= 150 else "other")
+        return seen
+
+    assert {"red", "yellow", "green"} <= colours("idle")
+    assert not {"red", "yellow", "green"} & colours("asleep")
